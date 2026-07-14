@@ -71,6 +71,7 @@ core.*
 /legged_lab/ArmHack Checkpoints/**/*.pt
 /legged_lab/ArmHack Checkpoints/**/*.pth
 /legged_lab/ArmHack Checkpoints/**/*.ckpt
+/legged_lab/ArmHack Checkpoints/**/Test Reports/
 
 # ArmHack 动态任务的外部 Nav2 速度分布（由 Reference Data/README 记录来源和校验和）
 /legged_lab/Reference Data/ArmHack/WalkPerturbFinetune/nav2_cmd_vel_raw_success.csv
