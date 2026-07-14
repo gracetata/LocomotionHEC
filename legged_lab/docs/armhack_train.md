@@ -39,17 +39,22 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 
 ### 1.1.1 进入环境并指定当前正式模型
 
+`STAND_CKPT` 不是系统内置变量，而是当前终端中临时保存 checkpoint 路径的 Shell 变量。**每次新开终端，它都会消失，因此都必须先完整执行下面这段初始化命令。** 后续测试、可视化和录制命令应在执行完本段的同一个终端中运行。
+
 ```bash
 source /home/user/anaconda3/etc/profile.d/conda.sh
 conda activate env_isaaclab
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
 
-STAND_RUN='2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714'
-STAND_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/${STAND_RUN}/model_2999.pt"
+export STAND_RUN='2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714'
+export STAND_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/${STAND_RUN}/model_2999.pt"
 
-test -f "$STAND_CKPT"
+printf '当前 Stand checkpoint：%s\n' "$STAND_CKPT"
+test -f "$STAND_CKPT" || { echo "错误：checkpoint 不存在" >&2; }
 sha256sum "$STAND_CKPT"
 ```
+
+其中 `$STAND_CKPT` 表示“取出变量 `STAND_CKPT` 中保存的完整路径”；`export` 让随后启动的子脚本也能读取该变量。路径中包含 `ArmHack Checkpoints` 空格，所以后续必须写成 `"$STAND_CKPT"`，不能省略双引号。可以随时执行 `echo "$STAND_CKPT"` 检查当前终端是否已经定义。
 
 预期 SHA-256：
 
@@ -153,9 +158,16 @@ python scripts/tools/build_armhack_stand_visualization_suite.py
 python scripts/tools/check_armhack_reference_data.py --stand-only
 ```
 
-然后用当前正式模型跑完整 103.96 s、5198-step、`1.0x` 测试：
+然后用当前正式模型跑完整 103.96 s、5198-step、`1.0x` 测试。以下是**新终端可以整段复制**的完整命令，不依赖之前终端中残留的变量：
 
 ```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+export STAND_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/model_2999.pt"
+test -f "$STAND_CKPT" || { echo "错误：checkpoint 不存在" >&2; }
+
 CHECKPOINT="$STAND_CKPT" \
 MODE=all \
 HEADLESS=True \
@@ -174,7 +186,16 @@ bash scripts/vis_g1_armhack_stand_eval.sh
 
 ### 1.1.7 GUI 可视化整套测试
 
+以下同样是**新终端可以整段复制**的完整 GUI 命令：
+
 ```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+export STAND_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/model_2999.pt"
+test -f "$STAND_CKPT" || { echo "错误：checkpoint 不存在" >&2; }
+
 CHECKPOINT="$STAND_CKPT" \
 MODE=all \
 HEADLESS=False \
@@ -213,6 +234,8 @@ CHECKPOINT="$STAND_CKPT" MODE=synthesized_trajectory ITEM=1 \
 `CAMERA_VIEW` 可设为 `front`、`chase` 或 `side`。若整套回放发生 reset，应立即改用逐项命令定位失败姿态或轨迹；reset 后整套 CSV 会从开头重新播放，不能把后续画面视为已经覆盖剩余样本。
 
 ### 1.1.8 无窗口 smoke 与视频录制
+
+本节命令复用当前终端中的 `STAND_CKPT`。如果是新终端，先完整执行第 1.1.1 节的初始化块，再执行下面的命令。
 
 只检查 checkpoint、Isaac Sim 和回放入口能否加载：
 
