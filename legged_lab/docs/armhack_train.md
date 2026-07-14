@@ -2,7 +2,7 @@
 
 ## 1. 当前状态
 
-截至 2026-07-14，Stand 已完成数据整理、奖励修复、无跳变初始化、分阶段课程、确定性双臂测试集和逐关节报告。历史正式 `model_2999.pt` 是从 `model_7999.pt` 训练得到；当前 `scripts/train_g1_armhack_stand.sh` 已改为从 S3 G1 `model_9996.pt` 开始新的 policy-only 训练：
+截至 2026-07-14，Stand 已完成数据整理、奖励修复、无跳变初始化、分阶段课程、确定性双臂测试集和逐关节报告。`scripts/train_g1_armhack_stand.sh` 已从 S3 G1 `model_9996.pt` 完成一次 `4096 env × 3000 iteration` 的 policy-only 正式训练，课程最终速度为原始双臂轨迹的 `1.0x`：
 
 ```text
 LeggedLab-Isaac-AMP-G1-StandPerturb-v0
@@ -18,9 +18,11 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 - 历史低速连续运动阶段：`2 env × 1 iteration` 正常完成，日志为 `csv_motion_scale=0.25`、`curriculum_stage=2`；该记录只对应旧课程；
 - 当前全速连续运动阶段：`2 env × 1 iteration` 已从 `model_9996.pt` 正常完成，日志为 `csv_motion_scale=1.0000`、`curriculum_stage=2.0000`，并在 Stand 专用目录保存 `model_0.pt`；
 - 当前入口已确认从 `model_9996.pt` 做 policy-only 恢复、加载同一冻结基线做 KL，并在 Stand 专用目录生成 `model_0.pt`；
-- 本机历史 Stand 课程已完成 `4096 env × 3000 iteration`，其阶段 1/2 使用 `0→0.25x` 和 `0.25x`；最终模型为 `model_2999.pt`。当前新课程已改为 `0→1.0x→持续 1.0x`，历史模型不能代表 1.0x 新训练结果；
+- 本机最新 Stand 正式训练 run 为 `2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714`；从 `model_9996.pt` 开始，依次执行 `0x` 静态姿态、`0→1.0x` 升速和持续 `1.0x` 三阶段，最终模型为 `model_2999.pt`；
+- 最新正式模型 SHA-256 为 `2c87cc2cc3706c1024594d14d85a34e7bf468b54f6b66e49b6155ef72a2dbd16`，已成功反序列化且内部 iteration 为 `2999`；最终在线统计为 episode length `1000/1000`、timeout `100%`、base-height/bad-orientation termination 均为 `0`、torso roll/pitch 误差 `0.01113/0.02257 rad`；
+- 本机历史 Stand 课程使用 `model_7999.pt` 起步、最终速度 `0.25x`；它只作为历史对照，不再作为当前 Stand 默认模型；
 - 历史 `model_2999.pt` 已完成当前 103.96 s 确定性双臂测试集的 `1.0x` 整段回放：5198 step、0 次 termination/reset；该结果证明测试链和旧模型在所选样本上可运行，不替代 model9996 新课程的独立验收；
-- 正式训练最终点为 mean episode length `1000/1000`、timeout `99.98%`、base-height termination `0`、bad-orientation termination `0.02%`，torso roll/pitch 误差 `0.0074/0.0130 rad`；
+- 历史 `0.25x` 正式训练最终点为 mean episode length `1000/1000`、timeout `99.98%`、base-height termination `0`、bad-orientation termination `0.02%`，torso roll/pitch 误差 `0.0074/0.0130 rad`；
 - 旧 Walk smoke 使用了来源错误的 Stand `model_7999`，只作为路径问题的诊断记录，不能再作为有效 Walk 起点测试；
 - 正确 Walk 起点已锁定为 `checkpoint/model_9996/locomotion.onnx`；原始 `model_9996.pt` 的 8 个 actor 张量与 ONNX 逐元素完全一致；
 - `pos2_down`、`pos1_back`、`pos3_front` 均从正确 model9996 完成 `2 env × 1 iteration`，pose index 为 1/0/2，初始化误差与两类摔倒终止均为 0；
@@ -29,7 +31,209 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 - 上述训练与回放均没有 traceback、`FileNotFoundError`、Isaac/Python 版本错误或 Nav2 数据缺失错误；
 - 训练不再依赖 `/home/hecggdz/...` 等机器绝对路径。
 
-这里的 smoke `model_0.pt` 只证明任务注册、数据加载、Isaac Sim、rollout、PPO 更新和保存执行链可运行，不代表一轮更新已经学会新任务。当前 Stand 使用 `BaselineModel9996/model_9996.pt`；既有 Stand 性能判断仍使用本机正式 `model_2999.pt`，并明确注明它来自历史 model7999 课程，不能假称为 model9996 续训结果。
+这里的 smoke `model_0.pt` 只证明任务注册、数据加载、Isaac Sim、rollout、PPO 更新和保存执行链可运行，不代表一轮更新已经学会新任务。训练初始化仍使用 `BaselineModel9996/model_9996.pt`；训练完成后的测试和可视化应显式指向最新 `1.0x` 正式 run 的 `model_2999.pt`，不要依赖脚本中的历史默认路径。
+
+## 1.1 Stand 训练、测试与可视化快速入口
+
+本节是当前 Stand 的权威操作入口。除 TensorBoard 外，所有命令都在 `legged_lab` 目录、`env_isaaclab` 环境中执行；命令中的路径包含空格，必须保留双引号。
+
+### 1.1.1 进入环境并指定当前正式模型
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+STAND_RUN='2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714'
+STAND_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/${STAND_RUN}/model_2999.pt"
+
+test -f "$STAND_CKPT"
+sha256sum "$STAND_CKPT"
+```
+
+预期 SHA-256：
+
+```text
+2c87cc2cc3706c1024594d14d85a34e7bf468b54f6b66e49b6155ef72a2dbd16
+```
+
+### 1.1.2 训练前数据与代码检查
+
+```bash
+python scripts/tools/check_armhack_reference_data.py --stand-only
+
+bash -n scripts/train_g1_armhack_stand.sh
+bash -n scripts/vis_g1_armhack_stand_eval.sh
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/user/.local/bin/pytest -q \
+  source/legged_lab/test/test_g1_perturb_static.py
+```
+
+当前预期结果为数据检查 `[PASS]`、静态测试 `9 passed`。`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` 用于隔离 `~/.local` 中与 Conda 无关的 pytest 插件冲突；训练入口本身不依赖该设置。
+
+### 1.1.3 先做两种训练冒烟测试
+
+随机静态姿态阶段：
+
+```bash
+NUM_ENVS=2 MAX_ITERATIONS=1 \
+STATIC_ITERATIONS=1 RAMP_ITERATIONS=1 \
+RUN_NAME=armhack_stand_static_stage_smoke \
+bash scripts/train_g1_armhack_stand.sh
+```
+
+直接进入最终 `1.0x` 轨迹阶段：
+
+```bash
+NUM_ENVS=2 MAX_ITERATIONS=1 \
+STATIC_ITERATIONS=0 RAMP_ITERATIONS=0 \
+FINAL_MOTION_SCALE=1.0 \
+RUN_NAME=armhack_stand_full_speed_1x_smoke \
+bash scripts/train_g1_armhack_stand.sh
+```
+
+成功标志是日志出现 `Learning iteration 0/1` 并保存 `model_0.pt`。第二条命令还必须打印 `ArmHack/csv_motion_scale=1.0000` 和 `ArmHack/curriculum_stage=2.0000`。smoke 模型不能作为正式性能模型。
+
+### 1.1.4 启动完整 Stand 训练
+
+默认完整训练就是本轮已经验证的配置：4096 个环境、3000 iteration、20 s episode，从 `model_9996.pt` 做 policy-only 初始化。
+
+```bash
+RUN_NAME=armhack_stand_curriculum_1x_from_model9996_full \
+NUM_ENVS=4096 \
+MAX_ITERATIONS=3000 \
+STATIC_ITERATIONS=500 \
+RAMP_ITERATIONS=1000 \
+FINAL_MOTION_SCALE=1.0 \
+QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_stand.sh
+```
+
+课程含义：
+
+| iteration | 阶段 | 双臂输入 |
+|---:|---|---|
+| `0..499` | 随机姿态静止 | reset 随机选择轨迹内姿态，随后保持不动 |
+| `500..1499` | 连续升速 | 从 `0` 线性升至原轨迹 `1.0x` |
+| `1500..2999` | 全速适应 | 持续按原轨迹 `1.0x` 运动 |
+
+训练日志、配置和 TensorBoard event 写入：
+
+```text
+logs/rsl_rl/g1_stand_perturb/<时间戳>_<RUN_NAME>/
+```
+
+checkpoint 同时保存到：
+
+```text
+ArmHack Checkpoints/StandPerturb/<时间戳>_<RUN_NAME>/model_*.pt
+```
+
+### 1.1.5 开启 TensorBoard
+
+另开一个终端执行：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+/home/user/anaconda3/envs/proknee/bin/tensorboard \
+  --logdir logs/rsl_rl/g1_stand_perturb \
+  --host 127.0.0.1 \
+  --port 6006 \
+  --reload_interval 10
+```
+
+浏览器打开 `http://127.0.0.1:6006`。训练仍使用 `env_isaaclab`；这里使用 `proknee` 中已验证可用的 TensorBoard 2.19.0 只负责读取 event 文件，不参与 Isaac Sim 或策略训练。
+
+### 1.1.6 确定性 headless 测试并生成报告
+
+如测试数据未生成或构建脚本有改动，先重建并检查：
+
+```bash
+python scripts/tools/build_armhack_stand_visualization_suite.py
+python scripts/tools/check_armhack_reference_data.py --stand-only
+```
+
+然后用当前正式模型跑完整 103.96 s、5198-step、`1.0x` 测试：
+
+```bash
+CHECKPOINT="$STAND_CKPT" \
+MODE=all \
+HEADLESS=True \
+REAL_TIME=False \
+MAX_STEPS=5198 \
+bash scripts/vis_g1_armhack_stand_eval.sh
+```
+
+该测试按固定顺序覆盖 6 个代表姿态、3 个合成姿态、4 条实测 `1.0x` 轨迹和 3 条实测轨迹凸组合。运行时不随机抽样。退出时自动生成：
+
+```text
+<checkpoint目录>/Test Reports/StandArmOnly/model_2999__all.md
+```
+
+报告包含 termination/reset 次数、躯干稳定指标，以及全部 29 个实际关节的平均逐步波动。完整稳定通过的最低条件是 `termination/reset 事件数=0`；还应比较 torso roll/pitch、角速度、高度误差和 15 个腰腿平衡关节的波动。
+
+### 1.1.7 GUI 可视化整套测试
+
+```bash
+CHECKPOINT="$STAND_CKPT" \
+MODE=all \
+HEADLESS=False \
+REAL_TIME=True \
+FOLLOW_CAMERA=True \
+CAMERA_VIEW=front \
+bash scripts/vis_g1_armhack_stand_eval.sh
+```
+
+分类查看：
+
+```bash
+CHECKPOINT="$STAND_CKPT" MODE=representative_poses \
+  bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_poses \
+  bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=representative_trajectories \
+  bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_trajectories \
+  bash scripts/vis_g1_armhack_stand_eval.sh
+```
+
+逐项定位：
+
+```bash
+CHECKPOINT="$STAND_CKPT" MODE=representative_pose ITEM=1 \
+  bash scripts/vis_g1_armhack_stand_eval.sh       # ITEM=1..6
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_pose ITEM=1 \
+  bash scripts/vis_g1_armhack_stand_eval.sh       # ITEM=1..3
+CHECKPOINT="$STAND_CKPT" MODE=representative_trajectory ITEM=1 \
+  bash scripts/vis_g1_armhack_stand_eval.sh       # ITEM=1..4
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_trajectory ITEM=1 \
+  bash scripts/vis_g1_armhack_stand_eval.sh       # ITEM=1..3
+```
+
+`CAMERA_VIEW` 可设为 `front`、`chase` 或 `side`。若整套回放发生 reset，应立即改用逐项命令定位失败姿态或轨迹；reset 后整套 CSV 会从开头重新播放，不能把后续画面视为已经覆盖剩余样本。
+
+### 1.1.8 无窗口 smoke 与视频录制
+
+只检查 checkpoint、Isaac Sim 和回放入口能否加载：
+
+```bash
+CHECKPOINT="$STAND_CKPT" \
+MODE=representative_trajectory ITEM=1 \
+HEADLESS=True REAL_TIME=False MAX_STEPS=20 \
+bash scripts/vis_g1_armhack_stand_eval.sh
+```
+
+录制完整确定性测试：
+
+```bash
+CHECKPOINT="$STAND_CKPT" \
+MODE=all \
+HEADLESS=True REAL_TIME=False MAX_STEPS=5198 \
+bash scripts/vis_g1_armhack_stand_eval.sh \
+  --video --video_length 5198
+```
+
+视频写入 checkpoint 所在目录的 `videos/play/`；测试报告写入同一目录下的 `Test Reports/StandArmOnly/`。20-step smoke 只证明入口可运行，不代表策略通过完整轨迹测试。
 
 ## 2. Reference Data 目录
 
@@ -786,7 +990,24 @@ checkpoint: ArmHack Checkpoints/StandPerturb/2026-07-14_20-28-18_armhack_stand_f
 结果: 正常完成 Learning iteration 0/1，共 48 environment steps；完成 PPO 更新并保存 Stand 专用 model_0.pt；无 Traceback、Hydra、Python、CUDA 或 Isaac 启动错误
 ```
 
-Stand 本机正式课程训练：
+Stand 当前 model9996→`1.0x` 正式课程训练：
+
+```text
+run: logs/rsl_rl/g1_stand_perturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714
+checkpoint: ArmHack Checkpoints/StandPerturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/model_2999.pt
+设置: 4096 env × 3000 iteration；20 s/1000 control-step episode；S3 G1
+恢复: BaselineModel9996/model_9996.pt policy-only；baseline KL=0.003；style reward=0；task/style lerp=1
+阶段 0: iteration 0..499，csv_motion_scale=0、curriculum_stage=0
+阶段 1: iteration 500..1499，csv_motion_scale 从 0 连续升至 1.0、curriculum_stage=1
+阶段 2: iteration 1500..2999，csv_motion_scale=1.0、curriculum_stage=2
+最终: mean episode length=1000；timeout=1.0；base_height=0；bad_orientation=0
+最终 torso: roll=0.01113 rad；pitch=0.02257 rad；ang_vel_xy=0.1632 rad/s；height error=0.0094 m
+训练耗时: 5548.62 s；最终 checkpoint iteration=2999，已用 env_isaaclab 成功加载
+checkpoint SHA-256: 2c87cc2cc3706c1024594d14d85a34e7bf468b54f6b66e49b6155ef72a2dbd16
+TensorBoard: 63 个 scalar tag，关键指标均写到 step 2999
+```
+
+Stand 历史 model7999→`0.25x` 正式课程训练：
 
 ```text
 run: logs/rsl_rl/g1_stand_perturb/2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714
@@ -886,11 +1107,11 @@ CSV 第 0..20 s 最大单关节变化: 0.011457 rad
 
 以 5 s 为窗口统计整条 CSV，约 `61.0%` 的窗口最大单关节变化达到 `0.10 rad`，其余窗口可能仍是保持段。随机 phase 适合训练分布统计，但不适合人工可视化验收：每次看到的内容不同，也可能连续抽到保持段。现在的 GUI 测试全部改为离线选样后顺序播放，运行时不再随机抽取姿态或轨迹。
 
-以下命令统一使用本机正式模型：
+以下命令统一使用当前从 model9996 训练得到的 `1.0x` 正式模型：
 
 ```bash
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
-STAND_CKPT='/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714/model_2999.pt'
+STAND_CKPT='/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/model_2999.pt'
 ```
 
 ### 9.2 确定性可视化数据集如何构造
@@ -926,12 +1147,14 @@ python scripts/tools/check_armhack_reference_data.py --stand-only
 先进入 IsaacLab 环境，然后启动默认 `MODE=all`：
 
 ```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
 conda activate env_isaaclab
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
-bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=all \
+  bash scripts/vis_g1_armhack_stand_eval.sh
 ```
 
-脚本默认使用历史正式 `model_2999.pt`、单环境、正面跟随相机和实时 GUI；训练完成后应通过 `CHECKPOINT=...` 指向新的 1.0x 模型。当前完整确定性序列总时长为 103.96 s，时间线固定为：
+必须显式传入 `CHECKPOINT="$STAND_CKPT"`；不要依赖脚本中为了兼容旧流程保留的历史默认 checkpoint。回放使用单环境、正面跟随相机和实时 GUI。当前完整确定性序列总时长为 103.96 s，时间线固定为：
 
 | 可视化时间 | 内容 |
 |---:|---|
@@ -952,19 +1175,19 @@ bash scripts/vis_g1_armhack_stand_eval.sh
 四类顺序播放：
 
 ```bash
-MODE=representative_poses bash scripts/vis_g1_armhack_stand_eval.sh
-MODE=synthesized_poses bash scripts/vis_g1_armhack_stand_eval.sh
-MODE=representative_trajectories bash scripts/vis_g1_armhack_stand_eval.sh
-MODE=synthesized_trajectories bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=representative_poses bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_poses bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=representative_trajectories bash scripts/vis_g1_armhack_stand_eval.sh
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_trajectories bash scripts/vis_g1_armhack_stand_eval.sh
 ```
 
 按编号复测单个姿态或单条轨迹：
 
 ```bash
-MODE=representative_pose ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh       # ITEM=1..6
-MODE=synthesized_pose ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh          # ITEM=1..3
-MODE=representative_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh # ITEM=1..4
-MODE=synthesized_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh    # ITEM=1..3
+CHECKPOINT="$STAND_CKPT" MODE=representative_pose ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh       # ITEM=1..6
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_pose ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh          # ITEM=1..3
+CHECKPOINT="$STAND_CKPT" MODE=representative_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh # ITEM=1..4
+CHECKPOINT="$STAND_CKPT" MODE=synthesized_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh    # ITEM=1..3
 ```
 
 每个单姿态 CSV 都把同一组 14-DoF 手臂目标严格保持 20 s（1001 行，50 Hz），专门用于检查“给定姿态下手臂不动，躯干能否稳定”。单轨迹模式从对应轨迹起点直接开始，不需要等待原始 CSV 前 25 s 的保持段。
@@ -974,7 +1197,7 @@ MODE=synthesized_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh    
 无窗口执行链 smoke：
 
 ```bash
-MODE=representative_trajectory ITEM=1 \
+CHECKPOINT="$STAND_CKPT" MODE=representative_trajectory ITEM=1 \
 HEADLESS=True REAL_TIME=False MAX_STEPS=20 \
 bash scripts/vis_g1_armhack_stand_eval.sh
 ```
@@ -982,12 +1205,13 @@ bash scripts/vis_g1_armhack_stand_eval.sh
 录制完整确定性序列：
 
 ```bash
-HEADLESS=True REAL_TIME=False MAX_STEPS=5200 \
+CHECKPOINT="$STAND_CKPT" MODE=all \
+HEADLESS=True REAL_TIME=False MAX_STEPS=5198 \
 bash scripts/vis_g1_armhack_stand_eval.sh \
-  --video --video_length 5200
+  --video --video_length 5198
 ```
 
-20 step 只能证明 checkpoint、任务、确定性 CSV 和仿真链能加载；完整 103.96 s 序列需要 5,198 个 50 Hz control step。视频默认写到 checkpoint 所在 run 的 `videos/play/`，该目录已被 `.gitignore` 排除。
+20 step 只能证明 checkpoint、任务、确定性 CSV 和仿真链能加载；完整 103.96 s 序列需要 5,198 个 50 Hz control step。视频默认写到 checkpoint 所在目录的 `videos/play/`，该目录已被 `.gitignore` 排除。
 
 ### 9.6 checkpoint 同目录测试报告
 
@@ -1001,13 +1225,13 @@ bash scripts/vis_g1_armhack_stand_eval.sh \
 例如默认完整序列对应：
 
 ```text
-ArmHack Checkpoints/StandPerturb/2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714/
+ArmHack Checkpoints/StandPerturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/
 Test Reports/StandArmOnly/model_2999__all.md
 ```
 
 报告记录 checkpoint 与测试 CSV 的绝对路径/SHA-256、控制步数、测试时长、termination/reset 次数、躯干 Important Metrics，以及机器人全部 29 个实际关节的统计。`平均逐步波动` 定义为同一 episode 内相邻 50 Hz 控制帧的 `mean(|q[t]-q[t-1]|)`，单位为 `rad/step`；reset 前后的跳变不计入。报告把 14 个手臂关节标为“输入关节”，把 15 个腰腿关节标为“平衡策略关节”，避免误解为测试 CSV 在控制全身。
 
-2026-07-14 对历史 `model_2999.pt` 完成了当前 `1.0x` 测试集的 `MODE=all`、5198-step headless 实测，报告成功写入上述路径，29 个关节均有统计。整段 103.96 s 回放出现 `0` 次 termination/reset；躯干 roll/pitch 误差均值为 `0.006214/0.034164 rad`，躯干水平角速度误差为 `0.062180 rad/s`，高度误差为 `0.007344 m`。这是对 6 个代表静态姿态、3 个合成静态姿态、4 条实测 `1.0x` 轨迹和 3 条实测混合 `1.0x` 轨迹的确定性测试结果；它不代表已覆盖约 405 s 的全部源数据，也不代表尚未完成的 model9996 新课程结果。
+历史 model7999→`0.25x` 课程的 `model_2999.pt` 曾完成当前 `1.0x` 测试集的 `MODE=all`、5198-step headless 实测：整段 103.96 s 为 `0` 次 termination/reset，躯干 roll/pitch 误差均值为 `0.006214/0.034164 rad`。这只是历史对照。最新 model9996→`1.0x` 正式模型已完成在线训练校验，但仍须使用本节命令生成它自己的 `model_2999__all.md`，不能复制历史模型的测试结论。
 
 2026-07-14 已实际执行上述 `representative_trajectory ITEM=1` 的 20-step headless smoke：确定性 CSV 路径解析成功，`model_2999.pt` 以 policy-only 方式加载，Isaac Sim 完成 20 step 后按 `max_steps` 正常退出，无 Python、Hydra、Isaac 或 CUDA 异常。该结果只确认新入口可运行，不代表 20 s 轨迹已完整通过稳定性验收。
 
@@ -1086,21 +1310,21 @@ ArmHack Checkpoints/WalkPerturbFinetune/<run>/videos/play/
 专用 checkpoint 目录只保存模型；事件、配置和训练曲线仍在原日志目录：
 
 ```bash
-source /home/user/anaconda3/etc/profile.d/conda.sh
-conda activate env_isaaclab
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
 
-# 查看全部 Walk run
-tensorboard --logdir logs/rsl_rl/g1_walk_perturb --port 6006
+# 查看全部 Stand run
+/home/user/anaconda3/envs/proknee/bin/tensorboard \
+  --logdir logs/rsl_rl/g1_stand_perturb \
+  --host 127.0.0.1 --port 6006 --reload_interval 10
 
-# 只查看一个 Walk run；WALK_RUN 与第 8.4/9.7 节保持一致
-WALK_RUN='<logs/rsl_rl/g1_walk_perturb 下的正式 run 目录名>'
-tensorboard --logdir "logs/rsl_rl/g1_walk_perturb/${WALK_RUN}" --port 6006
+# 只查看当前 1.0x 正式 Stand run
+STAND_RUN='2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714'
+/home/user/anaconda3/envs/proknee/bin/tensorboard \
+  --logdir "logs/rsl_rl/g1_stand_perturb/${STAND_RUN}" \
+  --host 127.0.0.1 --port 6006 --reload_interval 10
 ```
 
-浏览器打开 `http://127.0.0.1:6006`。TensorBoard 用于观察训练曲线，Isaac Sim GUI 和录制视频
-用于观察真实步态；两者不能互相替代。Stand 的曲线仍可用
-`tensorboard --logdir logs/rsl_rl/g1_stand_perturb --port 6006` 查看。
+浏览器打开 `http://127.0.0.1:6006`。TensorBoard 用于观察训练曲线，Isaac Sim GUI 和录制视频用于观察实际姿态与运动；两者不能互相替代。训练使用 `env_isaaclab`，TensorBoard 进程只读取 event 文件，可以使用本机已验证的 `proknee` 环境启动。
 
 ## 10. Stand 训练代码专项审计
 
@@ -1129,11 +1353,11 @@ base_ang_vel(3) + projected_gravity(3) + velocity_command(3)
 
 没有新增 phase、target、target velocity 或 look-ahead。policy 可以看到当前手臂 `q/dq`，这是反馈平衡所必需的当前状态，不属于未来信息。当前训练恢复的 `model_9996` actor 也是 96 维输入、29 维输出，结构完全兼容。
 
-### 10.3 仍需由正式长训练回答的问题
+### 10.3 正式长训练完成后仍需回答的问题
 
-- 当前权重能否同时获得 20 s 高完成率和更低的 torso RMS，需看正式 TensorBoard 和固定评估，冒烟测试不能回答性能问题；
-- 课程目前按全局 step 固定切换，不是按完成率自动晋级；如果阶段 0 在 500 iteration 时仍未收敛，应延长 `STATIC_ITERATIONS`；
-- 当前课程最终速度已经提升为原轨迹 `1.0x`；必须单独观察阶段 1 后半段和阶段 2 的完成率，确认全速扰动没有引入新的摔倒模式；
+- 最新 3000-iteration 训练在最终 `1.0x` 阶段达到在线 episode length `1000/1000`、timeout `100%` 和零摔倒终止；这是训练分布在线统计，不等于独立固定评估；
+- 最新 `model_2999.pt` 仍需按第 1.1.6/1.1.7 节完成确定性整套与逐项测试，并生成 checkpoint 同级报告；
+- 课程按全局 step 固定切换，不是按完成率自动晋级；下一次训练仍应在 iteration 400–500 检查阶段 0 是否收敛；
 - 仍需统计目标被 soft joint limit 裁剪的比例，并记录目标/实际 arm `q/dq/ddq` 以诊断执行器跟踪；
 - 20 s 训练完成率不能替代约 405 s 全轨迹固定评估；
 - Stand 仍继承 AMP walking 配置并加载运动数据，功能上无误但启动慢，后续可把纯静态任务拆成更轻的 runner/config。
@@ -1146,9 +1370,10 @@ base_ang_vel(3) + projected_gravity(3) + velocity_command(3)
 
 | 本机 run | 阶段 | 平均长度/1000 | timeout | base height | bad orientation | torso roll / pitch |
 |---|---|---:|---:|---:|---:|---:|
-| `2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714` | `0.25x`，stage 2 | 1000.00 | 99.98% | 0% | 0.02% | 0.0074 / 0.0130 rad |
+| `2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714` | `1.0x`，stage 2 | 1000.00 | 100% | 0% | 0% | 0.0111 / 0.0226 rad |
+| `2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714` | 历史 `0.25x`，stage 2 | 1000.00 | 99.98% | 0% | 0.02% | 0.0074 / 0.0130 rad |
 
-对应 `model_2999.pt` 已在日志目录和 Stand 专用目录各保存一份，两者 SHA-256 均为 `03e0f06c86363f906bbd4ceeb4e51b3897b45de345f0d066b8244bbb354e93e8`，并已用 `env_isaaclab` 成功反序列化。TensorBoard 事件文件完整写到 iteration 2999。
+最新 `1.0x` run 的 `model_2999.pt` 已在日志目录和 Stand 专用目录各保存一份，两者 SHA-256 均为 `2c87cc2cc3706c1024594d14d85a34e7bf468b54f6b66e49b6155ef72a2dbd16`，并已用 `env_isaaclab` 成功反序列化，内部 iteration 为 `2999`。TensorBoard 事件文件包含 63 个 scalar tag，关键曲线均完整写到 step 2999。历史 `0.25x` 模型 SHA-256 为 `03e0f06c86363f906bbd4ceeb4e51b3897b45de345f0d066b8244bbb354e93e8`。
 
 以下长期训练结果来自 HEC-5090 的历史 TensorBoard 事件文件，数值为最后 100 个 iteration 的均值；最大 episode 长度为 `1000` 个控制步，即 20 s。远端 run 使用当时保存的 `params/env.yaml`/`params/agent.yaml`，与当前课程代码不是完全同一个代码快照，因此只用于说明初始化模型来源和历史对照，不替代本机新模型的固定评估。
 
@@ -1170,7 +1395,7 @@ base_ang_vel(3) + projected_gravity(3) + velocity_command(3)
 
 1. 7 月 11 日实验确实是失败策略，最终几乎全部因 `bad_orientation` 终止；它同时包含旧数据映射、从零初始化和全负奖励等多个因素，不能把失败只归因于某一个权重。
 2. 从 Nav2 policy 做 policy-only 初始化后，即使 7 月 14 日关闭 style reward，训练分布内也能达到接近完整 20 s 存活。这说明“不要从随机策略硬学静态任务”是高价值结论，AMP style reward 不是唯一解。
-3. 上述 `model_7999.pt` 只解释历史 `model_2999.pt` 的来源。当前训练脚本已经固定校验并加载 `BaselineModel9996/model_9996.pt`；其一轮 smoke 只验证执行链。后续 model9996 新课程需形成独立 run/checkpoint，不能把历史 `model_2999.pt` 或 smoke `model_0.pt` 当作该课程的最终性能结果。
+3. 上述 `model_7999.pt` 只解释历史 `0.25x model_2999.pt` 的来源。当前训练脚本固定校验并加载 `BaselineModel9996/model_9996.pt`，并已形成独立的 `1.0x` 正式 run/checkpoint；测试时必须用 run 路径区分两个同名的 `model_2999.pt`，也不能把 smoke `model_0.pt` 当作正式模型。
 
 ## 12. 已实现课程与正式训练判据
 
@@ -1232,7 +1457,7 @@ seed、episode 时长、随机化开关
 `STAND_CKPT` 必须手工指向正式模型。回放 reset 会直接把手臂初始化到第 0 帧，所以没有默认姿态到首帧的目标跳变。为了在约 410 s 内覆盖完整原始轨迹，下面显式关闭训练课程并用 `1.0x` 速度播放；这与当前课程最终阶段速度一致，是完整数据压力测试。约 404.92 s 原始轨迹需要约 20,246 个 50 Hz control step，模板保留少量尾部余量。
 
 ```bash
-STAND_CKPT='/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714/model_2999.pt'
+STAND_CKPT='/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/model_2999.pt'
 
 TASK=LeggedLab-Isaac-AMP-G1-StandPerturb-Play-v0 \
 CHECKPOINT="$STAND_CKPT" \
@@ -1259,7 +1484,7 @@ bash scripts/vis_isaacsim_g1_amp.sh \
 
 此前已修改 Stand 环境、奖励函数、Stand 配置、runner 配置、静态测试和两份文档，并新增 `scripts/train_g1_armhack_stand.sh`。当前初始化 `model_9996.pt` 保存在忽略 Git 的 `ArmHack Checkpoints/StandPerturb/BaselineModel9996/`；本轮数据构建、校验和回放报告只改变 Stand 评估数据与入口，没有增加未来信息观测。
 
-结论：奖励继承、全负 return、随机起点首步跳变、随机根初速和早期 push 均已在代码层修复；当前 Stand 训练入口已从 model9996 完成真实 PPO smoke。历史 3000-iteration 课程及 `model_2999.pt` 仍作为既有结果保留。旧的固定第 0 帧 GUI 已被严格 14-DoF 双臂测试集替代：运行时不采样，代表样本和固定种子合成样本可顺序或逐项复现；每次回放自动在 checkpoint 同级保存 29 关节波动报告。构建与数据校验通过不等于策略性能通过，最终结论仍需结合逐项报告和第 13 节指标。
+结论：奖励继承、全负 return、随机起点首步跳变、随机根初速和早期 push 均已在代码层修复；当前 Stand 训练入口已从 model9996 完成 3000-iteration、最终 `1.0x` 的正式训练，在线最终点为完整 20 s episode、100% timeout 和零摔倒终止。历史 model7999→`0.25x` 模型仍作为对照保留。旧的固定第 0 帧 GUI 已被严格 14-DoF 双臂测试集替代：运行时不采样，代表样本和固定种子合成样本可顺序或逐项复现；每次回放自动在 checkpoint 同级保存 29 关节波动报告。在线训练成功不等于固定评估通过，最新正式模型仍须结合第 1.1.6、1.1.7 和第 13 节完成独立测试。
 
 ## 15. Walk 当前实现与历史审计对照
 
