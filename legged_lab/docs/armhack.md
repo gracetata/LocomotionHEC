@@ -170,7 +170,7 @@ episode 仍为 20 s。reset 时先随机选择轨迹相位，再把仿真中的 
 
 课程仅改变环境如何生成外部手臂扰动。policy 观测保持原来的 96 维，只包含当前机器人状态、零速度命令和上一动作；没有轨迹 phase、未来手臂目标、目标速度或 look-ahead，因此不会提前知道手臂接下来如何运动。
 
-正式训练从已校验的 `model_7999.pt` 做 policy-only 初始化，并保留 `0.003` 的冻结基线 KL。专用入口是：
+当前 Stand 训练入口已改为从已校验的 S3 G1 `model_9996.pt` 做 policy-only 初始化，并保留 `0.003` 的冻结基线 KL。该文件为 96→29 actor、297 维 critic，iteration 为 9996，SHA-256 为 `bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6`。专用入口是：
 
 ```bash
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
@@ -191,13 +191,19 @@ bash scripts/train_g1_armhack_stand.sh
 legged_lab/Reference Data/ArmHack/
 ├── StandPerturb/
 │   ├── raw/g1_full_body_motion_sdk_50hz.csv
-│   └── g1_arm_trajectory_named_50hz.csv
+│   ├── g1_arm_trajectory_named_50hz.csv
+│   └── TestData/ArmOnly/
+│       ├── poses/{representative,synthesized}/
+│       ├── trajectories/{representative,synthesized}/
+│       ├── sequences/
+│       └── manifest.json
 └── WalkPerturbFinetune/
     ├── g1_arm_pose_set.json
     └── nav2_cmd_vel_raw_success.csv
 ```
 
 - Stand 原始数据来自 `/home/user/Workspace/whole_body_joints_20260708_143133.csv`。转换脚本按用户给定的 SDK `q0..q28` 顺序提取 `q15..q28`，生成只包含 `time_s + 14 个具名手臂关节` 的规范训练 CSV。下肢数据不会作为脚本目标施加。
+- Stand 测试数据也严格限制为这 14 个双臂关节；代表姿态/轨迹和固定种子合成姿态/轨迹均保存在 `TestData/ArmOnly/`。合成姿态只在两组实测手臂姿态之间插值，合成轨迹只连接手臂锚点，不生成或修改腰腿目标。
 - Walk 的三组双臂姿态保存在 JSON 中，单位为弧度，按左/右各 7 个关节记录；加载时校验单位、顺序、数量、名称唯一性和数值有限性，再转换成环境使用的左右交错 14 维顺序。
 - Walk 的速度分布来自 HEC-5090 上 331,010 行 Nav2 成功轨迹，保存为 `nav2_cmd_vel_raw_success.csv`；该 83 MiB 外部数据已忽略 Git，但训练路径保持仓库相对。
 - 所有训练路径均相对于 `legged_lab` 项目目录解析，不再包含 `/home/hecggdz/...` 等机器绝对路径。
@@ -227,14 +233,15 @@ controller 权重：mppi 1.5，dwb 1.0
 ```text
 legged_lab/ArmHack Checkpoints/
 ├── StandPerturb/
-│   ├── BaselineModel7999/model_7999.pt
+│   ├── BaselineModel9996/model_9996.pt
+│   ├── <run_name>/Test Reports/StandArmOnly/*.md
 │   └── <run_name>/model_*.pt
 └── WalkPerturbFinetune/
     ├── BaselineLocomotionModel9996/model_9996.pt
     └── <run_name>/model_*.pt
 ```
 
-runner 同时保留 `logs/rsl_rl/...` 中的原 checkpoint，保证旧的续训逻辑不变。模型文件已加入 `.gitignore`。训练、测试、最新 checkpoint 选择、GUI 可视化和视频录制命令统一记录在 `armhack_train.md`。
+runner 同时保留 `logs/rsl_rl/...` 中的原 checkpoint，保证旧的续训逻辑不变。模型文件已加入 `.gitignore`。Stand 每次测试退出时会在被测 checkpoint 同级的 `Test Reports/StandArmOnly/` 写入 Markdown：记录 checkpoint/测试数据 SHA-256、termination 次数、躯干指标，以及全部 29 个实际关节的平均逐步波动 `mean(|q[t]-q[t-1]|)`；reset 前后的跳变不计入。
 
 ### 当前环境和验证状态
 
@@ -248,7 +255,7 @@ cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
 
 环境已验证为 Python `/home/user/anaconda3/envs/env_isaaclab/bin/python`、IsaacLab `0.54.2`、`rsl-rl-lib 3.2.0`、PyTorch `2.7.0+cu128`，CUDA 和 RTX 4090 可用。
 
-Stand 已完成从其独立 `model_7999.pt` policy-only 恢复、课程切换和长于完整 episode 的真实训练验证。Walk 起点已纠正为 S3 `locomotion.onnx` 对应的原始 `model_9996.pt`；`pos1_back`、`pos2_down`、`pos3_front` 均已从正确起点完成 `2 env × 1 iteration` 真训练 smoke，初始化误差与两类摔倒终止均为 0，full-state resume 也已通过。此前从 Stand `model_7999` 启动的 Walk smoke 全部只保留为错误基线诊断记录，不再作为有效 Walk 结果；这些 smoke 仍不能替代 20 s 正式性能验收。
+Stand 的新入口已经从 `BaselineModel9996/model_9996.pt` 完成 `2 env × 1 iteration` 真实训练 smoke：policy-only 加载、冻结 KL 基线、PPO 更新及 Stand 专用 `model_0.pt` 保存均成功。此前完成的 `model_2999.pt` 是从历史 `model_7999.pt` 训练得到，保留为既有评估模型，不应把它误写成新入口的 model9996 产物。
 
 ## 附件历史原文
 

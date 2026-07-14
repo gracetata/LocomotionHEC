@@ -10,12 +10,14 @@ ArmHack/
 │   ├── raw/
 │   │   └── g1_full_body_motion_sdk_50hz.csv
 │   ├── g1_arm_trajectory_named_50hz.csv
-│   └── VisualizationSuite/
+│   └── TestData/ArmOnly/
 │       ├── manifest.json
-│       ├── pose_catalog.csv
-│       ├── representative_*_50hz.csv
-│       ├── synthesized_*_seed20260714_50hz.csv
-│       └── all_deterministic_sequence_seed20260714_50hz.csv
+│       ├── poses/
+│       │   ├── arm_pose_catalog.csv
+│       │   ├── representative/*_hold20s_50hz.csv
+│       │   └── synthesized/*_hold20s_50hz.csv
+│       ├── trajectories/{representative,synthesized}/
+│       └── sequences/*_arm_only_*_50hz.csv
 └── WalkPerturbFinetune/
     ├── g1_arm_pose_set.json
     └── nav2_cmd_vel_raw_success.csv
@@ -33,7 +35,7 @@ ArmHack/
 
 `g1_arm_trajectory_named_50hz.csv` 是由 `scripts/tools/extract_armhack_stand_arm_csv.py` 生成的规范训练文件，只包含 `time_s` 和 14 个具名手臂关节。训练环境不再读取或执行 CSV 中的下肢目标，也不再依赖数字 q 列的隐式顺序。
 
-`VisualizationSuite/` 是从完整规范轨迹离线构造的确定性可视化测试集，不是新的训练分布。`scripts/tools/build_armhack_stand_visualization_suite.py` 会遍历完整轨迹并固定选出 6 个代表姿态、4 段代表运动窗口；随后以种子 `20260714` 一次性合成 3 个姿态和 3 条 minimum-jerk 轨迹。生成结果、源时刻/窗口、合成父姿态与权重、时间线和每个 CSV 的 SHA-256 均记录在 `manifest.json`。
+`TestData/ArmOnly/` 是从完整规范轨迹离线构造的确定性 Stand 测试集，不是新的训练分布。所有回放 CSV 都严格只有 `time_s + 14 个双臂关节`；不含根节点、腰、髋、膝或踝。`scripts/tools/build_armhack_stand_visualization_suite.py` 会遍历完整轨迹并固定选出 6 个代表姿态、4 段代表运动窗口；随后以种子 `20260714` 对两组实测双臂姿态做凸插值，生成 3 个双臂姿态，并用 4 个双臂锚点合成 3 条 minimum-jerk 轨迹。合成过程不会扰动或生成任何腰腿关节。生成结果、父姿态与权重、源时刻/窗口和每个 CSV 的 SHA-256 均记录在 `manifest.json`。
 
 可视化运行时不再随机抽取数据，统一由以下入口顺序或逐项播放：
 
@@ -46,10 +48,10 @@ MODE=representative_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh
 
 ```bash
 python scripts/tools/build_armhack_stand_visualization_suite.py
-python scripts/tools/check_armhack_reference_data.py
+python scripts/tools/check_armhack_reference_data.py --stand-only
 ```
 
-固定种子重建已经验证能逐文件复现全部 22 个生成 CSV 的 SHA-256。代表轨迹的 5 s 原始窗口已离线时间拉伸到 20 s，等价于训练的 `0.25x` 源轨迹速度；播放端应使用 `csv_motion_scale=1.0`，不能再次降速。
+固定种子重建已经验证能逐文件复现全部 22 个生成 CSV 的 SHA-256，其中 1 个是姿态目录表、21 个是可回放 CSV。9 个单姿态文件均保持 20 s；代表轨迹的 5 s 原始窗口已离线时间拉伸到 20 s，等价于训练的 `0.25x` 源轨迹速度；播放端应使用 `csv_motion_scale=1.0`，不能再次降速。
 
 SHA-256：
 
