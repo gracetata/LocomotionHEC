@@ -19,8 +19,8 @@ from isaaclab.app import AppLauncher
 
 
 DEFAULT_CSV = (
-    "source/legged_lab/legged_lab/data/PerturbData/"
-    "whole_body_joints_20260708_143133.csv"
+    "Reference Data/ArmHack/StandPerturb/raw/"
+    "g1_full_body_motion_sdk_50hz.csv"
 )
 
 

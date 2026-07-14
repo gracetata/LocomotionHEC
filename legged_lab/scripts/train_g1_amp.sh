@@ -7,7 +7,7 @@
 # Environment variables:
 #   ISAACLAB_PYTHON      : Python executable from .envrc conda env.
 #   CONDA_ENV_NAME       : Conda env name used when ISAACLAB_PYTHON is unset (default: env_isaaclab).
-#   CONDA_BASE           : Conda installation root (default: /home/hecggdz/miniconda3).
+#   CONDA_BASE           : Conda installation root (default: ${HOME}/anaconda3).
 #   TASK                 : Gym task id (default: LeggedLab-Isaac-AMP-G1-SegmentedYawFinetune-v0).
 #   NUM_ENVS             : Number of IsaacLab parallel envs (default: 8192).
 #   MAX_ITERATIONS       : PPOAMP training iterations (default: 4000).
@@ -114,8 +114,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 LEGGED_LAB_DIR="${ROOT_DIR}"
 
-CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_leglab}
-CONDA_BASE=${CONDA_BASE:-/home/hecggdz/miniconda3}
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_isaaclab}
+CONDA_BASE=${CONDA_BASE:-${HOME}/anaconda3}
 if [[ -z "${ISAACLAB_PYTHON:-}" ]]; then
     if [[ -n "${CONDA_PREFIX:-}" && "$(basename "${CONDA_PREFIX}")" == "${CONDA_ENV_NAME}" ]]; then
         ISAACLAB_PYTHON="${CONDA_PREFIX}/bin/python"
@@ -134,7 +134,13 @@ RESUME=${RESUME:-False}
 LOAD_RUN=${LOAD_RUN:-}
 CHECKPOINT=${CHECKPOINT:-}
 HEADLESS=${HEADLESS:-True}
-RSI_ENABLE=${RSI_ENABLE:-True}
+if [[ -z "${RSI_ENABLE:-}" ]]; then
+    if [[ "${TASK}" == *"StandPerturb"* ]]; then
+        RSI_ENABLE=False
+    else
+        RSI_ENABLE=True
+    fi
+fi
 RSI_RATIO=${RSI_RATIO:-0.5}
 POS_RSI=${POS_RSI:-False}
 ROBOT_ASSET=${ROBOT_ASSET:-s3_g1_29dof}
@@ -149,7 +155,9 @@ TRACK_ANG_WEIGHT=${TRACK_ANG_WEIGHT:-}
 TRACK_LIN_STD=${TRACK_LIN_STD:-}
 TRACK_ANG_STD=${TRACK_ANG_STD:-}
 if [[ -z "${STYLE_REWARD_SCALE:-}" ]]; then
-    if [[ "${TASK}" == *"ToTarget-V2"* ]]; then
+    if [[ "${TASK}" == *"StandPerturb"* ]]; then
+        STYLE_REWARD_SCALE=0.0
+    elif [[ "${TASK}" == *"ToTarget-V2"* ]]; then
         STYLE_REWARD_SCALE=10.0
     elif [[ "${TASK}" == *"Strict"* || "${TASK}" == *"ToTarget-CommandBalanced"* ]]; then
         STYLE_REWARD_SCALE=8.0
@@ -158,7 +166,9 @@ if [[ -z "${STYLE_REWARD_SCALE:-}" ]]; then
     fi
 fi
 if [[ -z "${TASK_STYLE_LERP:-}" ]]; then
-    if [[ "${TASK}" == *"ToTarget-V2"* ]]; then
+    if [[ "${TASK}" == *"StandPerturb"* ]]; then
+        TASK_STYLE_LERP=1.0
+    elif [[ "${TASK}" == *"ToTarget-V2"* ]]; then
         TASK_STYLE_LERP=0.50
     elif [[ "${TASK}" == *"ToTarget-CommandBalanced"* ]]; then
         TASK_STYLE_LERP=0.55

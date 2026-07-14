@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "units": "rad",
+  "joint_order_per_arm": [
+    "shoulder_pitch",
+    "shoulder_roll",
+    "shoulder_yaw",
+    "elbow",
+    "wrist_roll",
+    "wrist_pitch",
+    "wrist_yaw"
+  ],
+  "poses": [
+    {
+      "name": "pos1_back",
+      "description_zh": "双臂靠后",
+      "left": [0.91, 0.52, 0.11, 0.01, -0.12, -1.03, 0.01],
+      "right": [0.91, -0.52, -0.11, 0.01, 0.12, -1.03, -0.01]
+    },
+    {
+      "name": "pos2_down",
+      "description_zh": "双臂下垂",
+      "left": [0.2504, 0.2650, -0.0919, 0.8356, 0.0031, 0.0104, -0.0102],
+      "right": [0.2504, -0.2650, 0.0919, 0.8356, -0.0031, 0.0104, 0.0102]
+    },
+    {
+      "name": "pos3_front",
+      "description_zh": "双臂靠前",
+      "left": [0.27, 0.79, -0.22, -0.49, 0.85, 0.40, 0.05],
+      "right": [0.27, -0.79, 0.22, -0.49, -0.85, 0.40, -0.05]
+    }
+  ]
+}

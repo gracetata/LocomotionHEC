@@ -12,12 +12,10 @@ from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import (
     G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg,
 )
 from .g1_walk_perturb_env_cfg import _configure_perturbation_common
+from .reference_data import STAND_ARM_MOTION_RELATIVE_PATH
 
 
-STAND_PERTURB_CSV_PATH = (
-    "/home/hecggdz/workspace-zwd/legged_lab/source/legged_lab/legged_lab/data/"
-    "PerturbData/whole_body_joints_20260708_143133.csv"
-)
+STAND_PERTURB_CSV_PATH = STAND_ARM_MOTION_RELATIVE_PATH.as_posix()
 
 
 @configclass
@@ -30,7 +28,7 @@ class G1StandPerturbEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg
         csv_path=STAND_PERTURB_CSV_PATH,
         csv_time_column="time_s",
         csv_loop=False,
-        csv_use_g1_action_order_q_columns=True,
+        csv_use_g1_action_order_q_columns=False,
         csv_q_column_joint_order="sdk",
         csv_randomize_start_on_reset=True,
         csv_end_margin_s=0.25,

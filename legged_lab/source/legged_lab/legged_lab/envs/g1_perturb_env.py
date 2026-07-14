@@ -506,6 +506,7 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             Path.cwd(),
             Path(LEGGED_LAB_ROOT_DIR),
             Path(LEGGED_LAB_ROOT_DIR).parent,
+            Path(LEGGED_LAB_ROOT_DIR).parents[2],
         ]
         for root in candidate_roots:
             candidate = (root / path).resolve()
