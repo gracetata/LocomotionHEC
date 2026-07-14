@@ -441,14 +441,39 @@ RUN_NAME=armhack_stand_full_speed_smoke \
 bash scripts/train_g1_armhack_stand.sh
 ```
 
-### 6.3 Walk 从 locomotion.onnx / model 9996 正式初始化
+### 6.3 Walk 正式训练：从 locomotion.onnx 对应的 model 9996 初始化
 
-必须使用专用脚本；不要再直接用通用脚本启动 Walk：
+Walk 必须使用专用脚本 `scripts/train_g1_armhack_walk.sh`，不要直接调用通用的
+`train_g1_amp.sh`。训练前先进入已经验证的环境和目录：
 
 ```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+```
+
+正式训练一个固定的 `pos2_down` 双臂姿态：
+
+```bash
 POSE_NAME=pos2_down \
 RUN_NAME=armhack_walk_pos2_from_locomotion_model9996 \
+bash scripts/train_g1_armhack_walk.sh
+```
+
+`POSE_NAME` 支持以下值：
+
+| 值 | 含义 | 适用场景 |
+|---|---|---|
+| `pos1_back` | 双臂靠后 | 单一固定姿态策略 |
+| `pos2_down` | 双臂下垂 | 默认单一固定姿态策略 |
+| `pos3_front` | 双臂靠前 | 单一固定姿态策略 |
+| `random` | 每个环境在 reset 时从三种姿态中随机选择一种，episode 内保持不变 | 训练一个覆盖三种姿态的统一策略 |
+
+例如训练覆盖三种固定姿态的统一策略：
+
+```bash
+POSE_NAME=random \
+RUN_NAME=armhack_walk_three_fixed_poses_from_locomotion_model9996 \
 bash scripts/train_g1_armhack_walk.sh
 ```
 
@@ -462,6 +487,20 @@ bash scripts/train_g1_armhack_walk.sh
 - 当前没有 Stand 或另一个 Walk 训练进程；
 - Hydra 参数不能覆盖 checkpoint 加载、baseline KL 或 robot spawn。
 
+这里的 `locomotion.onnx` 只用于确认部署 actor 的来源和 96→29 接口；实际训练从与它
+actor 权重逐元素一致的 `BaselineLocomotionModel9996/model_9996.pt` 做 policy-only 初始化。
+不要使用历史 `model_7999.pt`，也不要使用任何 Stand 训练后的 checkpoint 作为 Walk 起点。
+
+训练结果同时写到两个位置：
+
+```text
+logs/rsl_rl/g1_walk_perturb/<时间戳>_<RUN_NAME>/
+ArmHack Checkpoints/WalkPerturbFinetune/<时间戳>_<RUN_NAME>/
+```
+
+第一个目录包含 TensorBoard、`params/env.yaml`、`params/agent.yaml` 和 checkpoint；第二个目录
+保存同名 checkpoint 副本，供测试、可视化和归档使用。
+
 最小真实 smoke：
 
 ```bash
@@ -472,20 +511,35 @@ QUIET_TERMINAL=False \
 bash scripts/train_g1_armhack_walk.sh
 ```
 
-### 6.4 完整恢复已有 Walk run
+### 6.4 Walk 断点续训
 
-首次初始化只加载 policy；Walk 中断后必须用 `MODE=resume` 完整恢复 optimizer、discriminator、normalizer 和 iteration：
+首次初始化只加载 policy。Walk 中断后必须用 `MODE=resume` 完整恢复 optimizer、
+discriminator、normalizer 和 iteration。先填写已有 run 目录名和模型文件名，并确认日志目录与
+专用 checkpoint 目录中的两份文件都存在：
 
 ```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+RESUME_RUN='<已有 run 的完整目录名，不含路径>'
+RESUME_CHECKPOINT='model_1200.pt'
+
+test -f "logs/rsl_rl/g1_walk_perturb/${RESUME_RUN}/${RESUME_CHECKPOINT}"
+test -f "ArmHack Checkpoints/WalkPerturbFinetune/${RESUME_RUN}/${RESUME_CHECKPOINT}"
+
 MODE=resume \
-RESUME_RUN='<logs/rsl_rl/g1_walk_perturb 下的完整 run 目录名>' \
-RESUME_CHECKPOINT='model_1200.pt' \
+RESUME_RUN="${RESUME_RUN}" \
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT}" \
 POSE_NAME=pos2_down \
+MAX_ITERATIONS=2000 \
 RUN_NAME=armhack_walk_pos2_resume1200 \
 bash scripts/train_g1_armhack_walk.sh
 ```
 
-脚本会校验日志目录与 `ArmHack Checkpoints/WalkPerturbFinetune` 中两份 resume checkpoint 的 SHA 一致。`MODE=resume` 设置 `agent.load_policy_only=False`；不会错误地把每次续训都重置到 iteration 0。
+`MAX_ITERATIONS=2000` 表示从 checkpoint 当前 iteration 起再训练 2000 iteration，而不是训练到
+绝对编号 2000。`POSE_NAME` 应与原 run 保持一致；如果有意改变姿态分布，应使用新的 `RUN_NAME`
+并将其视为新的实验。脚本会校验日志目录与 `ArmHack Checkpoints/WalkPerturbFinetune` 中两份
+resume checkpoint 的 SHA 一致。`MODE=resume` 设置 `agent.load_policy_only=False`，不会把续训重置到
+iteration 0。
 
 ## 7. checkpoint 保存位置
 
@@ -616,7 +670,77 @@ policy/critic/discriminator 网络创建完成
 对应 ArmHack Checkpoints 子目录生成 model_0.pt
 ```
 
-### 8.4 当前真实测试记录
+### 8.4 Walk checkpoint 的 headless 测试
+
+这里的“测试”是加载已经训练出的 Walk checkpoint，在 `Play` 任务中继续使用 Nav2 CSV 的连续
+速度窗口，并固定一种双臂姿态进行推理。先指定需要测试的正式 run 和 checkpoint：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+WALK_RUN='<ArmHack Checkpoints/WalkPerturbFinetune 下的正式 run 目录名>'
+WALK_MODEL='model_<迭代号>.pt'
+WALK_CKPT="$PWD/ArmHack Checkpoints/WalkPerturbFinetune/${WALK_RUN}/${WALK_MODEL}"
+test -f "$WALK_CKPT" || { echo "checkpoint 不存在: $WALK_CKPT"; exit 1; }
+```
+
+对 `pos2_down` 做 1000 个 control step（20 s 仿真时间）的无窗口测试：
+
+```bash
+TASK=LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0 \
+CHECKPOINT="$WALK_CKPT" \
+ROBOT_ASSET=s3_g1_29dof \
+NUM_ENVS=1 \
+HEADLESS=True \
+REAL_TIME=False \
+MAX_STEPS=1000 \
+SKIP_EXPORT=True \
+RSI_ENABLE=False \
+RANDOMIZATION_STRENGTH=0 \
+bash scripts/vis_isaacsim_g1_amp.sh \
+  env.upper_body_perturbation.pose_name=pos2_down
+```
+
+在同一个 shell 中逐一测试三种固定姿态：
+
+```bash
+for WALK_POSE in pos1_back pos2_down pos3_front; do
+  echo "===== testing ${WALK_POSE} ====="
+  TASK=LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0 \
+  CHECKPOINT="$WALK_CKPT" \
+  ROBOT_ASSET=s3_g1_29dof \
+  NUM_ENVS=1 \
+  HEADLESS=True \
+  REAL_TIME=False \
+  MAX_STEPS=1000 \
+  SKIP_EXPORT=True \
+  RSI_ENABLE=False \
+  RANDOMIZATION_STRENGTH=0 \
+  bash scripts/vis_isaacsim_g1_amp.sh \
+    "env.upper_body_perturbation.pose_name=${WALK_POSE}"
+done
+```
+
+脚本退出前会打印：
+
+```text
+[METRIC] IsaacSim play task tracking
+[METRIC] IsaacSim play score
+[METRIC] IsaacSim play Important Metrics
+```
+
+至少检查 `lin_vel_xy_mae`、`yaw_rate_mae`、reward score 以及输出的躯干 roll/pitch、高度误差，
+并人工观察是否发生摔倒或 reset。当前通用 `Play` 汇总不会为 Nav2 Walk 单独打印
+`done_rate`/termination 分类，因此不能仅凭末尾没有 termination 文本就断言零 reset；严格自动验收还需要
+增加 Walk 专用测试报告。固定对比时分别使用三个具名 pose，不要使用 `random`。1000 step 无异常只能
+说明该姿态下完成了一次 20 s 测试，不能单独证明所有 Nav2 速度片段和随机种子均已通过。
+
+这里应使用 IsaacLab `Play` 入口。现有通用 MuJoCo 验证脚本没有复现环境内部的固定双臂 action
+覆盖，因此不能作为 ArmHack Walk 的等价验收命令。
+
+### 8.5 当前真实测试记录
 
 Stand：
 
@@ -887,14 +1011,32 @@ Test Reports/StandArmOnly/model_2999__all.md
 
 2026-07-14 已实际执行上述 `representative_trajectory ITEM=1` 的 20-step headless smoke：确定性 CSV 路径解析成功，`model_2999.pt` 以 policy-only 方式加载，Isaac Sim 完成 20 step 后按 `max_steps` 正常退出，无 Python、Hydra、Isaac 或 CUDA 异常。该结果只确认新入口可运行，不代表 20 s 轨迹已完整通过稳定性验收。
 
-### 9.7 Walk GUI 可视化
+### 9.7 Walk GUI 和视频可视化
+
+先在 `env_isaaclab` 环境的 `legged_lab` 目录中指定正式 checkpoint；不要把 smoke 的
+`model_0.pt` 当成训练结果：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+WALK_RUN='<ArmHack Checkpoints/WalkPerturbFinetune 下的正式 run 目录名>'
+WALK_MODEL='model_<迭代号>.pt'
+WALK_CKPT="$PWD/ArmHack Checkpoints/WalkPerturbFinetune/${WALK_RUN}/${WALK_MODEL}"
+test -f "$WALK_CKPT" || { echo "checkpoint 不存在: $WALK_CKPT"; exit 1; }
+```
+
+打开 Isaac Sim GUI，实时查看 `pos2_down` 姿态下的 Nav2 速度跟踪：
 
 ```bash
 TASK=LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0 \
 CHECKPOINT="$WALK_CKPT" \
+ROBOT_ASSET=s3_g1_29dof \
 NUM_ENVS=1 \
 HEADLESS=False \
 REAL_TIME=True \
+SKIP_EXPORT=True \
 RSI_ENABLE=False \
 RANDOMIZATION_STRENGTH=0 \
 FOLLOW_CAMERA=True \
@@ -903,16 +1045,62 @@ bash scripts/vis_isaacsim_g1_amp.sh \
   env.upper_body_perturbation.pose_name=pos2_down
 ```
 
-该命令继续从 Nav2 CSV 采样连续速度窗口。最后一行固定 `pos2_down`；可分别改为 `pos1_back`、`pos3_front`。逐姿态人工评估时不要用 `random`，以确保结果可复现。
+不设置 `MAX_STEPS` 时窗口会持续运行，关闭 Isaac Sim 即可退出。将最后一行依次改为
+`pos1_back`、`pos2_down`、`pos3_front` 可以固定查看三种姿态；逐姿态人工比较时不要使用
+`random`。该入口仍从 `Reference Data/ArmHack/WalkPerturbFinetune/` 中的 Nav2 CSV 采样连续速度
+窗口，并不是恒定速度演示。
+
+无窗口录制 `pos2_down` 的 20 s 视频：
+
+```bash
+TASK=LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0 \
+CHECKPOINT="$WALK_CKPT" \
+ROBOT_ASSET=s3_g1_29dof \
+NUM_ENVS=1 \
+HEADLESS=True \
+REAL_TIME=False \
+MAX_STEPS=1000 \
+SKIP_EXPORT=True \
+RSI_ENABLE=False \
+RANDOMIZATION_STRENGTH=0 \
+FOLLOW_CAMERA=True \
+CAMERA_VIEW=front \
+bash scripts/vis_isaacsim_g1_amp.sh \
+  --video \
+  --video_length 1000 \
+  env.upper_body_perturbation.pose_name=pos2_down
+```
+
+视频写入 checkpoint 所在目录的 `videos/play/`。如果 `WALK_CKPT` 指向
+`ArmHack Checkpoints/WalkPerturbFinetune/<run>/model_*.pt`，对应输出就是：
+
+```text
+ArmHack Checkpoints/WalkPerturbFinetune/<run>/videos/play/
+```
+
+`CAMERA_VIEW` 可改为 `front`、`chase` 或 `side`；`FOLLOW_CAMERA=True` 会让相机跟随机器人。
+测试和视频命令中的 `1000 step` 对应 50 Hz 控制频率下的 20 s 仿真时间。
 
 ### 9.8 TensorBoard
 
 专用 checkpoint 目录只保存模型；事件、配置和训练曲线仍在原日志目录：
 
 ```bash
-tensorboard --logdir logs/rsl_rl/g1_stand_perturb
-tensorboard --logdir logs/rsl_rl/g1_walk_perturb
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+# 查看全部 Walk run
+tensorboard --logdir logs/rsl_rl/g1_walk_perturb --port 6006
+
+# 只查看一个 Walk run；WALK_RUN 与第 8.4/9.7 节保持一致
+WALK_RUN='<logs/rsl_rl/g1_walk_perturb 下的正式 run 目录名>'
+tensorboard --logdir "logs/rsl_rl/g1_walk_perturb/${WALK_RUN}" --port 6006
 ```
+
+浏览器打开 `http://127.0.0.1:6006`。TensorBoard 用于观察训练曲线，Isaac Sim GUI 和录制视频
+用于观察真实步态；两者不能互相替代。Stand 的曲线仍可用
+`tensorboard --logdir logs/rsl_rl/g1_stand_perturb --port 6006` 查看。
 
 ## 10. Stand 训练代码专项审计
 
@@ -1266,4 +1454,6 @@ Walk checkpoint + 三姿态均衡混合
 
 当前 ONNX exporter 只导出 actor `96 -> 29`，不会把 `G1PerturbAmpEnv` 中的固定手臂 action override 一起导出。部署端必须复制相同语义：按关节名覆盖 14 个手臂目标，并把组合后实际施加的 action 作为下一帧 `last_action`。若直接把 Walk actor 当普通 Nav2 actor 使用，或只在 Isaac 环境里覆盖手臂，仿真训练与部署输入历史会不一致。
 
-以上是修复前的审计结论。当前代码已经按 15.0 实施；新的训练与测试状态以第 1、6.3 和 8.4 节为准。即使 smoke 完成，也只证明训练链和 checkpoint 加载正确，不能替代逐姿态 20 s 完成率与速度跟踪验收。
+以上是修复前的审计结论。当前代码已经按 15.0 实施；新的训练与测试状态以第 1、6.3、8.4
+和 8.5 节为准。即使 smoke 完成，也只证明训练链和 checkpoint 加载正确，不能替代逐姿态
+20 s 完成率与速度跟踪验收。
