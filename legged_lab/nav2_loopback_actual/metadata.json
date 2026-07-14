@@ -1,0 +1,147 @@
+{
+  "source_human_nav_mppi": "/mnt/d/userfiles/733438/My Documents/New project 2/human_nav/src/robot_application/src/cfg/nav2_params.yaml",
+  "source_human_nav_dwb": "/mnt/d/userfiles/733438/My Documents/New project 2/human_nav/src/robot_nav/navigation_2d/config/nav2_params_qr100_diff.yaml",
+  "combos": {
+    "navfn_mppi": {
+      "max_velocity": [
+        0.4,
+        0.2,
+        0.6
+      ],
+      "min_velocity": [
+        -0.2,
+        -0.2,
+        -0.6
+      ]
+    },
+    "smac2d_mppi": {
+      "max_velocity": [
+        0.4,
+        0.2,
+        0.6
+      ],
+      "min_velocity": [
+        -0.2,
+        -0.2,
+        -0.6
+      ]
+    },
+    "navfn_dwb": {
+      "max_velocity": [
+        0.6,
+        0.0,
+        0.5
+      ],
+      "min_velocity": [
+        -0.2,
+        0.0,
+        -0.5
+      ]
+    },
+    "smac2d_dwb": {
+      "max_velocity": [
+        0.6,
+        0.0,
+        0.5
+      ],
+      "min_velocity": [
+        -0.2,
+        0.0,
+        -0.5
+      ]
+    }
+  },
+  "scenarios": {
+    "open_field_diagonal": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/open_field_diagonal.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 64
+    },
+    "single_center_block": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/single_center_block.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 66
+    },
+    "offset_wall_passage": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/offset_wall_passage.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 64
+    },
+    "slalom_posts": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/slalom_posts.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 63
+    },
+    "narrow_gate": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/narrow_gate.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 63
+    },
+    "tight_double_gate": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/tight_double_gate.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 63
+    },
+    "u_shape_trap": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/u_shape_trap.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 64
+    },
+    "diagonal_barriers": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/diagonal_barriers.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 63
+    },
+    "cluttered_room": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/cluttered_room.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 66
+    },
+    "corridor_s_turn": {
+      "map": {
+        "map_yaml": "/mnt/d/userfiles/733438/My Documents/New project 2/nav2_task_distribution_g1/nav2_loopback_actual/maps/corridor_s_turn.yaml",
+        "resolution": 0.05,
+        "width": 240,
+        "height": 240
+      },
+      "goal_count": 63
+    }
+  },
+  "note": "Run scripts/run_one_nav2_loopback.sh COMBO SCENARIO MAX_GOALS true to view in RViz2."
+}

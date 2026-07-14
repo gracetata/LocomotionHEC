@@ -1,0 +1,78 @@
+# 操作系统、编辑器与本机配置
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+**/.idea/
+**/.vscode/browse.vc.db*
+**/.vscode/.ropeproject/
+**/.history/
+**/.codex/
+**/.agents/
+
+# Python、Conda 与构建缓存
+**/.conda/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.py[cod]
+**/*.egg-info/
+**/build/
+**/dist/
+
+# Isaac Sim / Isaac Lab 本地生成目录
+**/_isaac_sim/
+**/_isaac_sim-*/
+**/_repo/
+**/_build/
+**/.cache/
+**/.nv/
+
+# 训练、评估、可视化与实验跟踪产物
+**/logs/
+**/log/
+**/outputs/
+**/output/
+**/runs/
+**/recordings/
+**/videos/
+**/wandb/
+**/.neptune/
+**/events.out.tfevents*
+**/*.log
+
+# 临时文件与崩溃转储
+**/tmp/
+**/temp/
+**/*.tmp
+**/*.bak
+**/*.swp
+**/*.dmp
+core
+core.*
+
+# 本机旧版副本；正式代码位于无 _Legacy 前缀的目录
+/_Legacy_*/
+
+# Nav2 回放生成的数据集（保留代码和配置）
+/legged_lab/nav2_loopback_actual/actual_raw_success/
+/legged_lab/nav2_loopback_actual/actual_augmented/
+/legged_lab/nav2_loopback_actual/deps/
+/legged_lab/nav2_loopback_actual/visualizations/
+
+# 训练 checkpoint 默认不入库；保留小型真机部署包（ONNX/JSON）
+/checkpoint/**/*.pt
+/checkpoint/**/*.pth
+/checkpoint/**/*.ckpt
+
+# 本地打包/迁移归档
+/*.tar
+/*.tar.gz
+/*.tgz
+/*.zip
+/*.7z
+/project_transfer*
