@@ -869,7 +869,7 @@ Test Reports/StandArmOnly/model_2999__all.md
 
 2026-07-14 已实际执行上述 `representative_trajectory ITEM=1` 的 20-step headless smoke：确定性 CSV 路径解析成功，`model_2999.pt` 以 policy-only 方式加载，Isaac Sim 完成 20 step 后按 `max_steps` 正常退出，无 Python、Hydra、Isaac 或 CUDA 异常。该结果只确认新入口可运行，不代表 20 s 轨迹已完整通过稳定性验收。
 
-### 9.6 Walk GUI 可视化
+### 9.7 Walk GUI 可视化
 
 ```bash
 TASK=LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0 \
@@ -887,7 +887,7 @@ bash scripts/vis_isaacsim_g1_amp.sh \
 
 该命令继续从 Nav2 CSV 采样连续速度窗口。最后一行固定 `pos2_down`；可分别改为 `pos1_back`、`pos3_front`。逐姿态人工评估时不要用 `random`，以确保结果可复现。
 
-### 9.7 TensorBoard
+### 9.8 TensorBoard
 
 专用 checkpoint 目录只保存模型；事件、配置和训练曲线仍在原日志目录：
 
