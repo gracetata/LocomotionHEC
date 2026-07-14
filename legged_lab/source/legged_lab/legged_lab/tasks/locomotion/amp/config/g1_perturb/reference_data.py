@@ -16,6 +16,9 @@ STAND_ARM_MOTION_RELATIVE_PATH = (
 WALK_ARM_POSE_SET_RELATIVE_PATH = (
     REFERENCE_DATA_ROOT_RELATIVE / "WalkPerturbFinetune" / "g1_arm_pose_set.json"
 )
+WALK_NAV2_COMMAND_RELATIVE_PATH = (
+    REFERENCE_DATA_ROOT_RELATIVE / "WalkPerturbFinetune" / "nav2_cmd_vel_raw_success.csv"
+)
 
 _LEGGED_LAB_PROJECT_DIR = Path(LEGGED_LAB_ROOT_DIR).resolve().parents[2]
 
@@ -34,8 +37,10 @@ def resolve_reference_data_path(relative_path: str | Path) -> Path:
     return resolved_path
 
 
-def load_walk_arm_pose_set(relative_path: str | Path = WALK_ARM_POSE_SET_RELATIVE_PATH) -> list[list[float]]:
-    """Load and validate named left/right 7-DoF arm poses from JSON."""
+def load_walk_arm_pose_entries(
+    relative_path: str | Path = WALK_ARM_POSE_SET_RELATIVE_PATH,
+) -> list[tuple[str, list[float]]]:
+    """Load named arm poses and convert them to the environment's interleaved joint order."""
 
     resolved_path = resolve_reference_data_path(relative_path)
     with resolved_path.open("r", encoding="utf-8") as handle:
@@ -59,7 +64,7 @@ def load_walk_arm_pose_set(relative_path: str | Path = WALK_ARM_POSE_SET_RELATIV
     if not isinstance(poses, list) or not poses:
         raise ValueError(f"Walk arm-pose JSON must contain a non-empty 'poses' list: {resolved_path}")
 
-    paired_poses: list[list[float]] = []
+    paired_poses: list[tuple[str, list[float]]] = []
     pose_names: set[str] = set()
     for pose in poses:
         if not isinstance(pose, dict):
@@ -78,21 +83,30 @@ def load_walk_arm_pose_set(relative_path: str | Path = WALK_ARM_POSE_SET_RELATIV
             raise ValueError(f"Pose {name!r} contains a non-finite joint value.")
 
         paired_poses.append(
-            [
-                float(left[0]),
-                float(right[0]),
-                float(left[1]),
-                float(right[1]),
-                float(left[2]),
-                float(right[2]),
-                float(left[3]),
-                float(right[3]),
-                float(left[4]),
-                float(right[4]),
-                float(left[5]),
-                float(right[5]),
-                float(left[6]),
-                float(right[6]),
-            ]
+            (
+                name,
+                [
+                    float(left[0]),
+                    float(right[0]),
+                    float(left[1]),
+                    float(right[1]),
+                    float(left[2]),
+                    float(right[2]),
+                    float(left[3]),
+                    float(right[3]),
+                    float(left[4]),
+                    float(right[4]),
+                    float(left[5]),
+                    float(right[5]),
+                    float(left[6]),
+                    float(right[6]),
+                ],
+            )
         )
     return paired_poses
+
+
+def load_walk_arm_pose_set(relative_path: str | Path = WALK_ARM_POSE_SET_RELATIVE_PATH) -> list[list[float]]:
+    """Load validated arm poses while preserving the legacy numeric-only return type."""
+
+    return [values for _, values in load_walk_arm_pose_entries(relative_path)]

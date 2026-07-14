@@ -25,7 +25,7 @@ gym.register(
 
 gym.register(
     id="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0",
-    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.g1_walk_perturb_env_cfg:G1WalkPerturbFinetuneEnvCfg",
@@ -35,7 +35,7 @@ gym.register(
 
 gym.register(
     id="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0",
-    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.g1_walk_perturb_env_cfg:G1WalkPerturbFinetuneEnvCfg_PLAY",

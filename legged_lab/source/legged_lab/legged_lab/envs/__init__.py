@@ -6,6 +6,7 @@ from .g1_perturb_env import (
     G1PerturbAmpEnv,
     UpperBodyPerturbationCfg,
 )
+from .g1_walk_perturb_env import G1WalkPerturbAmpEnv, WalkUpperBodyPerturbationCfg
 
 from .manager_based_animation_env import ManagerBasedAnimationEnv
 from .manager_based_animation_env_cfg import ManagerBasedAnimationEnvCfg

@@ -839,6 +839,15 @@ def is_alive(env: ManagerBasedRLEnv) -> torch.Tensor:
     return (~env.termination_manager.terminated).float()
 
 
+def root_xy_position_l2(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize horizontal root displacement from the center of each environment."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    root_xy_from_origin = asset.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
+    return torch.sum(torch.square(root_xy_from_origin), dim=1)
+
+
 def lin_vel_z_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Penalize z-axis base linear velocity using L2 squared kernel."""
     # extract the used quantities (to enable type-hinting)
@@ -1013,6 +1022,18 @@ def feet_air_time_positive_biped(
     # no reward for zero command
     reward *= torch.norm(env.command_manager.get_command(command_name)[:, :2], dim=1) > 0.1
     return reward
+
+
+def double_support(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Reward simultaneous contact of both selected feet."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    if len(sensor_cfg.body_ids) != 2:
+        raise ValueError("double_support expects exactly two foot bodies.")
+    in_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0.0
+    return torch.all(in_contact, dim=1).float()
 
 
 def feet_swing_clearance_band_l2(

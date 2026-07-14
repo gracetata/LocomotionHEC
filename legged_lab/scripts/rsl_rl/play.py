@@ -73,6 +73,24 @@ parser.add_argument(
     default=False,
     help="Deprecated no-op kept for script compatibility.",
 )
+parser.add_argument(
+    "--armhack_stand_report_path",
+    type=str,
+    default=None,
+    help="Write an ArmHack Stand per-joint fluctuation Markdown report after playback.",
+)
+parser.add_argument(
+    "--armhack_stand_test_id",
+    type=str,
+    default="unspecified",
+    help="Deterministic ArmHack Stand test item recorded in the report.",
+)
+parser.add_argument(
+    "--armhack_stand_test_data",
+    type=str,
+    default=None,
+    help="Arm-only test CSV recorded and verified in the report.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -93,10 +111,14 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
+import csv
+import hashlib
 import math
 import os
 import time
 import torch
+from datetime import datetime
+from pathlib import Path
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
@@ -377,6 +399,152 @@ def _print_play_report(metrics: dict, timestep: int) -> None:
         )
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class _ArmHackStandJointFluctuationReport:
+    """Accumulate actual 29-DoF joint statistics for a Stand playback run."""
+
+    def __init__(self, env, report_path: str, checkpoint_path: str, test_id: str, test_data_path: str | None):
+        self._base_env = env.unwrapped
+        self._robot = self._base_env.scene["robot"]
+        self._report_path = Path(report_path).expanduser().resolve()
+        self._checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+        self._test_id = str(test_id)
+        self._test_data_path = Path(test_data_path).expanduser().resolve() if test_data_path else None
+        self._joint_names = list(self._robot.joint_names)
+        self._arm_joint_names = set(getattr(self._base_env.cfg.upper_body_perturbation, "joint_names", []))
+        num_joints = len(self._joint_names)
+        device = self._robot.data.joint_pos.device
+        self._sum = torch.zeros(num_joints, dtype=torch.float64, device=device)
+        self._sum_sq = torch.zeros(num_joints, dtype=torch.float64, device=device)
+        self._minimum = torch.full((num_joints,), float("inf"), dtype=torch.float64, device=device)
+        self._maximum = torch.full((num_joints,), float("-inf"), dtype=torch.float64, device=device)
+        self._abs_step_delta_sum = torch.zeros(num_joints, dtype=torch.float64, device=device)
+        self._sample_count = 0
+        self._delta_sample_count = 0
+        self._termination_events = 0
+        self._previous_joint_pos: torch.Tensor | None = None
+
+    def update(self, dones: torch.Tensor) -> None:
+        joint_pos = self._robot.data.joint_pos.detach().to(dtype=torch.float64)
+        self._sum += torch.sum(joint_pos, dim=0)
+        self._sum_sq += torch.sum(joint_pos * joint_pos, dim=0)
+        self._minimum = torch.minimum(self._minimum, torch.amin(joint_pos, dim=0))
+        self._maximum = torch.maximum(self._maximum, torch.amax(joint_pos, dim=0))
+        self._sample_count += int(joint_pos.shape[0])
+
+        done_mask = dones.detach().bool().reshape(-1)
+        self._termination_events += int(torch.sum(done_mask).item())
+        if self._previous_joint_pos is not None:
+            valid_mask = ~done_mask
+            if torch.any(valid_mask):
+                self._abs_step_delta_sum += torch.sum(
+                    torch.abs(joint_pos[valid_mask] - self._previous_joint_pos[valid_mask]), dim=0
+                )
+                self._delta_sample_count += int(torch.sum(valid_mask).item())
+        self._previous_joint_pos = joint_pos.clone()
+
+    def write(self, play_metrics: dict, steps: int, control_dt: float) -> None:
+        if self._sample_count <= 0:
+            raise RuntimeError("Cannot write ArmHack Stand joint report without joint samples.")
+
+        mean = self._sum / self._sample_count
+        variance = torch.clamp(self._sum_sq / self._sample_count - mean * mean, min=0.0)
+        std = torch.sqrt(variance)
+        position_range = self._maximum - self._minimum
+        if self._delta_sample_count > 0:
+            mean_abs_step_delta = self._abs_step_delta_sum / self._delta_sample_count
+        else:
+            mean_abs_step_delta = torch.zeros_like(self._abs_step_delta_sum)
+
+        mean = mean.cpu().tolist()
+        std = std.cpu().tolist()
+        position_range = position_range.cpu().tolist()
+        mean_abs_step_delta = mean_abs_step_delta.cpu().tolist()
+
+        test_data_columns: list[str] = []
+        if self._test_data_path is not None:
+            if not self._test_data_path.is_file():
+                raise FileNotFoundError(f"ArmHack Stand test data does not exist: {self._test_data_path}")
+            with self._test_data_path.open("r", encoding="utf-8", newline="") as handle:
+                test_data_columns = next(csv.reader(handle), [])
+            expected_columns = ["time_s", *list(self._base_env.cfg.upper_body_perturbation.joint_names)]
+            if set(test_data_columns) != set(expected_columns) or len(test_data_columns) != 15:
+                raise ValueError(
+                    "ArmHack Stand report requires test CSV with time_s plus exactly 14 configured arm joints; "
+                    f"got {test_data_columns}"
+                )
+
+        self._report_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        lines = [
+            "# ArmHack Stand 关节波动测试报告",
+            "",
+            "## 测试身份",
+            "",
+            f"- 生成时间：`{generated_at}`",
+            f"- checkpoint：`{self._checkpoint_path}`",
+            f"- checkpoint SHA-256：`{_sha256(self._checkpoint_path)}`",
+            f"- 测试项：`{self._test_id}`",
+            f"- 测试数据：`{self._test_data_path}`" if self._test_data_path else "- 测试数据：未提供",
+            (
+                f"- 测试数据 SHA-256：`{_sha256(self._test_data_path)}`"
+                if self._test_data_path is not None
+                else "- 测试数据 SHA-256：未提供"
+            ),
+            f"- 控制步数：`{steps}`",
+            f"- 控制周期：`{control_dt:.6f} s`",
+            f"- 仿真测试时长：`{steps * control_dt:.3f} s`",
+            f"- 环境采样数：`{self._sample_count}`",
+            f"- termination/reset 事件数：`{self._termination_events}`",
+            "- 测试输入范围：仅双臂 14 关节；腰、腿和根节点不在测试 CSV 中。",
+            "",
+            "## 统计口径",
+            "",
+            "`平均逐步波动` 是同一 episode 内相邻 50 Hz 控制帧实际关节角之差绝对值的均值："
+            " `mean(|q[t]-q[t-1]|)`。reset 前后的跳变不计入。另列出实际关节角均值、标准差和极差。",
+            "",
+            "## 每关节实际波动",
+            "",
+            "| 关节 | 分组 | 平均逐步波动 rad/step | 实际角均值 rad | 标准差 rad | 极差 rad |",
+            "|---|---|---:|---:|---:|---:|",
+        ]
+        for index, joint_name in enumerate(self._joint_names):
+            group = "双臂输入关节" if joint_name in self._arm_joint_names else "平衡策略关节"
+            lines.append(
+                f"| `{joint_name}` | {group} | {mean_abs_step_delta[index]:.8f} | "
+                f"{mean[index]:.8f} | {std[index]:.8f} | {position_range[index]:.8f} |"
+            )
+
+        lines.extend(["", "## 躯干稳定指标", ""])
+        important_metrics = play_metrics.get("important", {})
+        if important_metrics:
+            lines.extend(["| 指标 | 均值 |", "|---|---:|"])
+            for key in sorted(important_metrics):
+                lines.append(f"| `{key}` | {_mean(important_metrics[key]):.8f} |")
+        else:
+            lines.append("本次回放未提供 Important Metrics。")
+
+        lines.extend(
+            [
+                "",
+                "## 结论边界",
+                "",
+                "该报告记录仿真中的实际关节波动和 termination 次数。双臂是外部测试输入；腰腿的波动是策略为保持平衡产生的响应。"
+                "若 termination/reset 事件数大于 0，不能把该测试项判定为完整稳定通过。",
+                "",
+            ]
+        )
+        self._report_path.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[REPORT] ArmHack Stand joint fluctuation report: {self._report_path}")
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     """Play with RSL-RL agent."""
@@ -505,6 +673,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "command": {},
         "important": {},
     }
+    armhack_stand_report = None
+    if args_cli.armhack_stand_report_path:
+        if "StandPerturb" not in task_name:
+            raise ValueError("--armhack_stand_report_path is only valid for an ArmHack StandPerturb task.")
+        armhack_stand_report = _ArmHackStandJointFluctuationReport(
+            env=env,
+            report_path=args_cli.armhack_stand_report_path,
+            checkpoint_path=resume_path,
+            test_id=args_cli.armhack_stand_test_id,
+            test_data_path=args_cli.armhack_stand_test_data,
+        )
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -515,6 +694,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # env stepping
             obs, rewards, dones, extras = env.step(actions)
             _update_play_metrics(play_metrics, env, rewards, dones, extras)
+            if armhack_stand_report is not None:
+                armhack_stand_report.update(dones)
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
         timestep += 1
@@ -532,6 +713,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             time.sleep(sleep_time)
 
     _print_play_report(play_metrics, timestep)
+    if armhack_stand_report is not None:
+        armhack_stand_report.write(play_metrics=play_metrics, steps=timestep, control_dt=dt)
 
     # close the simulator
     env.close()

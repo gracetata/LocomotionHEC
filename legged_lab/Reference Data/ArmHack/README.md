@@ -9,9 +9,16 @@ ArmHack/
 ├── StandPerturb/
 │   ├── raw/
 │   │   └── g1_full_body_motion_sdk_50hz.csv
-│   └── g1_arm_trajectory_named_50hz.csv
+│   ├── g1_arm_trajectory_named_50hz.csv
+│   └── VisualizationSuite/
+│       ├── manifest.json
+│       ├── pose_catalog.csv
+│       ├── representative_*_50hz.csv
+│       ├── synthesized_*_seed20260714_50hz.csv
+│       └── all_deterministic_sequence_seed20260714_50hz.csv
 └── WalkPerturbFinetune/
-    └── g1_arm_pose_set.json
+    ├── g1_arm_pose_set.json
+    └── nav2_cmd_vel_raw_success.csv
 ```
 
 ### StandPerturb
@@ -26,6 +33,24 @@ ArmHack/
 
 `g1_arm_trajectory_named_50hz.csv` 是由 `scripts/tools/extract_armhack_stand_arm_csv.py` 生成的规范训练文件，只包含 `time_s` 和 14 个具名手臂关节。训练环境不再读取或执行 CSV 中的下肢目标，也不再依赖数字 q 列的隐式顺序。
 
+`VisualizationSuite/` 是从完整规范轨迹离线构造的确定性可视化测试集，不是新的训练分布。`scripts/tools/build_armhack_stand_visualization_suite.py` 会遍历完整轨迹并固定选出 6 个代表姿态、4 段代表运动窗口；随后以种子 `20260714` 一次性合成 3 个姿态和 3 条 minimum-jerk 轨迹。生成结果、源时刻/窗口、合成父姿态与权重、时间线和每个 CSV 的 SHA-256 均记录在 `manifest.json`。
+
+可视化运行时不再随机抽取数据，统一由以下入口顺序或逐项播放：
+
+```bash
+bash scripts/vis_g1_armhack_stand_eval.sh
+MODE=representative_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh
+```
+
+重新生成和校验：
+
+```bash
+python scripts/tools/build_armhack_stand_visualization_suite.py
+python scripts/tools/check_armhack_reference_data.py
+```
+
+固定种子重建已经验证能逐文件复现全部 22 个生成 CSV 的 SHA-256。代表轨迹的 5 s 原始窗口已离线时间拉伸到 20 s，等价于训练的 `0.25x` 源轨迹速度；播放端应使用 `csv_motion_scale=1.0`，不能再次降速。
+
 SHA-256：
 
 ```text
@@ -38,6 +63,40 @@ afe3819937ecfa19fae835b8cc77038378ec40a821acd0fdf2feef0054583601
 
 ### WalkPerturbFinetune
 
-`g1_arm_pose_set.json` 保存三组双臂姿态：`pos1_back`、`pos2_down`、`pos3_front`。每个环境 reset 时随机选择一组，覆盖策略输出中的 14 个手臂 action。
+`g1_arm_pose_set.json` 保存三组双臂姿态：`pos1_back`、`pos2_down`、`pos3_front`。训练脚本默认固定一个具名姿态完成整个 episode，也可用 `POSE_NAME=random` 在 reset 时抽样。reset 会在首个 observation 前同步手臂 `q/dq`、执行器目标和 action history，避免第一步从默认姿态跳变。
 
-动态任务的速度命令由 `UniformVelocityCommandCfg` 在配置范围内生成，不再依赖外部 Nav2 大 CSV。策略输入仍保留标准 `vx/vy/wz` 速度命令接口，可用于后续 Nav2 command 跟踪微调。
+`nav2_cmd_vel_raw_success.csv` 是动态任务的外部速度分布，来自 HEC-5090：
+
+```text
+/home/hecggdz/workspace-zwd/legged_lab/nav2_loopback_actual/
+actual_raw_success/all_cmd_vel_success.csv
+```
+
+本机保存位置：
+
+```text
+Reference Data/ArmHack/WalkPerturbFinetune/nav2_cmd_vel_raw_success.csv
+```
+
+数据包含 331,010 行 Nav2 成功轨迹命令、445 个按 planner/controller/scenario/goal 分组的连续窗口。核心范围为：
+
+```text
+vx: [-0.2, 0.6] m/s
+vy: [-0.3, 0.3] m/s
+wz: [-0.5187280178070068, 0.6] rad/s
+augmentation: none
+```
+
+SHA-256：
+
+```text
+76a4516588b855351eb3eb8c2da26e291603876c1a4a1b9c7bacd77a53807b5a
+```
+
+该 83 MiB CSV 已加入 `.gitignore`，不会推送到 GitHub。新机器需按上述来源单独复制到同一相对位置，然后运行：
+
+```bash
+python scripts/tools/check_armhack_reference_data.py
+```
+
+动态训练使用 `Nav2RecordedVelocityCommandCfg` 按轨迹组截取 `complex_turn` 连续 4 秒窗口，并保留 Nav2 Stage-4 的缩放、裁剪、平滑和限加速度逻辑。当前文件是原始成功分布，仅包含 `augmentation=none`；loader 在内存中从每个 raw 组生成 `(vx,-vy,-wz)` 的 `mirror_lr` 组，不改写源 CSV，也不需要第二份大文件。已在 HEC-5090 的整个 `workspace-zwd` 中确认没有 `all_cmd_vel_augmented.csv`。

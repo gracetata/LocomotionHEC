@@ -1,0 +1,750 @@
+{
+  "schema_version": 1,
+  "source": {
+    "path": "Reference Data/ArmHack/StandPerturb/g1_arm_trajectory_named_50hz.csv",
+    "sha256": "afe3819937ecfa19fae835b8cc77038378ec40a821acd0fdf2feef0054583601",
+    "rows": 20122,
+    "duration_s": 404.91779200010933,
+    "joint_names": [
+      "left_shoulder_pitch_joint",
+      "left_shoulder_roll_joint",
+      "left_shoulder_yaw_joint",
+      "left_elbow_joint",
+      "left_wrist_roll_joint",
+      "left_wrist_pitch_joint",
+      "left_wrist_yaw_joint",
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint",
+      "right_wrist_roll_joint",
+      "right_wrist_pitch_joint",
+      "right_wrist_yaw_joint"
+    ]
+  },
+  "generation": {
+    "seed": 20260714,
+    "fps": 50.0,
+    "representative_pose_method": "normalized farthest-point coverage from median pose",
+    "representative_trajectory_method": "diverse non-overlapping 5 s high-motion windows",
+    "synthesis_method": "bounded convex pose blends plus quintic minimum-jerk interpolation",
+    "runtime_random_sampling": false
+  },
+  "representative_poses": [
+    {
+      "pose_id": "representative_pose_01",
+      "source_row": 12990,
+      "source_time_s": 261.3958290000446
+    },
+    {
+      "pose_id": "representative_pose_02",
+      "source_row": 20120,
+      "source_time_s": 404.8975850000279
+    },
+    {
+      "pose_id": "representative_pose_03",
+      "source_row": 1750,
+      "source_time_s": 35.204045000020415
+    },
+    {
+      "pose_id": "representative_pose_04",
+      "source_row": 6620,
+      "source_time_s": 133.21484100003727
+    },
+    {
+      "pose_id": "representative_pose_05",
+      "source_row": 19230,
+      "source_time_s": 386.98248700005934
+    },
+    {
+      "pose_id": "representative_pose_06",
+      "source_row": 5230,
+      "source_time_s": 105.240482000052
+    }
+  ],
+  "synthesized_poses": [
+    {
+      "pose_id": "synth_pose_01",
+      "parent_representative_pose_indices": [
+        1,
+        5,
+        3
+      ],
+      "parent_weights": [
+        0.2220122370639607,
+        0.6084461064073677,
+        0.1695416565286716
+      ]
+    },
+    {
+      "pose_id": "synth_pose_02",
+      "parent_representative_pose_indices": [
+        1,
+        6,
+        2
+      ],
+      "parent_weights": [
+        0.1413640513885375,
+        0.7239094897434724,
+        0.13472645886799015
+      ]
+    },
+    {
+      "pose_id": "synth_pose_03",
+      "parent_representative_pose_indices": [
+        5,
+        1,
+        6
+      ],
+      "parent_weights": [
+        0.03895564523126785,
+        0.2874605228968032,
+        0.673583831871929
+      ]
+    }
+  ],
+  "representative_trajectories": [
+    {
+      "trajectory_id": "representative_trajectory_01",
+      "path": "representative_trajectory_01_50hz.csv",
+      "source_start_s": 36.0,
+      "source_end_s": 41.0,
+      "source_duration_s": 5.0,
+      "playback_duration_s": 20.0,
+      "time_stretch": 4.0,
+      "equivalent_source_speed": 0.25,
+      "max_joint_span_rad": 1.05774,
+      "dominant_joint": "left_elbow_joint",
+      "motion_score": 5.01218029350014
+    },
+    {
+      "trajectory_id": "representative_trajectory_02",
+      "path": "representative_trajectory_02_50hz.csv",
+      "source_start_s": 102.0,
+      "source_end_s": 107.0,
+      "source_duration_s": 5.0,
+      "playback_duration_s": 20.0,
+      "time_stretch": 4.0,
+      "equivalent_source_speed": 0.25,
+      "max_joint_span_rad": 0.779166,
+      "dominant_joint": "left_elbow_joint",
+      "motion_score": 5.93433131040822
+    },
+    {
+      "trajectory_id": "representative_trajectory_03",
+      "path": "representative_trajectory_03_50hz.csv",
+      "source_start_s": 234.0,
+      "source_end_s": 239.0,
+      "source_duration_s": 5.0,
+      "playback_duration_s": 20.0,
+      "time_stretch": 4.0,
+      "equivalent_source_speed": 0.25,
+      "max_joint_span_rad": 0.913007,
+      "dominant_joint": "right_elbow_joint",
+      "motion_score": 3.3943399999251707
+    },
+    {
+      "trajectory_id": "representative_trajectory_04",
+      "path": "representative_trajectory_04_50hz.csv",
+      "source_start_s": 385.0,
+      "source_end_s": 390.0,
+      "source_duration_s": 5.0,
+      "playback_duration_s": 20.0,
+      "time_stretch": 4.0,
+      "equivalent_source_speed": 0.25,
+      "max_joint_span_rad": 1.122395,
+      "dominant_joint": "right_shoulder_pitch_joint",
+      "motion_score": 3.772905736657666
+    }
+  ],
+  "synthesized_trajectories": [
+    {
+      "trajectory_id": "synth_trajectory_01",
+      "duration_s": 19.98,
+      "anchor_generation": [
+        {
+          "parents": [
+            4,
+            6,
+            2
+          ],
+          "weights": [
+            0.499508515271753,
+            0.07714494854814304,
+            0.4233465361801041
+          ]
+        },
+        {
+          "parents": [
+            4,
+            2,
+            6
+          ],
+          "weights": [
+            0.34660448879442296,
+            0.21024329407440334,
+            0.44315221713117364
+          ]
+        },
+        {
+          "parents": [
+            4,
+            3,
+            1
+          ],
+          "weights": [
+            0.6549102478545625,
+            0.3371671833372447,
+            0.0079225688081927
+          ]
+        },
+        {
+          "parents": [
+            1,
+            6,
+            4
+          ],
+          "weights": [
+            0.5266367291649029,
+            0.0847470376040657,
+            0.38861623323103145
+          ]
+        }
+      ],
+      "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+      "path": "synthesized_trajectory_01_seed20260714_50hz.csv"
+    },
+    {
+      "trajectory_id": "synth_trajectory_02",
+      "duration_s": 19.98,
+      "anchor_generation": [
+        {
+          "parents": [
+            2,
+            3,
+            5
+          ],
+          "weights": [
+            0.8204651021796675,
+            0.09827960909031762,
+            0.08125528873001488
+          ]
+        },
+        {
+          "parents": [
+            3,
+            6,
+            1
+          ],
+          "weights": [
+            0.16677517161487823,
+            0.46456930262025,
+            0.3686555257648718
+          ]
+        },
+        {
+          "parents": [
+            6,
+            5,
+            2
+          ],
+          "weights": [
+            0.741671859728554,
+            0.19118827283070533,
+            0.06713986744074074
+          ]
+        },
+        {
+          "parents": [
+            5,
+            3,
+            1
+          ],
+          "weights": [
+            0.22437186043747678,
+            0.41280396619207715,
+            0.3628241733704461
+          ]
+        }
+      ],
+      "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+      "path": "synthesized_trajectory_02_seed20260714_50hz.csv"
+    },
+    {
+      "trajectory_id": "synth_trajectory_03",
+      "duration_s": 19.98,
+      "anchor_generation": [
+        {
+          "parents": [
+            4,
+            5,
+            2
+          ],
+          "weights": [
+            0.09187311614574879,
+            0.07326630536904297,
+            0.8348605784852082
+          ]
+        },
+        {
+          "parents": [
+            1,
+            4,
+            3
+          ],
+          "weights": [
+            0.1422653324293528,
+            0.6197634801668146,
+            0.2379711874038324
+          ]
+        },
+        {
+          "parents": [
+            5,
+            1,
+            2
+          ],
+          "weights": [
+            0.5534648919824272,
+            0.2643761171249831,
+            0.18215899089258972
+          ]
+        },
+        {
+          "parents": [
+            5,
+            6,
+            4
+          ],
+          "weights": [
+            0.3442688018068226,
+            0.5834652643335814,
+            0.07226593385959604
+          ]
+        }
+      ],
+      "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+      "path": "synthesized_trajectory_03_seed20260714_50hz.csv"
+    }
+  ],
+  "files": {
+    "representative_poses": {
+      "path": "representative_poses_sequence_50hz.csv",
+      "duration_s": 33.98,
+      "timeline": [
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_01",
+          "start_s": 0.0,
+          "end_s": 4.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_01_to_representative_pose_02",
+          "start_s": 4.0,
+          "end_s": 6.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_02",
+          "start_s": 6.0,
+          "end_s": 10.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_02_to_representative_pose_03",
+          "start_s": 10.0,
+          "end_s": 12.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_03",
+          "start_s": 12.0,
+          "end_s": 16.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_03_to_representative_pose_04",
+          "start_s": 16.0,
+          "end_s": 18.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_04",
+          "start_s": 18.0,
+          "end_s": 22.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_04_to_representative_pose_05",
+          "start_s": 22.0,
+          "end_s": 24.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_05",
+          "start_s": 24.0,
+          "end_s": 28.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_05_to_representative_pose_06",
+          "start_s": 28.0,
+          "end_s": 30.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_06",
+          "start_s": 30.0,
+          "end_s": 34.0
+        }
+      ]
+    },
+    "synthesized_poses": {
+      "path": "synthesized_poses_sequence_50hz.csv",
+      "duration_s": 15.98,
+      "timeline": [
+        {
+          "kind": "static_hold",
+          "label": "synth_pose_01",
+          "start_s": 0.0,
+          "end_s": 4.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "synth_pose_01_to_synth_pose_02",
+          "start_s": 4.0,
+          "end_s": 6.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "synth_pose_02",
+          "start_s": 6.0,
+          "end_s": 10.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "synth_pose_02_to_synth_pose_03",
+          "start_s": 10.0,
+          "end_s": 12.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "synth_pose_03",
+          "start_s": 12.0,
+          "end_s": 16.0
+        }
+      ]
+    },
+    "representative_trajectories": {
+      "path": "representative_trajectories_sequence_50hz.csv",
+      "duration_s": 86.0,
+      "items": [
+        {
+          "trajectory_id": "representative_trajectory_01",
+          "path": "representative_trajectory_01_50hz.csv",
+          "source_start_s": 36.0,
+          "source_end_s": 41.0,
+          "source_duration_s": 5.0,
+          "playback_duration_s": 20.0,
+          "time_stretch": 4.0,
+          "equivalent_source_speed": 0.25,
+          "max_joint_span_rad": 1.05774,
+          "dominant_joint": "left_elbow_joint",
+          "motion_score": 5.01218029350014
+        },
+        {
+          "trajectory_id": "representative_trajectory_02",
+          "path": "representative_trajectory_02_50hz.csv",
+          "source_start_s": 102.0,
+          "source_end_s": 107.0,
+          "source_duration_s": 5.0,
+          "playback_duration_s": 20.0,
+          "time_stretch": 4.0,
+          "equivalent_source_speed": 0.25,
+          "max_joint_span_rad": 0.779166,
+          "dominant_joint": "left_elbow_joint",
+          "motion_score": 5.93433131040822
+        },
+        {
+          "trajectory_id": "representative_trajectory_03",
+          "path": "representative_trajectory_03_50hz.csv",
+          "source_start_s": 234.0,
+          "source_end_s": 239.0,
+          "source_duration_s": 5.0,
+          "playback_duration_s": 20.0,
+          "time_stretch": 4.0,
+          "equivalent_source_speed": 0.25,
+          "max_joint_span_rad": 0.913007,
+          "dominant_joint": "right_elbow_joint",
+          "motion_score": 3.3943399999251707
+        },
+        {
+          "trajectory_id": "representative_trajectory_04",
+          "path": "representative_trajectory_04_50hz.csv",
+          "source_start_s": 385.0,
+          "source_end_s": 390.0,
+          "source_duration_s": 5.0,
+          "playback_duration_s": 20.0,
+          "time_stretch": 4.0,
+          "equivalent_source_speed": 0.25,
+          "max_joint_span_rad": 1.122395,
+          "dominant_joint": "right_shoulder_pitch_joint",
+          "motion_score": 3.772905736657666
+        }
+      ]
+    },
+    "synthesized_trajectories": {
+      "path": "synthesized_trajectories_sequence_seed20260714_50hz.csv",
+      "duration_s": 63.94,
+      "items": [
+        {
+          "trajectory_id": "synth_trajectory_01",
+          "duration_s": 19.98,
+          "anchor_generation": [
+            {
+              "parents": [
+                4,
+                6,
+                2
+              ],
+              "weights": [
+                0.499508515271753,
+                0.07714494854814304,
+                0.4233465361801041
+              ]
+            },
+            {
+              "parents": [
+                4,
+                2,
+                6
+              ],
+              "weights": [
+                0.34660448879442296,
+                0.21024329407440334,
+                0.44315221713117364
+              ]
+            },
+            {
+              "parents": [
+                4,
+                3,
+                1
+              ],
+              "weights": [
+                0.6549102478545625,
+                0.3371671833372447,
+                0.0079225688081927
+              ]
+            },
+            {
+              "parents": [
+                1,
+                6,
+                4
+              ],
+              "weights": [
+                0.5266367291649029,
+                0.0847470376040657,
+                0.38861623323103145
+              ]
+            }
+          ],
+          "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+          "path": "synthesized_trajectory_01_seed20260714_50hz.csv"
+        },
+        {
+          "trajectory_id": "synth_trajectory_02",
+          "duration_s": 19.98,
+          "anchor_generation": [
+            {
+              "parents": [
+                2,
+                3,
+                5
+              ],
+              "weights": [
+                0.8204651021796675,
+                0.09827960909031762,
+                0.08125528873001488
+              ]
+            },
+            {
+              "parents": [
+                3,
+                6,
+                1
+              ],
+              "weights": [
+                0.16677517161487823,
+                0.46456930262025,
+                0.3686555257648718
+              ]
+            },
+            {
+              "parents": [
+                6,
+                5,
+                2
+              ],
+              "weights": [
+                0.741671859728554,
+                0.19118827283070533,
+                0.06713986744074074
+              ]
+            },
+            {
+              "parents": [
+                5,
+                3,
+                1
+              ],
+              "weights": [
+                0.22437186043747678,
+                0.41280396619207715,
+                0.3628241733704461
+              ]
+            }
+          ],
+          "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+          "path": "synthesized_trajectory_02_seed20260714_50hz.csv"
+        },
+        {
+          "trajectory_id": "synth_trajectory_03",
+          "duration_s": 19.98,
+          "anchor_generation": [
+            {
+              "parents": [
+                4,
+                5,
+                2
+              ],
+              "weights": [
+                0.09187311614574879,
+                0.07326630536904297,
+                0.8348605784852082
+              ]
+            },
+            {
+              "parents": [
+                1,
+                4,
+                3
+              ],
+              "weights": [
+                0.1422653324293528,
+                0.6197634801668146,
+                0.2379711874038324
+              ]
+            },
+            {
+              "parents": [
+                5,
+                1,
+                2
+              ],
+              "weights": [
+                0.5534648919824272,
+                0.2643761171249831,
+                0.18215899089258972
+              ]
+            },
+            {
+              "parents": [
+                5,
+                6,
+                4
+              ],
+              "weights": [
+                0.3442688018068226,
+                0.5834652643335814,
+                0.07226593385959604
+              ]
+            }
+          ],
+          "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+          "path": "synthesized_trajectory_03_seed20260714_50hz.csv"
+        }
+      ]
+    },
+    "all": {
+      "path": "all_deterministic_sequence_seed20260714_50hz.csv",
+      "duration_s": 208.9,
+      "section_order": [
+        "representative_poses",
+        "synthesized_poses",
+        "representative_trajectories",
+        "synthesized_trajectories"
+      ],
+      "timeline": [
+        {
+          "kind": "section",
+          "label": "representative_poses",
+          "start_s": 0.0,
+          "end_s": 33.98
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synthesized_poses",
+          "start_s": 33.98,
+          "end_s": 36.98
+        },
+        {
+          "kind": "section",
+          "label": "synthesized_poses",
+          "start_s": 36.98,
+          "end_s": 52.96
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectories",
+          "start_s": 52.96,
+          "end_s": 55.96
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectories",
+          "start_s": 55.96,
+          "end_s": 141.96
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synthesized_trajectories",
+          "start_s": 141.96,
+          "end_s": 144.96
+        },
+        {
+          "kind": "section",
+          "label": "synthesized_trajectories",
+          "start_s": 144.96,
+          "end_s": 208.9
+        }
+      ]
+    }
+  },
+  "generated_file_sha256": {
+    "all_deterministic_sequence_seed20260714_50hz.csv": "3132d9464ec7eb7bd9ff717a90b2a5e64d491b7639bb8c553e72933e6afba735",
+    "pose_catalog.csv": "306e43c03722f8bea4f970db70b891120421a47f8924d1945abaab0b8c969a03",
+    "representative_pose_01_50hz.csv": "41d6a26db1ce3fc997b713a252df97c3ddedcd1987cd612aa9f3a278a8e10444",
+    "representative_pose_02_50hz.csv": "f10a67d2a7f72c8acc5063f0180c6415c46b893c372fdab203adeae3f0b897dc",
+    "representative_pose_03_50hz.csv": "fc0ec7c49a8f2f5461ca27ba33ca19424412852b57af9c2c3e659def533bd1a1",
+    "representative_pose_04_50hz.csv": "2e7db310e1f578299a57e7b1299ed89bef00c3be457e14f35af359b3840de92a",
+    "representative_pose_05_50hz.csv": "16ffca95f7a8905397c0979c676c83ea37958f8cb85194c1e00c3dffb43e7aa2",
+    "representative_pose_06_50hz.csv": "74573aac6650077fdf42ea7816d941f8df582dd33039a6c0beb73fcd1bf62228",
+    "representative_poses_sequence_50hz.csv": "cb9b4e5b9fda19dd4b508b2160bc750f90ae9ca44b44172adb3a60d9703447b7",
+    "representative_trajectories_sequence_50hz.csv": "7fe02bd2e5289bd9b93ab49243f59f14b1e2807436fe2f580b464d23620405cb",
+    "representative_trajectory_01_50hz.csv": "7374748609658353ef663b2f1fe3224515f906ff1df7a0e63af21f2146a1fae1",
+    "representative_trajectory_02_50hz.csv": "c4659ee586c0739d59443c1760200eb8eab46d5c38f5c711c1aa060f90e57d3e",
+    "representative_trajectory_03_50hz.csv": "51893df13ff3c84b06ff369e187f05d71c662e4c58107eead651c4f93574aff1",
+    "representative_trajectory_04_50hz.csv": "04ab2fdfcb83278cc8ba81d119591309f502aaa76efc25ee5b1f856d9ca0e7c6",
+    "synthesized_pose_01_seed20260714_50hz.csv": "ebae5bb1e9158156f0ed047fc9347c2ee8a089d2f6bf54df0a62b7bd1d4e56c8",
+    "synthesized_pose_02_seed20260714_50hz.csv": "b0535df25b2d9fbf7d8ff8e48dedeb32ff4aae5a73171fb1823d5582a8eee5c5",
+    "synthesized_pose_03_seed20260714_50hz.csv": "df79bb18a727faedc7aaaa6462374e35623bc9e7804296dc2e7adba15296e596",
+    "synthesized_poses_sequence_50hz.csv": "64397808e0911ca441f234cba87f3b5baf587ee488079e30c216c850a960c64f",
+    "synthesized_trajectories_sequence_seed20260714_50hz.csv": "4b33865e38385f80f0031d21e84746aa803bca71534dce7110eb3c389bee45c4",
+    "synthesized_trajectory_01_seed20260714_50hz.csv": "d73cc93937703067244f9680d26dc5d510129fa5bcdfbe364496e7d00a9d4e59",
+    "synthesized_trajectory_02_seed20260714_50hz.csv": "665bcc10b223dba5be02b4221d92038a4eb633ff7df7a529c60833a8c3918a6a",
+    "synthesized_trajectory_03_seed20260714_50hz.csv": "1bc2218d782f72c51dbd9e493da9e0065ff114b17bb11621f4b98e3deac7e7a9"
+  }
+}

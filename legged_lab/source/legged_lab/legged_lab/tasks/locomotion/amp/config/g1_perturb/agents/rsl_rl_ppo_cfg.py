@@ -19,6 +19,8 @@ class G1StandPerturbRslRlOnPolicyRunnerAmpCfg(G1PerturbRslRlOnPolicyRunnerAmpCfg
     """Runner config for stand perturbation."""
 
     experiment_name = "g1_stand_perturb"
+    checkpoint_output_dir = "ArmHack Checkpoints/StandPerturb"
+    load_policy_only = True
 
     def __post_init__(self):
         parent_post_init = getattr(super(), "__post_init__", None)
@@ -32,5 +34,17 @@ class G1StandPerturbRslRlOnPolicyRunnerAmpCfg(G1PerturbRslRlOnPolicyRunnerAmpCfg
 class G1WalkPerturbFinetuneRslRlOnPolicyRunnerAmpCfg(G1PerturbRslRlOnPolicyRunnerAmpCfg):
     """Runner config for walk perturbation fine-tuning."""
 
-    experiment_name = "g1_amp"
-    load_policy_only = True
+    experiment_name = "g1_walk_perturb"
+    checkpoint_output_dir = "ArmHack Checkpoints/WalkPerturbFinetune"
+    load_policy_only = False
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        self.algorithm.learning_rate = 3.0e-5
+        self.algorithm.desired_kl = 0.01
+        self.algorithm.entropy_coef = 0.002
+        self.algorithm.amp_cfg.grad_penalty_scale = 20.0
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 0.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0

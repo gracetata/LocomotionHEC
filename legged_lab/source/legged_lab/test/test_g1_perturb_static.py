@@ -9,6 +9,7 @@ PACKAGE_ROOT = TEST_DIR.parent / "legged_lab"
 PROJECT_ROOT = TEST_DIR.parents[2]
 
 ENV_FILE = PACKAGE_ROOT / "envs" / "g1_perturb_env.py"
+WALK_ENV_FILE = PACKAGE_ROOT / "envs" / "g1_walk_perturb_env.py"
 ENV_INIT_FILE = PACKAGE_ROOT / "envs" / "__init__.py"
 TASK_INIT_FILE = (
     PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "config" / "g1_perturb" / "__init__.py"
@@ -40,8 +41,46 @@ WALK_REFERENCE_POSES = (
     PROJECT_ROOT / "Reference Data" / "ArmHack" / "WalkPerturbFinetune" / "g1_arm_pose_set.json"
 )
 AMP_RUNNER_FILE = Path(__file__).resolve().parents[4] / "rsl_rl" / "rsl_rl" / "runners" / "amp_runner.py"
+NAV2_COMMAND_FILE = (
+    PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "mdp" / "commands" / "nav2_recorded_velocity_command.py"
+)
 CSV_PLAYBACK_FILE = Path(__file__).resolve().parents[3] / "scripts" / "tools" / "visualize_g1_csv_full_body_motion.py"
+REFERENCE_CHECK_FILE = Path(__file__).resolve().parents[3] / "scripts" / "tools" / "check_armhack_reference_data.py"
 TRAIN_SCRIPT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "train_g1_amp.sh"
+STAND_TRAIN_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand.sh"
+)
+STAND_VIS_EVAL_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "vis_g1_armhack_stand_eval.sh"
+)
+STAND_VIS_BUILDER_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "tools" / "build_armhack_stand_visualization_suite.py"
+)
+STAND_VIS_MANIFEST = (
+    PROJECT_ROOT
+    / "Reference Data"
+    / "ArmHack"
+    / "StandPerturb"
+    / "TestData"
+    / "ArmOnly"
+    / "manifest.json"
+)
+PLAY_SCRIPT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "rsl_rl" / "play.py"
+WALK_TRAIN_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_walk.sh"
+)
+VIS_SCRIPT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "vis_isaacsim_g1_amp.sh"
+CHECKPOINT_README = PROJECT_ROOT / "ArmHack Checkpoints" / "README.md"
+STAND_CHECKPOINT_KEEP = PROJECT_ROOT / "ArmHack Checkpoints" / "StandPerturb" / ".gitkeep"
+WALK_CHECKPOINT_KEEP = PROJECT_ROOT / "ArmHack Checkpoints" / "WalkPerturbFinetune" / ".gitkeep"
+WALK_BASE_CHECKPOINT = (
+    PROJECT_ROOT
+    / "ArmHack Checkpoints"
+    / "WalkPerturbFinetune"
+    / "BaselineLocomotionModel9996"
+    / "model_9996.pt"
+)
+WALK_BASE_ONNX = PROJECT_ROOT.parent / "checkpoint" / "model_9996" / "locomotion.onnx"
 
 
 def _read_text(path: Path) -> str:
@@ -51,6 +90,7 @@ def _read_text(path: Path) -> str:
 def test_g1_perturb_files_exist():
     for path in [
         ENV_FILE,
+        WALK_ENV_FILE,
         ENV_INIT_FILE,
         TASK_INIT_FILE,
         STAND_CFG_FILE,
@@ -61,8 +101,20 @@ def test_g1_perturb_files_exist():
         STAND_RAW_CSV,
         WALK_REFERENCE_POSES,
         AMP_RUNNER_FILE,
+        NAV2_COMMAND_FILE,
         CSV_PLAYBACK_FILE,
+        REFERENCE_CHECK_FILE,
         TRAIN_SCRIPT_FILE,
+        STAND_TRAIN_SCRIPT_FILE,
+        STAND_VIS_EVAL_SCRIPT_FILE,
+        STAND_VIS_BUILDER_FILE,
+        STAND_VIS_MANIFEST,
+        PLAY_SCRIPT_FILE,
+        WALK_TRAIN_SCRIPT_FILE,
+        VIS_SCRIPT_FILE,
+        CHECKPOINT_README,
+        STAND_CHECKPOINT_KEEP,
+        WALK_CHECKPOINT_KEEP,
     ]:
         assert path.is_file(), f"Missing expected perturbation file: {path}"
 
@@ -70,6 +122,7 @@ def test_g1_perturb_files_exist():
 def test_g1_perturb_env_exports_and_joint_groups_present():
     env_init_text = _read_text(ENV_INIT_FILE)
     env_text = _read_text(ENV_FILE)
+    walk_env_text = _read_text(WALK_ENV_FILE)
 
     assert "G1PerturbAmpEnv" in env_init_text
     assert "UpperBodyPerturbationCfg" in env_init_text
@@ -83,11 +136,27 @@ def test_g1_perturb_env_exports_and_joint_groups_present():
     assert "csv_use_g1_action_order_q_columns" in env_text
     assert 'csv_q_column_joint_order: Literal["lab", "sdk"] = "lab"' in env_text
     assert "csv_randomize_start_on_reset" in env_text
+    assert "csv_initialize_joint_state_on_reset" in env_text
+    assert "csv_curriculum_enabled" in env_text
+    assert "def _csv_curriculum_motion_scale" in env_text
+    assert "def _advance_csv_sample_times" in env_text
+    assert "def _initialize_csv_arm_joint_state" in env_text
+    assert "torch.lerp(lower_targets, upper_targets" in env_text
+    assert "robot.write_joint_state_to_sim(" in env_text
+    assert 'log_extras["ArmHack/csv_start_time_std_s"]' in env_text
     assert "def _resolve_csv_q_column_source_order" in env_text
     assert "def _resolve_csv_q_target_indices" in env_text
     assert 'cfg.csv_q_column_joint_order == "sdk"' in env_text
     assert "raw_q_values = [float(value) for value in row[-len(q_column_source_order):]]" in env_text
     assert "pose_set: list[list[float]] = []" in env_text
+    assert "G1WalkPerturbAmpEnv" in env_init_text
+    assert "WalkUpperBodyPerturbationCfg" in env_init_text
+    assert "class G1WalkPerturbAmpEnv(G1PerturbAmpEnv):" in walk_env_text
+    assert "def _initialize_walk_arm_state" in walk_env_text
+    assert "robot.write_joint_state_to_sim(" in walk_env_text
+    assert "robot.set_joint_position_target(" in walk_env_text
+    assert "self.action_manager._prev_action" in walk_env_text
+    assert 'log_extras["ArmHack/walk_pose_init_max_error_rad"]' in walk_env_text
 
 
 def test_g1_perturb_task_registration_present():
@@ -98,6 +167,7 @@ def test_g1_perturb_task_registration_present():
     assert "LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0" in task_init_text
     assert 'entry_point="legged_lab.envs:G1PerturbAmpEnv"' in task_init_text
+    assert 'entry_point="legged_lab.envs:G1WalkPerturbAmpEnv"' in task_init_text
 
 
 def test_g1_perturb_cfgs_capture_disc_split_and_command_intent():
@@ -109,11 +179,20 @@ def test_g1_perturb_cfgs_capture_disc_split_and_command_intent():
     assert 'csv_use_g1_action_order_q_columns=False' in stand_text
     assert 'csv_q_column_joint_order="sdk"' in stand_text
     assert 'csv_randomize_start_on_reset=True' in stand_text
+    assert 'csv_initialize_joint_state_on_reset=True' in stand_text
+    assert 'csv_curriculum_static_steps=12_000' in stand_text
+    assert 'csv_curriculum_ramp_steps=24_000' in stand_text
+    assert 'csv_curriculum_motion_scale=0.25' in stand_text
     assert "STAND_ARM_MOTION_RELATIVE_PATH" in stand_text
     assert 'self.rewards.track_lin_vel_xy_exp = None' in stand_text
     assert 'self.rewards.track_ang_vel_z_exp = None' in stand_text
     assert 'self.events.reset_from_ref = None' in stand_text
-    assert 'self.rewards.torso_roll_pitch_l2.weight = -4.0' in stand_text
+    assert 'self.events.push_robot = None' in stand_text
+    assert 'self.rewards.alive = RewTerm(func=mdp.is_alive, weight=1.0)' in stand_text
+    assert 'func=mdp.double_support' in stand_text
+    assert 'func=mdp.root_xy_position_l2' in stand_text
+    assert 'self.rewards.termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)' in stand_text
+    assert 'if self.rewards.termination_penalty is not None' not in stand_text
 
     assert 'cfg.observations.disc.joint_pos.params = {"asset_cfg": lower_body_joint_cfg}' in walk_text
     assert 'cfg.observations.disc_demo.ref_joint_pos.params["joint_ids"] = G1_LOWER_BODY_JOINT_IDS' in walk_text
@@ -121,20 +200,43 @@ def test_g1_perturb_cfgs_capture_disc_split_and_command_intent():
     assert 'func=mdp.action_rate_l2_selected' in walk_text
     assert 'cfg.rewards.arm_style_prior = None' in walk_text
     assert 'source="pose_set"' in walk_text
+    assert "class G1WalkPerturbFinetuneEnvCfg(G1AmpNav2FinetuneEnvCfg):" in walk_text
+    assert "WalkUpperBodyPerturbationCfg" in walk_text
+    assert "G1_WALK_PERTURB_POSE_NAMES" in walk_text
+    assert 'pose_name="pos2_down"' in walk_text
+    assert "initialize_joint_state_on_reset=True" in walk_text
     assert 'G1_WALK_PERTURB_POSE_SET' in walk_text
-    assert 'self.commands.base_velocity = mdp.UniformVelocityCommandCfg(' in walk_text
-    assert "Nav2RecordedVelocityCommandCfg" not in walk_text
-    assert 'self.curriculum.lin_vel_cmd_levels = CurrTerm(' in walk_text
-    assert 'self.curriculum.ang_vel_cmd_levels = CurrTerm(' in walk_text
+    assert 'self.commands.base_velocity = mdp.Nav2RecordedVelocityCommandCfg(' in walk_text
+    assert "G1_WALK_PERTURB_NAV2_COMMAND_PATH" in walk_text
+    assert 'augmentation_filter="none,mirror_lr"' in walk_text
+    assert "synthesize_mirror_lr=True" in walk_text
+    assert 'scenario_family_filter="complex_turn"' in walk_text
+    assert 'window_duration_s=4.0' in walk_text
+    assert 'command_scale=(0.85, 0.75, 0.75)' in walk_text
+    assert 'smoothing_time_constant=0.30' in walk_text
+    assert "CurrTerm" not in walk_text
+    assert "lin_vel_cmd_levels" not in walk_text
+    assert "ang_vel_cmd_levels" not in walk_text
+    assert "self.rewards.track_lin_vel_xy_exp.weight = 1.8" in walk_text
+    assert "self.rewards.track_ang_vel_z_exp.weight = 1.5" in walk_text
+    assert "self.rewards.torso_roll_pitch_l2.weight = -0.04" in walk_text
+    assert "self.rewards.action_rate_l2.weight = -0.006" in walk_text
+    assert "self.rewards.termination_penalty.weight = -200.0" in walk_text
 
 
 def test_armhack_reference_data_is_repository_relative_and_valid():
     reference_data_text = _read_text(REFERENCE_DATA_MODULE)
     stand_text = _read_text(STAND_CFG_FILE)
+    walk_text = _read_text(WALK_CFG_FILE)
+    nav2_command_text = _read_text(NAV2_COMMAND_FILE)
 
     assert 'Path("Reference Data") / "ArmHack"' in reference_data_text
+    assert '"nav2_cmd_vel_raw_success.csv"' in reference_data_text
     assert "/home/" not in reference_data_text
     assert "/home/" not in stand_text
+    assert "/home/" not in walk_text
+    assert "def _resolve_nav2_data_path(data_path: str) -> Path:" in nav2_command_text
+    assert "_LEGGED_LAB_PROJECT_DIR / path" in nav2_command_text
     assert hashlib.sha256(STAND_RAW_CSV.read_bytes()).hexdigest() == (
         "b43256da27b11a593fc244ab2dd7fb899490a575d7749ed858ac342e3a208c50"
     )
@@ -156,6 +258,55 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
     ]
     assert [pose["name"] for pose in pose_payload["poses"]] == ["pos1_back", "pos2_down", "pos3_front"]
     assert all(len(pose[side]) == 7 for pose in pose_payload["poses"] for side in ("left", "right"))
+    pos1 = pose_payload["poses"][0]
+    interleaved = [value for pair in zip(pos1["left"], pos1["right"]) for value in pair]
+    assert interleaved == [
+        0.91,
+        0.91,
+        0.52,
+        -0.52,
+        0.11,
+        -0.11,
+        0.01,
+        0.01,
+        -0.12,
+        0.12,
+        -1.03,
+        -1.03,
+        0.01,
+        -0.01,
+    ]
+
+    with STAND_VIS_MANIFEST.open("r", encoding="utf-8") as handle:
+        visualization_manifest = json.load(handle)
+    assert visualization_manifest["source"]["sha256"] == (
+        "afe3819937ecfa19fae835b8cc77038378ec40a821acd0fdf2feef0054583601"
+    )
+    assert visualization_manifest["generation"]["seed"] == 20260714
+    assert visualization_manifest["generation"]["runtime_random_sampling"] is False
+    assert visualization_manifest["data_scope"] == "arm_only_14_dof"
+    assert visualization_manifest["contains_full_body_state"] is False
+    assert visualization_manifest["generation"]["controlled_joint_count"] == 14
+    assert visualization_manifest["generation"]["controlled_joint_names"] == [
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ]
+    assert len(visualization_manifest["representative_poses"]) == 6
+    assert len(visualization_manifest["representative_trajectories"]) == 4
+    assert len(visualization_manifest["synthesized_poses"]) == 3
+    assert len(visualization_manifest["synthesized_trajectories"]) == 3
 
 
 def test_stand_reference_csv_contains_only_named_arm_columns():
@@ -206,16 +357,26 @@ def test_runner_cfg_and_amp_runner_support_policy_only_resume():
 
     assert "load_policy_only = False" in agent_cfg_text
     assert "load_policy_only = True" in agent_cfg_text
-    assert 'experiment_name = "g1_amp"' in agent_cfg_text
+    assert 'experiment_name = "g1_walk_perturb"' in agent_cfg_text
+    assert 'checkpoint_output_dir = "ArmHack Checkpoints/StandPerturb"' in agent_cfg_text
+    assert 'checkpoint_output_dir = "ArmHack Checkpoints/WalkPerturbFinetune"' in agent_cfg_text
     assert "style_reward_scale = 0.0" in agent_cfg_text
     assert "task_style_lerp = 1.0" in agent_cfg_text
 
     assert 'load_policy_only = bool(self.cfg.get("load_policy_only", False))' in amp_runner_text
     assert "Loaded policy-only AMP checkpoint from:" in amp_runner_text
+    assert 'checkpoint_output_dir = self.cfg.get("checkpoint_output_dir")' in amp_runner_text
+    assert "shutil.copy2(primary_path, exported_path)" in amp_runner_text
 
 
-def test_train_script_has_working_local_defaults_for_stand_perturb():
+def test_train_scripts_have_isolated_working_defaults():
     train_script_text = _read_text(TRAIN_SCRIPT_FILE)
+    stand_train_script_text = _read_text(STAND_TRAIN_SCRIPT_FILE)
+    walk_train_script_text = _read_text(WALK_TRAIN_SCRIPT_FILE)
+    vis_script_text = _read_text(VIS_SCRIPT_FILE)
+    stand_vis_eval_text = _read_text(STAND_VIS_EVAL_SCRIPT_FILE)
+    stand_vis_builder_text = _read_text(STAND_VIS_BUILDER_FILE)
+    play_script_text = _read_text(PLAY_SCRIPT_FILE)
 
     assert "CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_isaaclab}" in train_script_text
     assert "CONDA_BASE=${CONDA_BASE:-${HOME}/anaconda3}" in train_script_text
@@ -223,3 +384,50 @@ def test_train_script_has_working_local_defaults_for_stand_perturb():
     assert "STYLE_REWARD_SCALE=0.0" in train_script_text
     assert "TASK_STYLE_LERP=1.0" in train_script_text
     assert "RSI_ENABLE=False" in train_script_text
+    assert "BaselineModel9996/model_9996.pt" in stand_train_script_text
+    assert "bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6" in stand_train_script_text
+    assert "STATIC_ITERATIONS=${STATIC_ITERATIONS:-500}" in stand_train_script_text
+    assert "RAMP_ITERATIONS=${RAMP_ITERATIONS:-1000}" in stand_train_script_text
+    assert "SLOW_MOTION_SCALE=${SLOW_MOTION_SCALE:-0.25}" in stand_train_script_text
+    assert "BASELINE_KL_ENABLE=True" in stand_train_script_text
+    assert "agent.load_policy_only=True" in stand_train_script_text
+    assert 'TASK="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0"' in walk_train_script_text
+    assert "checkpoint/model_9996/locomotion.onnx" in walk_train_script_text
+    assert "BaselineLocomotionModel9996/model_9996.pt" in walk_train_script_text
+    assert "05fc45f89d89eb136225754f6a2fcacf5324d9dfd428d08ed75cc52f89b09be6" in walk_train_script_text
+    assert "bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6" in walk_train_script_text
+    assert "Verified locomotion.onnx == model_9996 actor" in walk_train_script_text
+    assert 'ROBOT_ASSET_NAME="s3_g1_29dof"' in walk_train_script_text
+    assert 'EXPERIMENT_NAME="g1_walk_perturb"' in walk_train_script_text
+    assert "MODE=${MODE:-init}" in walk_train_script_text
+    assert "POSE_NAME=${POSE_NAME:-pos2_down}" in walk_train_script_text
+    assert "RSI_ENABLE=${RSI_ENABLE:-False}" in walk_train_script_text
+    assert "76a4516588b855351eb3eb8c2da26e291603876c1a4a1b9c7bacd77a53807b5a" in walk_train_script_text
+    assert "agent.load_policy_only=\"${LOAD_POLICY_ONLY}\"" in walk_train_script_text
+    assert "BASELINE_KL_ENABLE=True" in walk_train_script_text
+    assert "ArmHack Checkpoints/StandPerturb" not in walk_train_script_text
+    assert "g1_stand_perturb" not in walk_train_script_text
+    assert WALK_BASE_CHECKPOINT.is_file()
+    assert hashlib.sha256(WALK_BASE_CHECKPOINT.read_bytes()).hexdigest() == (
+        "bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6"
+    )
+    assert WALK_BASE_ONNX.is_file()
+    assert hashlib.sha256(WALK_BASE_ONNX.read_bytes()).hexdigest() == (
+        "05fc45f89d89eb136225754f6a2fcacf5324d9dfd428d08ed75cc52f89b09be6"
+    )
+    assert "CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_isaaclab}" in vis_script_text
+    assert "CONDA_BASE=${CONDA_BASE:-${HOME}/anaconda3}" in vis_script_text
+    assert "TestData/ArmOnly" in stand_vis_eval_text
+    assert "all_arm_only_evaluation_sequence_seed20260714_50hz.csv" in stand_vis_eval_text
+    assert "Test Reports/StandArmOnly" in stand_vis_eval_text
+    assert "csv_randomize_start_on_reset=False" in stand_vis_eval_text
+    assert "csv_curriculum_enabled=False" in stand_vis_eval_text
+    assert "csv_curriculum_motion_scale=1.0" in stand_vis_eval_text
+    assert 'EXTRA_HYDRA_ARGS=""' in stand_vis_eval_text
+    assert "would change the fixed deterministic ArmHack evaluation protocol" in stand_vis_eval_text
+    assert "runtime_random_sampling" in stand_vis_builder_text
+    assert "np.random.default_rng(args.seed)" in stand_vis_builder_text
+    assert '"data_scope": "arm_only_14_dof"' in stand_vis_builder_text
+    assert '"contains_full_body_state": False' in stand_vis_builder_text
+    assert "--armhack_stand_report_path" in play_script_text
+    assert "mean_abs_step_delta" in play_script_text

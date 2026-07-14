@@ -513,6 +513,11 @@ def _configure_command_balanced_directional_v3_rewards(rewards: "G1AmpRewards") 
 @configclass
 class G1AmpRewards():
     """Reward terms for the MDP."""
+    # -- optional standing rewards
+    alive = None
+    double_support = None
+    root_xy_position_l2 = None
+
     # -- task
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}

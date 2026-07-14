@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import csv
 import math
-import os
 from collections.abc import Sequence
 from dataclasses import MISSING
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -42,6 +42,39 @@ if TYPE_CHECKING:
 
 
 _NAV2_DATASET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+
+def _find_legged_lab_project_dir() -> Path:
+    """Locate the project without importing the partially initialized top-level package."""
+
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "scripts" / "rsl_rl" / "train.py").is_file() and (
+            candidate / "source" / "legged_lab"
+        ).is_dir():
+            return candidate
+    return Path.cwd().resolve()
+
+
+_LEGGED_LAB_PROJECT_DIR = _find_legged_lab_project_dir()
+
+
+def _resolve_nav2_data_path(data_path: str) -> Path:
+    """Resolve absolute paths and paths relative to the ``legged_lab`` project."""
+
+    path = Path(data_path).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+
+    project_candidate = (_LEGGED_LAB_PROJECT_DIR / path).resolve()
+    if not project_candidate.is_relative_to(_LEGGED_LAB_PROJECT_DIR):
+        raise ValueError(f"Nav2 command dataset path escapes the legged_lab project: {data_path}")
+    if project_candidate.is_file():
+        return project_candidate
+
+    cwd_candidate = (Path.cwd() / path).resolve()
+    if cwd_candidate.is_file():
+        return cwd_candidate
+    return project_candidate
 
 
 def _parse_filter(values: str | Sequence[str] | None) -> set[str] | None:
@@ -85,16 +118,18 @@ def _estimate_sample_dt(group_times: list[list[float]], fallback_dt: float) -> f
 def _load_nav2_dataset(
     data_path: str,
     augmentation_filter: str | Sequence[str] | None,
+    synthesize_mirror_lr: bool,
     scenario_family_filter: str | Sequence[str] | None,
     combo_filter: str | Sequence[str] | None,
     controller_filter: str | Sequence[str] | None,
     planner_filter: str | Sequence[str] | None,
     fallback_sample_dt: float,
 ) -> dict[str, Any]:
-    resolved_path = os.path.abspath(os.path.expanduser(data_path))
+    resolved_path = _resolve_nav2_data_path(data_path)
     cache_key = (
-        resolved_path,
+        str(resolved_path),
         tuple(sorted(_parse_filter(augmentation_filter) or [])),
+        bool(synthesize_mirror_lr),
         tuple(sorted(_parse_filter(scenario_family_filter) or [])),
         tuple(sorted(_parse_filter(combo_filter) or [])),
         tuple(sorted(_parse_filter(controller_filter) or [])),
@@ -103,7 +138,7 @@ def _load_nav2_dataset(
     )
     if cache_key in _NAV2_DATASET_CACHE:
         return _NAV2_DATASET_CACHE[cache_key]
-    if not os.path.isfile(resolved_path):
+    if not resolved_path.is_file():
         raise FileNotFoundError(f"Nav2 command dataset not found: {resolved_path}")
 
     augmentation_set = _parse_filter(augmentation_filter)
@@ -160,6 +195,22 @@ def _load_nav2_dataset(
                 time_value = float(len(group)) * float(fallback_sample_dt)
             group.append((time_value, (float(row["vx"]), float(row["vy"]), float(row["wz"]))))
 
+    if synthesize_mirror_lr and (augmentation_set is None or "mirror_lr" in augmentation_set):
+        for key, rows in list(grouped_rows.items()):
+            if key[5] != "none":
+                continue
+            mirror_key = (*key[:5], "mirror_lr", key[6])
+            if mirror_key in grouped_rows:
+                continue
+            grouped_rows[mirror_key] = [
+                (time_value, (vx, -vy, -wz))
+                for time_value, (vx, vy, wz) in rows
+            ]
+            mirror_metadata = dict(group_metadata_by_key[key])
+            mirror_metadata["augmentation"] = "mirror_lr"
+            group_metadata_by_key[mirror_key] = mirror_metadata
+            kept_rows += len(rows)
+
     commands: list[tuple[float, float, float]] = []
     group_starts: list[int] = []
     group_lengths: list[int] = []
@@ -202,6 +253,7 @@ class Nav2RecordedVelocityCommand(UniformVelocityCommand):
         dataset = _load_nav2_dataset(
             cfg.data_path,
             cfg.augmentation_filter,
+            cfg.synthesize_mirror_lr,
             cfg.scenario_family_filter,
             cfg.combo_filter,
             cfg.controller_filter,
@@ -336,6 +388,9 @@ class Nav2RecordedVelocityCommandCfg(UniformVelocityCommandCfg):
 
     augmentation_filter: str | Sequence[str] | None = "none"
     """Comma-separated augmentation labels to keep; use ``*`` or empty for all."""
+
+    synthesize_mirror_lr: bool = False
+    """Create ``(vx, -vy, -wz)`` mirror groups from raw ``none`` groups when requested."""
 
     scenario_family_filter: str | Sequence[str] | None = ""
     """Optional comma-separated scenario_family labels to keep."""

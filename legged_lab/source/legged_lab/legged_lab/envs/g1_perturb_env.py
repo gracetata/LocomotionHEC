@@ -132,6 +132,12 @@ class UpperBodyPerturbationCfg:
     csv_q_column_joint_order: Literal["lab", "sdk"] = "lab"
     csv_randomize_start_on_reset: bool = False
     csv_end_margin_s: float = 0.0
+    csv_interpolate: bool = True
+    csv_initialize_joint_state_on_reset: bool = False
+    csv_curriculum_enabled: bool = False
+    csv_curriculum_static_steps: int = 0
+    csv_curriculum_ramp_steps: int = 0
+    csv_curriculum_motion_scale: float = 1.0
     amplitude: float | dict[str, float] = 0.35
     frequency_hz: float = 0.5
     phase_offset: float = 0.0
@@ -157,6 +163,7 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._csv_times: torch.Tensor | None = None
         self._csv_targets: torch.Tensor | None = None
         self._csv_start_time_offsets: torch.Tensor | None = None
+        self._csv_sample_times: torch.Tensor | None = None
         self._pose_set_targets: torch.Tensor | None = None
         self._pose_probabilities: torch.Tensor | None = None
         self._active_pose_targets: torch.Tensor | None = None
@@ -171,6 +178,7 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._csv_times = torch.empty(0, dtype=torch.float32, device=self.device)
         self._csv_targets = torch.empty((0, 0), dtype=torch.float32, device=self.device)
         self._csv_start_time_offsets = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._csv_sample_times = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._pose_set_targets = torch.empty((0, 0), dtype=torch.float32, device=self.device)
         self._pose_probabilities = torch.empty(0, dtype=torch.float32, device=self.device)
         self._active_pose_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
@@ -182,9 +190,30 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             self._perturbation_cfg = None
 
     def step(self, action: torch.Tensor):
+        csv_motion_scale: float | None = None
         if self._perturbation_cfg is not None:
             action = self._compose_perturbed_action(action.to(self.device))
-        return super().step(action)
+            if self._perturbation_cfg.source == "csv":
+                csv_motion_scale = self._csv_curriculum_motion_scale()
+                self._advance_csv_sample_times(csv_motion_scale)
+
+        step_result = super().step(action)
+        if csv_motion_scale is not None:
+            log_extras = self.extras.setdefault("log", {})
+            log_extras["ArmHack/csv_motion_scale"] = torch.tensor(csv_motion_scale, device=self.device)
+            target_scale = max(float(self._perturbation_cfg.csv_curriculum_motion_scale), 0.0)
+            if csv_motion_scale <= 0.0:
+                stage = 0.0
+            elif csv_motion_scale + 1.0e-8 < target_scale:
+                stage = 1.0
+            else:
+                stage = 2.0
+            log_extras["ArmHack/curriculum_stage"] = torch.tensor(stage, device=self.device)
+            log_extras["ArmHack/csv_start_time_mean_s"] = torch.mean(self._csv_start_time_offsets)
+            log_extras["ArmHack/csv_start_time_std_s"] = torch.std(
+                self._csv_start_time_offsets, unbiased=False
+            )
+        return step_result
 
     def _reset_idx(self, env_ids: Sequence[int] | torch.Tensor):
         super()._reset_idx(env_ids)
@@ -199,6 +228,8 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
 
         if cfg.source == "csv":
             self._reset_csv_start_offsets(env_ids_tensor)
+            if cfg.csv_initialize_joint_state_on_reset:
+                self._initialize_csv_arm_joint_state(env_ids_tensor)
         elif cfg.source == "pose_set":
             self._sample_pose_targets(env_ids_tensor)
 
@@ -243,8 +274,12 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         )
 
         if cfg.source == "csv":
+            self._validate_csv_curriculum_cfg()
             self._csv_times, self._csv_targets = self._load_csv_trajectory()
-            self._reset_csv_start_offsets(torch.arange(self.num_envs, device=self.device, dtype=torch.long))
+            all_env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+            self._reset_csv_start_offsets(all_env_ids)
+            if cfg.csv_initialize_joint_state_on_reset:
+                self._initialize_csv_arm_joint_state(all_env_ids)
         elif cfg.source == "pose_set":
             self._initialize_pose_set()
 
@@ -277,11 +312,21 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             targets = center + self._upper_joint_position_offsets.unsqueeze(0)
             targets = targets + self._upper_amplitudes.unsqueeze(0) * torch.sin(phase)
 
-        if cfg.clip_to_joint_limits:
-            robot = self.scene["robot"]
-            joint_limits = robot.data.soft_joint_pos_limits[:, self._upper_asset_joint_ids, :]
-            targets = torch.clamp(targets, min=joint_limits[..., 0], max=joint_limits[..., 1])
-        return targets
+        return self._clip_upper_position_targets(targets)
+
+    def _clip_upper_position_targets(
+        self, targets: torch.Tensor, env_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        if not cfg.clip_to_joint_limits:
+            return targets
+
+        robot = self.scene["robot"]
+        joint_limits = robot.data.soft_joint_pos_limits[:, self._upper_asset_joint_ids, :]
+        if env_ids is not None:
+            joint_limits = joint_limits[env_ids]
+        return torch.clamp(targets, min=joint_limits[..., 0], max=joint_limits[..., 1])
 
     def _upper_position_center(self) -> torch.Tensor:
         action_term = self._joint_pos_action
@@ -514,23 +559,92 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 return candidate
         raise FileNotFoundError(f"Upper-body perturbation CSV not found: {csv_path}")
 
-    def _sample_csv_targets(self) -> torch.Tensor:
+    def _validate_csv_curriculum_cfg(self) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        if cfg.csv_curriculum_static_steps < 0:
+            raise ValueError("csv_curriculum_static_steps must be non-negative.")
+        if cfg.csv_curriculum_ramp_steps < 0:
+            raise ValueError("csv_curriculum_ramp_steps must be non-negative.")
+        if cfg.csv_curriculum_motion_scale < 0.0:
+            raise ValueError("csv_curriculum_motion_scale must be non-negative.")
+
+    def _csv_curriculum_motion_scale(self) -> float:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        target_scale = max(float(cfg.csv_curriculum_motion_scale), 0.0)
+        if not cfg.csv_curriculum_enabled:
+            return target_scale
+
+        step = max(int(self.common_step_counter), 0)
+        static_steps = max(int(cfg.csv_curriculum_static_steps), 0)
+        ramp_steps = max(int(cfg.csv_curriculum_ramp_steps), 0)
+        if step < static_steps:
+            return 0.0
+        if ramp_steps == 0:
+            return target_scale
+
+        ramp_fraction = min(max((step - static_steps) / ramp_steps, 0.0), 1.0)
+        return target_scale * ramp_fraction
+
+    def _sample_csv_targets(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
         cfg = self._perturbation_cfg
         assert cfg is not None
         if self._csv_times.numel() == 0:
             raise RuntimeError("CSV perturbation trajectory is not initialized.")
 
-        episode_time_s = self.episode_length_buf.to(dtype=torch.float32) * self.step_dt
-        sample_time_s = episode_time_s + self._csv_start_time_offsets
+        sample_time_s = self._csv_sample_times if env_ids is None else self._csv_sample_times[env_ids]
         final_time = float(self._csv_times[-1].item())
         if cfg.csv_loop and final_time > 0.0:
             sample_time_s = torch.remainder(sample_time_s, final_time)
         else:
             sample_time_s = torch.clamp(sample_time_s, min=0.0, max=final_time)
 
-        sample_indices = torch.searchsorted(self._csv_times, sample_time_s, right=False)
-        sample_indices = torch.clamp(sample_indices, max=self._csv_targets.shape[0] - 1)
-        return self._csv_targets[sample_indices]
+        upper_indices = torch.searchsorted(self._csv_times, sample_time_s, right=False)
+        upper_indices = torch.clamp(upper_indices, max=self._csv_targets.shape[0] - 1)
+        if not cfg.csv_interpolate or self._csv_targets.shape[0] == 1:
+            return self._csv_targets[upper_indices]
+
+        lower_indices = torch.clamp(upper_indices - 1, min=0)
+        lower_times = self._csv_times[lower_indices]
+        upper_times = self._csv_times[upper_indices]
+        interval = upper_times - lower_times
+        alpha = torch.where(
+            interval > 1.0e-8,
+            (sample_time_s - lower_times) / torch.clamp(interval, min=1.0e-8),
+            torch.zeros_like(sample_time_s),
+        )
+        lower_targets = self._csv_targets[lower_indices]
+        upper_targets = self._csv_targets[upper_indices]
+        return torch.lerp(lower_targets, upper_targets, alpha.unsqueeze(-1))
+
+    def _advance_csv_sample_times(self, motion_scale: float) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        if motion_scale <= 0.0 or self._csv_sample_times.numel() == 0:
+            return
+
+        self._csv_sample_times.add_(float(motion_scale) * float(self.step_dt))
+        final_time = float(self._csv_times[-1].item())
+        if cfg.csv_loop and final_time > 0.0:
+            self._csv_sample_times.remainder_(final_time)
+        else:
+            self._csv_sample_times.clamp_(min=0.0, max=final_time)
+
+    def _initialize_csv_arm_joint_state(self, env_ids: torch.Tensor) -> None:
+        if env_ids.numel() == 0:
+            return
+
+        targets = self._sample_csv_targets(env_ids)
+        targets = self._clip_upper_position_targets(targets, env_ids=env_ids)
+        target_velocities = torch.zeros_like(targets)
+        robot = self.scene["robot"]
+        robot.write_joint_state_to_sim(
+            targets,
+            target_velocities,
+            joint_ids=self._upper_asset_joint_ids,
+            env_ids=env_ids,
+        )
 
     def _reset_csv_start_offsets(self, env_ids: torch.Tensor) -> None:
         cfg = self._perturbation_cfg
@@ -538,26 +652,27 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         if env_ids.numel() == 0 or self._csv_times.numel() == 0:
             return
 
-        if not cfg.csv_randomize_start_on_reset:
-            self._csv_start_time_offsets[env_ids] = 0.0
-            return
-
         final_time = float(self._csv_times[-1].item())
-        if final_time <= 0.0:
-            self._csv_start_time_offsets[env_ids] = 0.0
-            return
-
-        if cfg.csv_loop:
-            max_start_time = final_time
+        if not cfg.csv_randomize_start_on_reset or final_time <= 0.0:
+            start_offsets = torch.zeros(env_ids.numel(), dtype=torch.float32, device=self.device)
+        elif cfg.csv_loop:
+            start_offsets = torch.rand(env_ids.numel(), device=self.device) * final_time
         else:
             episode_horizon_s = float(self.max_episode_length) * float(self.step_dt)
-            max_start_time = max(final_time - episode_horizon_s - float(cfg.csv_end_margin_s), 0.0)
+            maximum_motion_scale = (
+                max(float(cfg.csv_curriculum_motion_scale), 0.0)
+                if cfg.csv_curriculum_enabled
+                else 1.0
+            )
+            required_motion_horizon_s = episode_horizon_s * maximum_motion_scale
+            max_start_time = max(
+                final_time - required_motion_horizon_s - float(cfg.csv_end_margin_s),
+                0.0,
+            )
+            start_offsets = torch.rand(env_ids.numel(), device=self.device) * max_start_time
 
-        if max_start_time <= 0.0:
-            self._csv_start_time_offsets[env_ids] = 0.0
-            return
-
-        self._csv_start_time_offsets[env_ids] = torch.rand(env_ids.numel(), device=self.device) * max_start_time
+        self._csv_start_time_offsets[env_ids] = start_offsets
+        self._csv_sample_times[env_ids] = start_offsets
 
     def _sample_pose_targets(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:

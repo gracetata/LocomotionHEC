@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import shutil
 import statistics
 import time
 import torch
 import warnings
 from collections import deque
+from pathlib import Path
 from tensordict import TensorDict
 
 import rsl_rl
@@ -166,6 +168,30 @@ class AMPRunner(OnPolicyRunner):
         saved_dict["amp_discriminator_normalizer_state_dict"] = self.alg.amp_discriminator.disc_obs_normalizer.state_dict()
         saved_dict["amp_discriminator_optimizer_state_dict"] = self.alg.disc_optimizer.state_dict()
         torch.save(saved_dict, path)
+
+        checkpoint_output_dir = self.cfg.get("checkpoint_output_dir")
+        if checkpoint_output_dir:
+            primary_path = Path(path).expanduser().resolve()
+            output_root = Path(str(checkpoint_output_dir)).expanduser()
+            if not output_root.is_absolute():
+                search_roots = [Path.cwd().resolve(), *primary_path.parents]
+                project_root = next(
+                    (
+                        root
+                        for root in search_roots
+                        if (root / "scripts" / "rsl_rl" / "train.py").is_file()
+                        and (root / "source" / "legged_lab").is_dir()
+                    ),
+                    Path.cwd().resolve(),
+                )
+                output_root = project_root / output_root
+
+            run_name = primary_path.parent.name
+            exported_path = (output_root / run_name / primary_path.name).resolve()
+            if exported_path != primary_path:
+                exported_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(primary_path, exported_path)
+                print(f"Saved dedicated AMP checkpoint copy to: {exported_path}")
 
         # Upload model to external logging services
         self.logger.save_model(path, self.current_learning_iteration)

@@ -7,7 +7,7 @@
 # Environment variables:
 #   ISAACLAB_PYTHON : Python executable from .envrc conda env.
 #   CONDA_ENV_NAME  : Conda env name used when ISAACLAB_PYTHON is unset (default: env_isaaclab).
-#   CONDA_BASE      : Conda installation root (default: /home/hecggdz/miniconda3).
+#   CONDA_BASE      : Conda installation root (default: ${HOME}/anaconda3).
 #   TASK            : Play task id (default: LeggedLab-Isaac-AMP-G1-SegmentedYawFinetune-Play-v0).
 #   CHECKPOINT      : Checkpoint path (default: 2026-06-07 local XML run, model_3999.pt).
 #   NUM_ENVS        : Number of replay envs (default: 4).
@@ -115,8 +115,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 LEGGED_LAB_DIR="${ROOT_DIR}"
 
-CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_leglab}
-CONDA_BASE=${CONDA_BASE:-/home/hecggdz/miniconda3}
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_isaaclab}
+CONDA_BASE=${CONDA_BASE:-${HOME}/anaconda3}
 if [[ -z "${ISAACLAB_PYTHON:-}" ]]; then
     if [[ -n "${CONDA_PREFIX:-}" && "$(basename "${CONDA_PREFIX}")" == "${CONDA_ENV_NAME}" ]]; then
         ISAACLAB_PYTHON="${CONDA_PREFIX}/bin/python"
