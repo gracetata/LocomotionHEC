@@ -182,7 +182,7 @@ def test_g1_perturb_cfgs_capture_disc_split_and_command_intent():
     assert 'csv_initialize_joint_state_on_reset=True' in stand_text
     assert 'csv_curriculum_static_steps=12_000' in stand_text
     assert 'csv_curriculum_ramp_steps=24_000' in stand_text
-    assert 'csv_curriculum_motion_scale=0.25' in stand_text
+    assert 'csv_curriculum_motion_scale=1.0' in stand_text
     assert "STAND_ARM_MOTION_RELATIVE_PATH" in stand_text
     assert 'self.rewards.track_lin_vel_xy_exp = None' in stand_text
     assert 'self.rewards.track_ang_vel_z_exp = None' in stand_text
@@ -284,6 +284,7 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
     )
     assert visualization_manifest["generation"]["seed"] == 20260714
     assert visualization_manifest["generation"]["runtime_random_sampling"] is False
+    assert visualization_manifest["generation"]["trajectory_speed_scale"] == 1.0
     assert visualization_manifest["data_scope"] == "arm_only_14_dof"
     assert visualization_manifest["contains_full_body_state"] is False
     assert visualization_manifest["generation"]["controlled_joint_count"] == 14
@@ -307,6 +308,14 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
     assert len(visualization_manifest["representative_trajectories"]) == 4
     assert len(visualization_manifest["synthesized_poses"]) == 3
     assert len(visualization_manifest["synthesized_trajectories"]) == 3
+    assert all(
+        trajectory["equivalent_source_speed"] == 1.0
+        for trajectory in visualization_manifest["representative_trajectories"]
+    )
+    assert all(
+        trajectory["equivalent_source_speed"] == 1.0
+        for trajectory in visualization_manifest["synthesized_trajectories"]
+    )
 
 
 def test_stand_reference_csv_contains_only_named_arm_columns():
@@ -388,7 +397,7 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6" in stand_train_script_text
     assert "STATIC_ITERATIONS=${STATIC_ITERATIONS:-500}" in stand_train_script_text
     assert "RAMP_ITERATIONS=${RAMP_ITERATIONS:-1000}" in stand_train_script_text
-    assert "SLOW_MOTION_SCALE=${SLOW_MOTION_SCALE:-0.25}" in stand_train_script_text
+    assert "FINAL_MOTION_SCALE=${FINAL_MOTION_SCALE:-1.0}" in stand_train_script_text
     assert "BASELINE_KL_ENABLE=True" in stand_train_script_text
     assert "agent.load_policy_only=True" in stand_train_script_text
     assert 'TASK="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0"' in walk_train_script_text
@@ -429,5 +438,6 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "np.random.default_rng(args.seed)" in stand_vis_builder_text
     assert '"data_scope": "arm_only_14_dof"' in stand_vis_builder_text
     assert '"contains_full_body_state": False' in stand_vis_builder_text
+    assert '"trajectory_speed_scale": args.trajectory_speed_scale' in stand_vis_builder_text
     assert "--armhack_stand_report_path" in play_script_text
     assert "mean_abs_step_delta" in play_script_text

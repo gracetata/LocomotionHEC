@@ -51,7 +51,7 @@ done
 case "${MODE}" in
     all)
         CSV_NAME="sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv"
-        DESCRIPTION="6 representative poses -> 3 synthesized poses -> 4 representative trajectories -> 3 synthesized trajectories"
+        DESCRIPTION="6 representative poses -> 3 synthesized poses -> 4 measured 1.0x trajectories -> 3 synthesized 1.0x trajectories"
         ;;
     representative_poses)
         CSV_NAME="sequences/representative_poses_arm_only_sequence_50hz.csv"
@@ -63,11 +63,11 @@ case "${MODE}" in
         ;;
     representative_trajectories)
         CSV_NAME="sequences/representative_trajectories_arm_only_sequence_50hz.csv"
-        DESCRIPTION="four representative source trajectories at the training-equivalent 0.25x speed"
+        DESCRIPTION="four representative source trajectories at the original 1.0x speed"
         ;;
     synthesized_trajectories)
         CSV_NAME="sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv"
-        DESCRIPTION="three fixed-seed synthesized minimum-jerk trajectories"
+        DESCRIPTION="three fixed-seed convex blends of measured 1.0x arm trajectories"
         ;;
     representative_pose)
         if [[ ! "${ITEM}" =~ ^[1-6]$ ]]; then
@@ -99,8 +99,8 @@ case "${MODE}" in
             3) SOURCE_WINDOW="234_239" ;;
             4) SOURCE_WINDOW="385_390" ;;
         esac
-        CSV_NAME="trajectories/representative/representative_arm_trajectory_${ITEM_PADDED}_source_${SOURCE_WINDOW}s_025x_50hz.csv"
-        DESCRIPTION="representative source trajectory ${ITEM_PADDED} at the training-equivalent 0.25x speed"
+        CSV_NAME="trajectories/representative/representative_arm_trajectory_${ITEM_PADDED}_source_${SOURCE_WINDOW}s_1x_50hz.csv"
+        DESCRIPTION="representative source trajectory ${ITEM_PADDED} at the original 1.0x speed"
         ;;
     synthesized_trajectory)
         if [[ ! "${ITEM}" =~ ^[1-3]$ ]]; then
@@ -108,8 +108,8 @@ case "${MODE}" in
             exit 1
         fi
         printf -v ITEM_PADDED "%02d" "${ITEM}"
-        CSV_NAME="trajectories/synthesized/synthesized_arm_trajectory_${ITEM_PADDED}_seed20260714_minimum_jerk_50hz.csv"
-        DESCRIPTION="fixed-seed synthesized minimum-jerk trajectory ${ITEM_PADDED}"
+        CSV_NAME="trajectories/synthesized/synthesized_arm_trajectory_${ITEM_PADDED}_seed20260714_measured_blend_1x_50hz.csv"
+        DESCRIPTION="fixed-seed synthesized measured-trajectory blend ${ITEM_PADDED} at 1.0x speed"
         ;;
     *)
         echo "Error: unknown MODE=${MODE}" >&2

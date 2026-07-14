@@ -3,8 +3,8 @@
 #
 # Curriculum (24 control steps per PPO iteration):
 #   1. Hold a random CSV arm pose for STATIC_ITERATIONS.
-#   2. Ramp continuously from zero speed to SLOW_MOTION_SCALE over RAMP_ITERATIONS.
-#   3. Continue at SLOW_MOTION_SCALE for the remaining iterations.
+#   2. Ramp continuously from zero speed to FINAL_MOTION_SCALE over RAMP_ITERATIONS.
+#   3. Continue at FINAL_MOTION_SCALE=1.0 for the remaining iterations.
 #
 # The policy observes current robot state only. No trajectory phase, future arm
 # target, or look-ahead is added to the observation.
@@ -23,7 +23,7 @@ NUM_ENVS=${NUM_ENVS:-4096}
 MAX_ITERATIONS=${MAX_ITERATIONS:-3000}
 STATIC_ITERATIONS=${STATIC_ITERATIONS:-500}
 RAMP_ITERATIONS=${RAMP_ITERATIONS:-1000}
-SLOW_MOTION_SCALE=${SLOW_MOTION_SCALE:-0.25}
+FINAL_MOTION_SCALE=${FINAL_MOTION_SCALE:-1.0}
 RUN_NAME=${RUN_NAME:-armhack_stand_curriculum_from_model9996}
 SEED=${SEED:-42}
 
@@ -58,8 +58,8 @@ if (( STATIC_ITERATIONS < 0 || RAMP_ITERATIONS < 0 || MAX_ITERATIONS <= 0 )); th
     exit 1
 fi
 
-if ! awk -v value="${SLOW_MOTION_SCALE}" 'BEGIN { exit !(value >= 0.0 && value <= 1.0) }'; then
-    echo "Error: SLOW_MOTION_SCALE must be within [0, 1]." >&2
+if ! awk -v value="${FINAL_MOTION_SCALE}" 'BEGIN { exit !(value >= 0.0 && value <= 1.0) }'; then
+    echo "Error: FINAL_MOTION_SCALE must be within [0, 1]." >&2
     exit 1
 fi
 
@@ -83,7 +83,7 @@ echo "Base SHA-256    : ${ACTUAL_BASE_SHA256}"
 echo "Base iteration  : 9996 (actor 96 -> 29, critic input 297)"
 echo "Static stage    : ${STATIC_ITERATIONS} iterations (${STATIC_STEPS} steps)"
 echo "Slow ramp       : ${RAMP_ITERATIONS} iterations (${RAMP_STEPS} steps)"
-echo "Final arm speed : ${SLOW_MOTION_SCALE} x source trajectory"
+echo "Final arm speed : ${FINAL_MOTION_SCALE} x source trajectory"
 echo "Total training  : ${MAX_ITERATIONS} iterations, ${NUM_ENVS} envs"
 echo "Randomization   : ${RANDOMIZATION_STRENGTH} (0 recommended for this curriculum)"
 echo "Baseline KL     : ${BASELINE_KL_SCALE}"
@@ -113,7 +113,7 @@ bash "${PROJECT_DIR}/scripts/train_g1_amp.sh" \
   env.upper_body_perturbation.csv_curriculum_enabled=True \
   env.upper_body_perturbation.csv_curriculum_static_steps="${STATIC_STEPS}" \
   env.upper_body_perturbation.csv_curriculum_ramp_steps="${RAMP_STEPS}" \
-  env.upper_body_perturbation.csv_curriculum_motion_scale="${SLOW_MOTION_SCALE}" \
+  env.upper_body_perturbation.csv_curriculum_motion_scale="${FINAL_MOTION_SCALE}" \
   agent.load_policy_only=True \
   agent.reset_iteration_on_policy_only_load=True \
   "$@"

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "data_scope": "arm_only_14_dof",
   "contains_full_body_state": false,
   "source": {
@@ -44,9 +44,10 @@
       "right_wrist_pitch_joint",
       "right_wrist_yaw_joint"
     ],
+    "trajectory_speed_scale": 1.0,
     "representative_pose_method": "normalized farthest-point coverage from median pose",
     "representative_trajectory_method": "diverse non-overlapping 5 s high-motion windows",
-    "synthesis_method": "pairwise convex interpolation of measured arm poses plus quintic minimum-jerk arm trajectories",
+    "synthesis_method": "pairwise convex interpolation of measured arm poses and frame-aligned measured 1x arm trajectories",
     "runtime_random_sampling": false
   },
   "representative_poses": [
@@ -149,52 +150,52 @@
   "representative_trajectories": [
     {
       "trajectory_id": "representative_trajectory_01",
-      "path": "trajectories/representative/representative_arm_trajectory_01_source_036_041s_025x_50hz.csv",
+      "path": "trajectories/representative/representative_arm_trajectory_01_source_036_041s_1x_50hz.csv",
       "source_start_s": 36.0,
       "source_end_s": 41.0,
       "source_duration_s": 5.0,
-      "playback_duration_s": 20.0,
-      "time_stretch": 4.0,
-      "equivalent_source_speed": 0.25,
+      "playback_duration_s": 5.0,
+      "time_stretch": 1.0,
+      "equivalent_source_speed": 1.0,
       "max_joint_span_rad": 1.05774,
       "dominant_joint": "left_elbow_joint",
       "motion_score": 5.01218029350014
     },
     {
       "trajectory_id": "representative_trajectory_02",
-      "path": "trajectories/representative/representative_arm_trajectory_02_source_102_107s_025x_50hz.csv",
+      "path": "trajectories/representative/representative_arm_trajectory_02_source_102_107s_1x_50hz.csv",
       "source_start_s": 102.0,
       "source_end_s": 107.0,
       "source_duration_s": 5.0,
-      "playback_duration_s": 20.0,
-      "time_stretch": 4.0,
-      "equivalent_source_speed": 0.25,
+      "playback_duration_s": 5.0,
+      "time_stretch": 1.0,
+      "equivalent_source_speed": 1.0,
       "max_joint_span_rad": 0.779166,
       "dominant_joint": "left_elbow_joint",
-      "motion_score": 5.93433131040822
+      "motion_score": 5.934331310408219
     },
     {
       "trajectory_id": "representative_trajectory_03",
-      "path": "trajectories/representative/representative_arm_trajectory_03_source_234_239s_025x_50hz.csv",
+      "path": "trajectories/representative/representative_arm_trajectory_03_source_234_239s_1x_50hz.csv",
       "source_start_s": 234.0,
       "source_end_s": 239.0,
       "source_duration_s": 5.0,
-      "playback_duration_s": 20.0,
-      "time_stretch": 4.0,
-      "equivalent_source_speed": 0.25,
+      "playback_duration_s": 5.0,
+      "time_stretch": 1.0,
+      "equivalent_source_speed": 1.0,
       "max_joint_span_rad": 0.913007,
       "dominant_joint": "right_elbow_joint",
       "motion_score": 3.3943399999251707
     },
     {
       "trajectory_id": "representative_trajectory_04",
-      "path": "trajectories/representative/representative_arm_trajectory_04_source_385_390s_025x_50hz.csv",
+      "path": "trajectories/representative/representative_arm_trajectory_04_source_385_390s_1x_50hz.csv",
       "source_start_s": 385.0,
       "source_end_s": 390.0,
       "source_duration_s": 5.0,
-      "playback_duration_s": 20.0,
-      "time_stretch": 4.0,
-      "equivalent_source_speed": 0.25,
+      "playback_duration_s": 5.0,
+      "time_stretch": 1.0,
+      "equivalent_source_speed": 1.0,
       "max_joint_span_rad": 1.122395,
       "dominant_joint": "right_shoulder_pitch_joint",
       "motion_score": 3.772905736657666
@@ -203,162 +204,84 @@
   "synthesized_trajectories": [
     {
       "trajectory_id": "synth_trajectory_01",
-      "duration_s": 20.0,
-      "anchor_generation": [
-        {
-          "parents": [
-            4,
-            5
-          ],
-          "interpolation_alpha": 0.5695130522546533,
-          "weights": [
-            0.4304869477453467,
-            0.5695130522546533
-          ]
-        },
-        {
-          "parents": [
-            3,
-            6
-          ],
-          "interpolation_alpha": 0.8080446517239126,
-          "weights": [
-            0.1919553482760874,
-            0.8080446517239126
-          ]
-        },
-        {
-          "parents": [
-            3,
-            2
-          ],
-          "interpolation_alpha": 0.5249719810190353,
-          "weights": [
-            0.4750280189809647,
-            0.5249719810190353
-          ]
-        },
-        {
-          "parents": [
-            5,
-            6
-          ],
-          "interpolation_alpha": 0.8356584793722571,
-          "weights": [
-            0.16434152062774288,
-            0.8356584793722571
-          ]
-        }
+      "parent_representative_trajectory_indices": [
+        4,
+        3
       ],
-      "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+      "parent_source_windows_s": [
+        [
+          385.0,
+          390.0
+        ],
+        [
+          234.0,
+          239.0
+        ]
+      ],
+      "interpolation_alpha": 0.5496521801818952,
+      "parent_weights": [
+        0.4503478198181048,
+        0.5496521801818952
+      ],
+      "equivalent_source_speed": 1.0,
+      "profile": "frame-aligned convex blend of two measured arm-only trajectories",
       "data_scope": "arm_only_14_dof",
-      "path": "trajectories/synthesized/synthesized_arm_trajectory_01_seed20260714_minimum_jerk_50hz.csv"
+      "path": "trajectories/synthesized/synthesized_arm_trajectory_01_seed20260714_measured_blend_1x_50hz.csv",
+      "duration_s": 5.0
     },
     {
       "trajectory_id": "synth_trajectory_02",
-      "duration_s": 20.0,
-      "anchor_generation": [
-        {
-          "parents": [
-            2,
-            1
-          ],
-          "interpolation_alpha": 0.44860233445544784,
-          "weights": [
-            0.5513976655445522,
-            0.44860233445544784
-          ]
-        },
-        {
-          "parents": [
-            6,
-            4
-          ],
-          "interpolation_alpha": 0.757571878270425,
-          "weights": [
-            0.24242812172957495,
-            0.757571878270425
-          ]
-        },
-        {
-          "parents": [
-            1,
-            5
-          ],
-          "interpolation_alpha": 0.3845071809906494,
-          "weights": [
-            0.6154928190093506,
-            0.3845071809906494
-          ]
-        },
-        {
-          "parents": [
-            3,
-            2
-          ],
-          "interpolation_alpha": 0.4876840652105272,
-          "weights": [
-            0.5123159347894728,
-            0.4876840652105272
-          ]
-        }
+      "parent_representative_trajectory_indices": [
+        2,
+        4
       ],
-      "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+      "parent_source_windows_s": [
+        [
+          102.0,
+          107.0
+        ],
+        [
+          385.0,
+          390.0
+        ]
+      ],
+      "interpolation_alpha": 0.720031894088509,
+      "parent_weights": [
+        0.279968105911491,
+        0.720031894088509
+      ],
+      "equivalent_source_speed": 1.0,
+      "profile": "frame-aligned convex blend of two measured arm-only trajectories",
       "data_scope": "arm_only_14_dof",
-      "path": "trajectories/synthesized/synthesized_arm_trajectory_02_seed20260714_minimum_jerk_50hz.csv"
+      "path": "trajectories/synthesized/synthesized_arm_trajectory_02_seed20260714_measured_blend_1x_50hz.csv",
+      "duration_s": 5.0
     },
     {
       "trajectory_id": "synth_trajectory_03",
-      "duration_s": 20.0,
-      "anchor_generation": [
-        {
-          "parents": [
-            2,
-            3
-          ],
-          "interpolation_alpha": 0.31479668916611603,
-          "weights": [
-            0.685203310833884,
-            0.31479668916611603
-          ]
-        },
-        {
-          "parents": [
-            3,
-            4
-          ],
-          "interpolation_alpha": 0.5953639472880762,
-          "weights": [
-            0.4046360527119238,
-            0.5953639472880762
-          ]
-        },
-        {
-          "parents": [
-            3,
-            4
-          ],
-          "interpolation_alpha": 0.153941544460959,
-          "weights": [
-            0.846058455539041,
-            0.153941544460959
-          ]
-        },
-        {
-          "parents": [
-            3,
-            2
-          ],
-          "interpolation_alpha": 0.697929949821172,
-          "weights": [
-            0.30207005017882804,
-            0.697929949821172
-          ]
-        }
+      "parent_representative_trajectory_indices": [
+        2,
+        1
       ],
-      "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+      "parent_source_windows_s": [
+        [
+          102.0,
+          107.0
+        ],
+        [
+          36.0,
+          41.0
+        ]
+      ],
+      "interpolation_alpha": 0.5178371292993109,
+      "parent_weights": [
+        0.4821628707006891,
+        0.5178371292993109
+      ],
+      "equivalent_source_speed": 1.0,
+      "profile": "frame-aligned convex blend of two measured arm-only trajectories",
       "data_scope": "arm_only_14_dof",
-      "path": "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_minimum_jerk_50hz.csv"
+      "path": "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_measured_blend_1x_50hz.csv",
+      "duration_s": 5.0
     }
   ],
   "files": {
@@ -472,56 +395,56 @@
     },
     "representative_trajectories": {
       "path": "sequences/representative_trajectories_arm_only_sequence_50hz.csv",
-      "duration_s": 86.0,
+      "duration_s": 26.0,
       "items": [
         {
           "trajectory_id": "representative_trajectory_01",
-          "path": "trajectories/representative/representative_arm_trajectory_01_source_036_041s_025x_50hz.csv",
+          "path": "trajectories/representative/representative_arm_trajectory_01_source_036_041s_1x_50hz.csv",
           "source_start_s": 36.0,
           "source_end_s": 41.0,
           "source_duration_s": 5.0,
-          "playback_duration_s": 20.0,
-          "time_stretch": 4.0,
-          "equivalent_source_speed": 0.25,
+          "playback_duration_s": 5.0,
+          "time_stretch": 1.0,
+          "equivalent_source_speed": 1.0,
           "max_joint_span_rad": 1.05774,
           "dominant_joint": "left_elbow_joint",
           "motion_score": 5.01218029350014
         },
         {
           "trajectory_id": "representative_trajectory_02",
-          "path": "trajectories/representative/representative_arm_trajectory_02_source_102_107s_025x_50hz.csv",
+          "path": "trajectories/representative/representative_arm_trajectory_02_source_102_107s_1x_50hz.csv",
           "source_start_s": 102.0,
           "source_end_s": 107.0,
           "source_duration_s": 5.0,
-          "playback_duration_s": 20.0,
-          "time_stretch": 4.0,
-          "equivalent_source_speed": 0.25,
+          "playback_duration_s": 5.0,
+          "time_stretch": 1.0,
+          "equivalent_source_speed": 1.0,
           "max_joint_span_rad": 0.779166,
           "dominant_joint": "left_elbow_joint",
-          "motion_score": 5.93433131040822
+          "motion_score": 5.934331310408219
         },
         {
           "trajectory_id": "representative_trajectory_03",
-          "path": "trajectories/representative/representative_arm_trajectory_03_source_234_239s_025x_50hz.csv",
+          "path": "trajectories/representative/representative_arm_trajectory_03_source_234_239s_1x_50hz.csv",
           "source_start_s": 234.0,
           "source_end_s": 239.0,
           "source_duration_s": 5.0,
-          "playback_duration_s": 20.0,
-          "time_stretch": 4.0,
-          "equivalent_source_speed": 0.25,
+          "playback_duration_s": 5.0,
+          "time_stretch": 1.0,
+          "equivalent_source_speed": 1.0,
           "max_joint_span_rad": 0.913007,
           "dominant_joint": "right_elbow_joint",
           "motion_score": 3.3943399999251707
         },
         {
           "trajectory_id": "representative_trajectory_04",
-          "path": "trajectories/representative/representative_arm_trajectory_04_source_385_390s_025x_50hz.csv",
+          "path": "trajectories/representative/representative_arm_trajectory_04_source_385_390s_1x_50hz.csv",
           "source_start_s": 385.0,
           "source_end_s": 390.0,
           "source_duration_s": 5.0,
-          "playback_duration_s": 20.0,
-          "time_stretch": 4.0,
-          "equivalent_source_speed": 0.25,
+          "playback_duration_s": 5.0,
+          "time_stretch": 1.0,
+          "equivalent_source_speed": 1.0,
           "max_joint_span_rad": 1.122395,
           "dominant_joint": "right_shoulder_pitch_joint",
           "motion_score": 3.772905736657666
@@ -530,172 +453,94 @@
     },
     "synthesized_trajectories": {
       "path": "sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv",
-      "duration_s": 64.0,
+      "duration_s": 19.0,
       "items": [
         {
           "trajectory_id": "synth_trajectory_01",
-          "duration_s": 20.0,
-          "anchor_generation": [
-            {
-              "parents": [
-                4,
-                5
-              ],
-              "interpolation_alpha": 0.5695130522546533,
-              "weights": [
-                0.4304869477453467,
-                0.5695130522546533
-              ]
-            },
-            {
-              "parents": [
-                3,
-                6
-              ],
-              "interpolation_alpha": 0.8080446517239126,
-              "weights": [
-                0.1919553482760874,
-                0.8080446517239126
-              ]
-            },
-            {
-              "parents": [
-                3,
-                2
-              ],
-              "interpolation_alpha": 0.5249719810190353,
-              "weights": [
-                0.4750280189809647,
-                0.5249719810190353
-              ]
-            },
-            {
-              "parents": [
-                5,
-                6
-              ],
-              "interpolation_alpha": 0.8356584793722571,
-              "weights": [
-                0.16434152062774288,
-                0.8356584793722571
-              ]
-            }
+          "parent_representative_trajectory_indices": [
+            4,
+            3
           ],
-          "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+          "parent_source_windows_s": [
+            [
+              385.0,
+              390.0
+            ],
+            [
+              234.0,
+              239.0
+            ]
+          ],
+          "interpolation_alpha": 0.5496521801818952,
+          "parent_weights": [
+            0.4503478198181048,
+            0.5496521801818952
+          ],
+          "equivalent_source_speed": 1.0,
+          "profile": "frame-aligned convex blend of two measured arm-only trajectories",
           "data_scope": "arm_only_14_dof",
-          "path": "trajectories/synthesized/synthesized_arm_trajectory_01_seed20260714_minimum_jerk_50hz.csv"
+          "path": "trajectories/synthesized/synthesized_arm_trajectory_01_seed20260714_measured_blend_1x_50hz.csv",
+          "duration_s": 5.0
         },
         {
           "trajectory_id": "synth_trajectory_02",
-          "duration_s": 20.0,
-          "anchor_generation": [
-            {
-              "parents": [
-                2,
-                1
-              ],
-              "interpolation_alpha": 0.44860233445544784,
-              "weights": [
-                0.5513976655445522,
-                0.44860233445544784
-              ]
-            },
-            {
-              "parents": [
-                6,
-                4
-              ],
-              "interpolation_alpha": 0.757571878270425,
-              "weights": [
-                0.24242812172957495,
-                0.757571878270425
-              ]
-            },
-            {
-              "parents": [
-                1,
-                5
-              ],
-              "interpolation_alpha": 0.3845071809906494,
-              "weights": [
-                0.6154928190093506,
-                0.3845071809906494
-              ]
-            },
-            {
-              "parents": [
-                3,
-                2
-              ],
-              "interpolation_alpha": 0.4876840652105272,
-              "weights": [
-                0.5123159347894728,
-                0.4876840652105272
-              ]
-            }
+          "parent_representative_trajectory_indices": [
+            2,
+            4
           ],
-          "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+          "parent_source_windows_s": [
+            [
+              102.0,
+              107.0
+            ],
+            [
+              385.0,
+              390.0
+            ]
+          ],
+          "interpolation_alpha": 0.720031894088509,
+          "parent_weights": [
+            0.279968105911491,
+            0.720031894088509
+          ],
+          "equivalent_source_speed": 1.0,
+          "profile": "frame-aligned convex blend of two measured arm-only trajectories",
           "data_scope": "arm_only_14_dof",
-          "path": "trajectories/synthesized/synthesized_arm_trajectory_02_seed20260714_minimum_jerk_50hz.csv"
+          "path": "trajectories/synthesized/synthesized_arm_trajectory_02_seed20260714_measured_blend_1x_50hz.csv",
+          "duration_s": 5.0
         },
         {
           "trajectory_id": "synth_trajectory_03",
-          "duration_s": 20.0,
-          "anchor_generation": [
-            {
-              "parents": [
-                2,
-                3
-              ],
-              "interpolation_alpha": 0.31479668916611603,
-              "weights": [
-                0.685203310833884,
-                0.31479668916611603
-              ]
-            },
-            {
-              "parents": [
-                3,
-                4
-              ],
-              "interpolation_alpha": 0.5953639472880762,
-              "weights": [
-                0.4046360527119238,
-                0.5953639472880762
-              ]
-            },
-            {
-              "parents": [
-                3,
-                4
-              ],
-              "interpolation_alpha": 0.153941544460959,
-              "weights": [
-                0.846058455539041,
-                0.153941544460959
-              ]
-            },
-            {
-              "parents": [
-                3,
-                2
-              ],
-              "interpolation_alpha": 0.697929949821172,
-              "weights": [
-                0.30207005017882804,
-                0.697929949821172
-              ]
-            }
+          "parent_representative_trajectory_indices": [
+            2,
+            1
           ],
-          "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+          "parent_source_windows_s": [
+            [
+              102.0,
+              107.0
+            ],
+            [
+              36.0,
+              41.0
+            ]
+          ],
+          "interpolation_alpha": 0.5178371292993109,
+          "parent_weights": [
+            0.4821628707006891,
+            0.5178371292993109
+          ],
+          "equivalent_source_speed": 1.0,
+          "profile": "frame-aligned convex blend of two measured arm-only trajectories",
           "data_scope": "arm_only_14_dof",
-          "path": "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_minimum_jerk_50hz.csv"
+          "path": "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_measured_blend_1x_50hz.csv",
+          "duration_s": 5.0
         }
       ]
     },
     "all": {
       "path": "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv",
-      "duration_s": 208.96,
+      "duration_s": 103.96,
       "section_order": [
         "representative_poses",
         "synthesized_poses",
@@ -731,45 +576,45 @@
           "kind": "section",
           "label": "representative_trajectories",
           "start_s": 55.96,
-          "end_s": 141.96
+          "end_s": 81.96
         },
         {
           "kind": "smooth_section_bridge",
           "label": "to_synthesized_trajectories",
-          "start_s": 141.96,
-          "end_s": 144.96
+          "start_s": 81.96,
+          "end_s": 84.96
         },
         {
           "kind": "section",
           "label": "synthesized_trajectories",
-          "start_s": 144.96,
-          "end_s": 208.96
+          "start_s": 84.96,
+          "end_s": 103.96
         }
       ]
     }
   },
   "generated_file_sha256": {
-    "poses/arm_pose_catalog.csv": "98eba9b59aed9445dec0bd02ab4c6f4f9c10639e3dafc929169120c46e7e17bd",
-    "poses/representative/representative_arm_pose_01_hold20s_50hz.csv": "4273d8b7ee76d4c1768203802a595eca2f02b35cb17ae4f53cbb17ed47607b05",
-    "poses/representative/representative_arm_pose_02_hold20s_50hz.csv": "acf16a025de7a70d63783c4dcbe748ee7723fe35c82040ce7d33f0d0ea7a8044",
-    "poses/representative/representative_arm_pose_03_hold20s_50hz.csv": "293ddba31544d3c60a862d99b43833216b8ff5a16a62b6bc170e20956ca24500",
-    "poses/representative/representative_arm_pose_04_hold20s_50hz.csv": "d1725f3a2b34a2d98c2b3bcfb1b080d01a72e15ce1a31e71bf7c02b305532918",
-    "poses/representative/representative_arm_pose_05_hold20s_50hz.csv": "c721bb442767f01552b1a7a077ef09192cbbd36c5cc317a04dbeb6faf3d73876",
-    "poses/representative/representative_arm_pose_06_hold20s_50hz.csv": "83ddc532b442a5fee0c10d0570a9ced571b6dc4c558ae4ee5dfe9ad0da53cd61",
-    "poses/synthesized/synthesized_arm_pose_01_seed20260714_hold20s_50hz.csv": "46d01bcf7ab59aa5b15037384b4b7954e24015e886f947a767aba6324743a5e1",
-    "poses/synthesized/synthesized_arm_pose_02_seed20260714_hold20s_50hz.csv": "f98c7791c8451370bd933554c1db97e1e5d2283841c39f4cbaf8199ddf422692",
-    "poses/synthesized/synthesized_arm_pose_03_seed20260714_hold20s_50hz.csv": "a6dd9a6f0fdad9bbbc6365bd16b16978c0697fdfa27ded4e7977c4519c358ff3",
-    "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv": "177dd1234cac0f2bb22c15f262288a202d45a0140277d15369c45f2090414a10",
-    "sequences/representative_poses_arm_only_sequence_50hz.csv": "cb9b4e5b9fda19dd4b508b2160bc750f90ae9ca44b44172adb3a60d9703447b7",
-    "sequences/representative_trajectories_arm_only_sequence_50hz.csv": "7fe02bd2e5289bd9b93ab49243f59f14b1e2807436fe2f580b464d23620405cb",
-    "sequences/synthesized_poses_arm_only_sequence_50hz.csv": "8f4d9ffa25fc6cf4b22ba1e931dd347ab5c0a446d927b11b5a2fbbab5fc33103",
-    "sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv": "f848136958afbcdeef6f3556dfea2b3834321045ad273678f0aca7fd1246c097",
-    "trajectories/representative/representative_arm_trajectory_01_source_036_041s_025x_50hz.csv": "7374748609658353ef663b2f1fe3224515f906ff1df7a0e63af21f2146a1fae1",
-    "trajectories/representative/representative_arm_trajectory_02_source_102_107s_025x_50hz.csv": "c4659ee586c0739d59443c1760200eb8eab46d5c38f5c711c1aa060f90e57d3e",
-    "trajectories/representative/representative_arm_trajectory_03_source_234_239s_025x_50hz.csv": "51893df13ff3c84b06ff369e187f05d71c662e4c58107eead651c4f93574aff1",
-    "trajectories/representative/representative_arm_trajectory_04_source_385_390s_025x_50hz.csv": "04ab2fdfcb83278cc8ba81d119591309f502aaa76efc25ee5b1f856d9ca0e7c6",
-    "trajectories/synthesized/synthesized_arm_trajectory_01_seed20260714_minimum_jerk_50hz.csv": "2e14e3be3cd6e75f071704a66340d47214c1fb676a54e6998863b270e2f80268",
-    "trajectories/synthesized/synthesized_arm_trajectory_02_seed20260714_minimum_jerk_50hz.csv": "147f85493cc87d687741e35d56d3932b25806f5480e1a5f2fba5607d6f8dab6f",
-    "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_minimum_jerk_50hz.csv": "f7bd677d6711efc3d521510b772f9729ff0f1ca4ec6bfa5e01ec7a5d824afd06"
+    "poses/arm_pose_catalog.csv": "695e2b0de7206c1625419a7ac8b3e81ee3989497100dca67f1b9fc58c3d627c0",
+    "poses/representative/representative_arm_pose_01_hold20s_50hz.csv": "e06fe1daf17290d5cf80500b21557516d44916b10e402118d0f857a56d69bc93",
+    "poses/representative/representative_arm_pose_02_hold20s_50hz.csv": "6c6f7ec6df95aefebb6cd86c2dcba1a324dfe40cf9b58106e3300d0f6437ac45",
+    "poses/representative/representative_arm_pose_03_hold20s_50hz.csv": "aa63e7c726aa827bde2a40c4d0d9ce70092895a49bda75419c3e4ba8833f7633",
+    "poses/representative/representative_arm_pose_04_hold20s_50hz.csv": "fefac3d3d2255258484e903e10af145685a0439da11ccb5270c253111f7b8b75",
+    "poses/representative/representative_arm_pose_05_hold20s_50hz.csv": "3ba31ff7a0facce526aed08324831b515d98717921d55130f1c26249fb4e0b8c",
+    "poses/representative/representative_arm_pose_06_hold20s_50hz.csv": "24274a69761e7e1865d7d3753f62439c2cba70203f333fb90c791e17f957f6a1",
+    "poses/synthesized/synthesized_arm_pose_01_seed20260714_hold20s_50hz.csv": "c60335f710c9fa3751debf0eec79c59ed9b61cfa29b3d58684e8b5db96b91e57",
+    "poses/synthesized/synthesized_arm_pose_02_seed20260714_hold20s_50hz.csv": "84e04afded70b2a2f4237cc279e85f1150cc19d3948a46829942fcfee43f11ee",
+    "poses/synthesized/synthesized_arm_pose_03_seed20260714_hold20s_50hz.csv": "f2ce58b73056f88e365bfa7c295c4c68cff50dfd6fd0e6527e08fd2b0f3deaee",
+    "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv": "b7c604e3b83491d7e6be69997c79c0002acd92ae713effbcc7475f7512f241ee",
+    "sequences/representative_poses_arm_only_sequence_50hz.csv": "0c4f91a9dcbcdb3093ecc78171d74f1020512bcc9d271c47d7fe9d19b2d5b047",
+    "sequences/representative_trajectories_arm_only_sequence_50hz.csv": "e1bfac30dfc7b0df0ec4180f88ff943e0663e119bbc5576c88507a55372bdf63",
+    "sequences/synthesized_poses_arm_only_sequence_50hz.csv": "ad5832f3daf8bbabe53977e7d352836440ff75ec1fbe293ab1c7b8f2251362fe",
+    "sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv": "cee874d05d1267574d44d87db07d21a38af878acda51a0e50788838bd9b6195d",
+    "trajectories/representative/representative_arm_trajectory_01_source_036_041s_1x_50hz.csv": "f70042b7671f6839faafd2aca11c0bd4622437bfdae602174101f04cb8d2cf09",
+    "trajectories/representative/representative_arm_trajectory_02_source_102_107s_1x_50hz.csv": "9d6eaee0e324c72d53e426ea6e6e8a19cc9789457140d0dbd181f272025f5d16",
+    "trajectories/representative/representative_arm_trajectory_03_source_234_239s_1x_50hz.csv": "f16611b03fcc2310528ef2204e0b68109efba159021d55a841e8032a583c1d4b",
+    "trajectories/representative/representative_arm_trajectory_04_source_385_390s_1x_50hz.csv": "0e33bbdcd60092f0e77c3c83bdbb3d18cd835a1cb18e0792505745c836b9ef20",
+    "trajectories/synthesized/synthesized_arm_trajectory_01_seed20260714_measured_blend_1x_50hz.csv": "e643b2c293b14fef99e16981784e1df6afc2b57bb59a18e424ec794596866650",
+    "trajectories/synthesized/synthesized_arm_trajectory_02_seed20260714_measured_blend_1x_50hz.csv": "98951c94edf5bea42cd051a80d47d474bf3ea2f8fda540324d300cc2b41acfaa",
+    "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_measured_blend_1x_50hz.csv": "4255d32a0f1a1ec608d650491ce82f240b863eb17f81bb40d1da91df7985a7c5"
   }
 }

@@ -15,9 +15,11 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 - 当前 Stand 基线为 `BaselineModel9996/model_9996.pt`，大小 `16,202,421 bytes`，iteration `9996`，actor `96→29`、critic input `297`，SHA-256 为 `bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6`；
 - 随机静止姿态阶段：`4 env × 1 iteration` 正常完成，日志为 `csv_motion_scale=0`、`curriculum_stage=0`；随机起点时间均值 `198.6063 s`、标准差 `137.4946 s`，确认并行环境不是同一起点；
 - 静止阶段长短测：`4 env × 42 iteration`、4032 个环境步正常完成，所有已结束 episode 均为 `time_out`，`base_height=0`、`bad_orientation=0`，保存 `model_41.pt`；
-- 低速连续运动阶段：`2 env × 1 iteration` 正常完成，日志为 `csv_motion_scale=0.25`、`curriculum_stage=2`；
+- 历史低速连续运动阶段：`2 env × 1 iteration` 正常完成，日志为 `csv_motion_scale=0.25`、`curriculum_stage=2`；该记录只对应旧课程；
+- 当前全速连续运动阶段：`2 env × 1 iteration` 已从 `model_9996.pt` 正常完成，日志为 `csv_motion_scale=1.0000`、`curriculum_stage=2.0000`，并在 Stand 专用目录保存 `model_0.pt`；
 - 当前入口已确认从 `model_9996.pt` 做 policy-only 恢复、加载同一冻结基线做 KL，并在 Stand 专用目录生成 `model_0.pt`；
-- 本机已完成 Stand 正式课程训练：`4096 env × 3000 iteration`，阶段 0/1/2 分别覆盖随机静态姿态、`0→0.25x` 平滑加速和 `0.25x` 连续运动；最终保存并验证 `model_2999.pt`，SHA-256 为 `03e0f06c86363f906bbd4ceeb4e51b3897b45de345f0d066b8244bbb354e93e8`；
+- 本机历史 Stand 课程已完成 `4096 env × 3000 iteration`，其阶段 1/2 使用 `0→0.25x` 和 `0.25x`；最终模型为 `model_2999.pt`。当前新课程已改为 `0→1.0x→持续 1.0x`，历史模型不能代表 1.0x 新训练结果；
+- 历史 `model_2999.pt` 已完成当前 103.96 s 确定性双臂测试集的 `1.0x` 整段回放：5198 step、0 次 termination/reset；该结果证明测试链和旧模型在所选样本上可运行，不替代 model9996 新课程的独立验收；
 - 正式训练最终点为 mean episode length `1000/1000`、timeout `99.98%`、base-height termination `0`、bad-orientation termination `0.02%`，torso roll/pitch 误差 `0.0074/0.0130 rad`；
 - 旧 Walk smoke 使用了来源错误的 Stand `model_7999`，只作为路径问题的诊断记录，不能再作为有效 Walk 起点测试；
 - 正确 Walk 起点已锁定为 `checkpoint/model_9996/locomotion.onnx`；原始 `model_9996.pt` 的 8 个 actor 张量与 ONNX 逐元素完全一致；
@@ -235,10 +237,10 @@ RSI：关闭
 | 阶段 | 默认 iteration | 手臂行为 |
 |---|---:|---|
 | 0：随机姿态静止 | `0..499` | reset 随机抽取任意 CSV 相位，整段 episode 保持该姿态 |
-| 1：低速渐入 | `500..1499` | 轨迹速度从 `0` 连续线性增至 `0.25x` |
-| 2：低速运动 | `1500..2999` | 持续按原轨迹 `0.25x` 速度运动 |
+| 1：全速渐入 | `500..1499` | 轨迹速度从 `0` 连续线性增至原始 `1.0x` |
+| 2：全速适应 | `1500..2999` | 持续按原始 `1.0x` 速度运动 |
 
-所有阶段都从随机相位开始。reset 后直接把手臂关节状态写到该相位、关节速度写为 0，所以不存在从默认姿态到随机目标的首步跳变；进入运动阶段后，相位每个 control step 按当前倍率连续推进。非循环轨迹会为 20 s episode 和 `0.25x` 运动预留足够尾部时间。
+所有阶段都从随机相位开始。reset 后直接把手臂关节状态写到该相位、关节速度写为 0，所以不存在从默认姿态到随机目标的首步跳变；进入运动阶段后，相位每个 control step 按当前倍率连续推进。非循环轨迹按最终 `1.0x` 和 20 s episode 计算最大随机起点，保证 episode 内不会因到达 CSV 末尾而提前停住。
 
 行走、步态、摆腿和 directional 奖励被关闭。Stand 奖励全部显式重建，真实 Reward Manager 已确认 21 项有效：
 
@@ -357,6 +359,13 @@ CUDA:      available
 
 `train_g1_amp.sh` 的默认环境已修正为 `env_isaaclab`，默认 Conda 根目录为 `${HOME}/anaconda3`。已激活该环境后，无需再手写 `ISAACLAB_PYTHON`。
 
+本机 `pytest` 可执行文件位于 `~/.local/bin`，其自动加载的第三方插件可能与 Conda 环境中的 `packaging` 冲突；这不影响训练入口。执行仓库静态测试时应明确关闭外部插件自动加载：
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/user/.local/bin/pytest -q \
+  source/legged_lab/test/test_g1_perturb_static.py
+```
+
 ## 6. 训练命令
 
 ### 6.1 Stand 正式分阶段训练
@@ -374,7 +383,7 @@ NUM_ENVS=4096
 MAX_ITERATIONS=3000
 STATIC_ITERATIONS=500
 RAMP_ITERATIONS=1000
-SLOW_MOTION_SCALE=0.25
+FINAL_MOTION_SCALE=1.0
 RANDOMIZATION_STRENGTH=0
 STYLE_REWARD_SCALE=0.0
 TASK_STYLE_LERP=1.0
@@ -401,7 +410,7 @@ RUN_NAME=armhack_stand_curriculum_v2 \
 STATIC_ITERATIONS=800 \
 RAMP_ITERATIONS=1200 \
 MAX_ITERATIONS=4000 \
-SLOW_MOTION_SCALE=0.20 \
+FINAL_MOTION_SCALE=1.0 \
 bash scripts/train_g1_armhack_stand.sh
 ```
 
@@ -422,13 +431,13 @@ RUN_NAME=armhack_stand_static_stage_smoke \
 bash scripts/train_g1_armhack_stand.sh
 ```
 
-直接强制进入 0.25 倍低速运动阶段：
+直接强制进入原始 `1.0x` 运动阶段：
 
 ```bash
 NUM_ENVS=2 MAX_ITERATIONS=1 \
 STATIC_ITERATIONS=0 RAMP_ITERATIONS=0 \
-SLOW_MOTION_SCALE=0.25 \
-RUN_NAME=armhack_stand_slow_motion_smoke \
+FINAL_MOTION_SCALE=1.0 \
+RUN_NAME=armhack_stand_full_speed_smoke \
 bash scripts/train_g1_armhack_stand.sh
 ```
 
@@ -588,7 +597,8 @@ python -m compileall -q \
   source/legged_lab/legged_lab/tasks/locomotion/amp/mdp/commands/nav2_recorded_velocity_command.py \
   scripts/tools/check_armhack_reference_data.py \
   ../rsl_rl/rsl_rl/runners/amp_runner.py
-python -m pytest -q source/legged_lab/test/test_g1_perturb_static.py
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/user/.local/bin/pytest -q \
+  source/legged_lab/test/test_g1_perturb_static.py
 ```
 
 当前结果：`9 passed`。
@@ -643,6 +653,13 @@ checkpoint: ArmHack Checkpoints/StandPerturb/2026-07-14_20-03-15_armhack_stand_m
 恢复: BaselineModel9996/model_9996.pt policy-only；baseline KL=0.003
 运行日志: 明确打印 model_9996、actor 96→29、critic input 297、csv_motion_scale=0、curriculum_stage=0
 结果: 正常完成 Learning iteration 0/1，共 48 environment steps；完成 PPO 更新并保存 Stand 专用 model_0.pt；无 Traceback、Hydra、Python、CUDA 或 Isaac 启动错误
+
+全速 run: logs/rsl_rl/g1_stand_perturb/2026-07-14_20-28-18_armhack_stand_full_speed_1x_smoke_20260714
+checkpoint: ArmHack Checkpoints/StandPerturb/2026-07-14_20-28-18_armhack_stand_full_speed_1x_smoke_20260714/model_0.pt
+设置: 2 env × 1 iteration；STATIC_ITERATIONS=0；RAMP_ITERATIONS=0；FINAL_MOTION_SCALE=1.0
+恢复: BaselineModel9996/model_9996.pt policy-only；baseline KL=0.003
+运行日志: csv_motion_scale=1.0000；curriculum_stage=2.0000
+结果: 正常完成 Learning iteration 0/1，共 48 environment steps；完成 PPO 更新并保存 Stand 专用 model_0.pt；无 Traceback、Hydra、Python、CUDA 或 Isaac 启动错误
 ```
 
 Stand 本机正式课程训练：
@@ -669,9 +686,10 @@ checkpoint SHA-256: 03e0f06c86363f906bbd4ceeb4e51b3897b45de345f0d066b8244bbb354e
 | `test_g1_perturb_static.py`，`9 passed` | 配置、注册、关节映射和推进函数存在 | Isaac 运行时手臂目标确实变化、实际关节跟踪误差 |
 | 随机静态 smoke | 多环境起始相位不同，阶段 0 的速度倍率确为 0 | 固定 100 episode 的统计覆盖率；该随机模式不再作为 GUI 可视化方法 |
 | 低速运动 smoke | 运行时进入阶段 2，`csv_motion_scale=0.25` | 该 smoke 只有 24 control step，只推进原 CSV `0.12 s`，不能作为明显运动的可视化验收 |
+| 当前全速运动 smoke | model9996 入口可在阶段 2 以 `csv_motion_scale=1.0` 完成 rollout、PPO 更新和保存 | 一轮 48 environment steps 不代表全速策略已经收敛 |
 | 3000-iteration 正式训练 | 三阶段真实执行；随机相位分布、episode 存活和躯干指标完整记录 | 独立固定评估中的手臂目标/实际 `q/dq` 变化量和逐窗口完成率 |
 | 旧固定第 0 帧 GUI | checkpoint、任务和 GUI 加载正常 | 姿态切换或慢速运动；该配置实际上反复播放 CSV 开头保持段 |
-| 确定性可视化数据集 | 全量遍历后固定选出 6 个代表姿态、4 段代表轨迹，并固定生成 3 个姿态和 3 条轨迹；CSV 完整性与重建可复现性通过 | 策略是否能稳定完成每一项，仍需 GUI/固定指标逐项验收 |
+| 当前 `1.0x` 确定性可视化数据集 | 全量遍历后固定选出 6 个代表姿态、4 段实测全速轨迹，并固定生成 3 个姿态和 3 条实测轨迹凸组合；CSV 完整性与重建可复现性通过；历史 model2999 整段 5198 step 为 0 次 termination | 新 model9996 课程完成后的同协议对照，以及约 405 s 完整源数据压力测试 |
 
 因此，“课程确实执行过”可以确认；“所有姿态和运动都已完成独立可视化/量化验收”不能确认。第 9 节给出补齐这两类可视化的方法。
 
@@ -765,19 +783,19 @@ python scripts/tools/check_armhack_reference_data.py --stand-only
 - 代表姿态：按各关节的 P5–P95 范围归一化，再用从中位姿态开始的最远点覆盖法挑选 6 个姿态，避免只挑到相邻或重复姿态；
 - 代表轨迹：用 5 s 滑动窗口遍历全数据，过滤低运动窗口，再按姿态、关节幅值、速度和端点变化的联合描述选出 4 段相互至少间隔 10 s 的高运动量窗口；
 - 合成姿态：固定种子 `20260714`，每次只选两组实测代表手臂姿态做有界凸插值，一次性写出 3 个双臂 CSV；不再加入逐关节随机扰动，也不会生成全身姿态；
-- 合成轨迹：固定种子从实测双臂姿态的两两插值中生成 4 个 14-DoF 手臂锚点，以五次 minimum-jerk 曲线连接，写出 3 条 20 s 平滑双臂轨迹；
+- 合成轨迹：固定种子选取两条等长的实测 `1.0x` 双臂轨迹，按同一时刻逐帧做凸组合，写出 3 条 5 s、50 Hz 合成轨迹；速度和加速度保持在两条父轨迹的凸包内，不生成腰腿数据；
 - 运行时固定 `csv_randomize_start_on_reset=False`。所谓“随机合成”只发生在离线构建阶段，固定种子、父姿态、权重和文件 SHA-256 都记录在 `manifest.json`，因此每次回放一致。
 
 6 个代表姿态来自原 CSV 的 `261.395829`、`404.897585`、`35.204045`、`133.214841`、`386.982487` 和 `105.240482 s`。4 段代表轨迹为：
 
 | 编号 | 原始窗口 | 主要变化关节 | 最大关节跨度 | 可视化时长 |
 |---|---:|---|---:|---:|
-| 1 | 36–41 s | left elbow | 1.0577 rad | 20 s |
-| 2 | 102–107 s | left elbow | 0.7792 rad | 20 s |
-| 3 | 234–239 s | right elbow | 0.9130 rad | 20 s |
-| 4 | 385–390 s | right shoulder pitch | 1.1224 rad | 20 s |
+| 1 | 36–41 s | left elbow | 1.0577 rad | 5 s，`1.0x` |
+| 2 | 102–107 s | left elbow | 0.7792 rad | 5 s，`1.0x` |
+| 3 | 234–239 s | right elbow | 0.9130 rad | 5 s，`1.0x` |
+| 4 | 385–390 s | right shoulder pitch | 1.1224 rad | 5 s，`1.0x` |
 
-每段原始 5 s 轨迹被时间拉伸到 20 s，等价于训练阶段 2 的 `0.25x` 源轨迹速度；播放时使用 `csv_motion_scale=1.0`，因为降速已经固化在新 CSV 中，不能再乘一次 `0.25`。
+代表轨迹不再做时间拉伸：原始 5 s 窗口仍播放 5 s，`time_stretch=1.0`、`equivalent_source_speed=1.0`。合成轨迹也由两条实测 `1.0x` 窗口逐帧混合。播放端固定 `csv_motion_scale=1.0`，因此逐项轨迹测试与新课程最终阶段速度一致。
 
 ### 9.3 一条命令顺序看完全部测试
 
@@ -789,7 +807,7 @@ cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
 bash scripts/vis_g1_armhack_stand_eval.sh
 ```
 
-脚本默认使用正式 `model_2999.pt`、单环境、正面跟随相机和实时 GUI。总时长为 208.96 s，时间线固定为：
+脚本默认使用历史正式 `model_2999.pt`、单环境、正面跟随相机和实时 GUI；训练完成后应通过 `CHECKPOINT=...` 指向新的 1.0x 模型。当前完整确定性序列总时长为 103.96 s，时间线固定为：
 
 | 可视化时间 | 内容 |
 |---:|---|
@@ -797,13 +815,13 @@ bash scripts/vis_g1_armhack_stand_eval.sh
 | 33.98–36.98 s | 平滑段间连接 |
 | 36.98–52.96 s | 3 个固定种子合成姿态 |
 | 52.96–55.96 s | 平滑段间连接 |
-| 55.96–141.96 s | 4 条代表轨迹，轨迹之间 2 s 平滑连接 |
-| 141.96–144.96 s | 平滑段间连接 |
-| 144.96–208.96 s | 3 条固定种子合成 minimum-jerk 轨迹 |
+| 55.96–81.96 s | 4 条 `1.0x` 代表轨迹，轨迹之间 2 s 平滑连接 |
+| 81.96–84.96 s | 平滑段间连接 |
+| 84.96–103.96 s | 3 条固定种子合成 `1.0x` 轨迹 |
 
 若模型中途触发终止，环境会从该 CSV 的第 0 帧重新开始，这是一个真实失败，不能把 reset 后的后续画面当作已覆盖剩余测试。此时应按下一节逐项启动，直接定位失败样本。
 
-2026-07-14 已在 RTX 4090 上实际启动 `MODE=all` GUI，并连续运行超过一轮 208.96 s 序列所需的墙钟时间；进程、GPU 和窗口持续正常，日志未出现 Traceback、Hydra、CUDA 或 Isaac 异常。这里确认的是“完整确定性回放入口持续可运行”，不是“14 个测试 item 全部稳定通过”：GUI 内若发生任务 termination 会自动从第 0 帧重放，逐项性能仍应使用第 9.4 节入口记录。
+此前 208.96 s 的回放使用旧 `0.25x` 离线拉伸数据，只作为历史执行链记录。当前 103.96 s 数据集已在 manifest 中锁定 `trajectory_speed_scale=1.0`；新性能结论必须来自本节当前文件，而不能沿用旧报告。
 
 ### 9.4 分类别或逐项复测
 
@@ -840,12 +858,12 @@ bash scripts/vis_g1_armhack_stand_eval.sh
 录制完整确定性序列：
 
 ```bash
-HEADLESS=True REAL_TIME=False MAX_STEPS=10500 \
+HEADLESS=True REAL_TIME=False MAX_STEPS=5200 \
 bash scripts/vis_g1_armhack_stand_eval.sh \
-  --video --video_length 10500
+  --video --video_length 5200
 ```
 
-20 step 只能证明 checkpoint、任务、确定性 CSV 和仿真链能加载；完整 208.96 s 序列需要 10,448 个 50 Hz control step。视频默认写到 checkpoint 所在 run 的 `videos/play/`，该目录已被 `.gitignore` 排除。
+20 step 只能证明 checkpoint、任务、确定性 CSV 和仿真链能加载；完整 103.96 s 序列需要 5,198 个 50 Hz control step。视频默认写到 checkpoint 所在 run 的 `videos/play/`，该目录已被 `.gitignore` 排除。
 
 ### 9.6 checkpoint 同目录测试报告
 
@@ -865,7 +883,7 @@ Test Reports/StandArmOnly/model_2999__all.md
 
 报告记录 checkpoint 与测试 CSV 的绝对路径/SHA-256、控制步数、测试时长、termination/reset 次数、躯干 Important Metrics，以及机器人全部 29 个实际关节的统计。`平均逐步波动` 定义为同一 episode 内相邻 50 Hz 控制帧的 `mean(|q[t]-q[t-1]|)`，单位为 `rad/step`；reset 前后的跳变不计入。报告把 14 个手臂关节标为“输入关节”，把 15 个腰腿关节标为“平衡策略关节”，避免误解为测试 CSV 在控制全身。
 
-2026-07-14 对历史 `model_2999.pt` 完成了 `MODE=all` 的 10,448-step headless 实测，报告成功写入上述路径，29 个关节均有统计。综合均值中躯干 roll/pitch 误差为 `0.007405/0.035299 rad`，躯干水平角速度误差为 `0.074307 rad/s`，高度误差为 `0.008472 m`。本次出现 `1` 次 termination/reset，因此该综合序列不能判定为完整稳定通过；reset 后 CSV 会重新从头开始，需继续按第 9.4 节逐项定位失败样本。
+2026-07-14 对历史 `model_2999.pt` 完成了当前 `1.0x` 测试集的 `MODE=all`、5198-step headless 实测，报告成功写入上述路径，29 个关节均有统计。整段 103.96 s 回放出现 `0` 次 termination/reset；躯干 roll/pitch 误差均值为 `0.006214/0.034164 rad`，躯干水平角速度误差为 `0.062180 rad/s`，高度误差为 `0.007344 m`。这是对 6 个代表静态姿态、3 个合成静态姿态、4 条实测 `1.0x` 轨迹和 3 条实测混合 `1.0x` 轨迹的确定性测试结果；它不代表已覆盖约 405 s 的全部源数据，也不代表尚未完成的 model9996 新课程结果。
 
 2026-07-14 已实际执行上述 `representative_trajectory ITEM=1` 的 20-step headless smoke：确定性 CSV 路径解析成功，`model_2999.pt` 以 policy-only 方式加载，Isaac Sim 完成 20 step 后按 `max_steps` 正常退出，无 Python、Hydra、Isaac 或 CUDA 异常。该结果只确认新入口可运行，不代表 20 s 轨迹已完整通过稳定性验收。
 
@@ -905,7 +923,7 @@ tensorboard --logdir logs/rsl_rl/g1_walk_perturb
 | walking 父配置把奖励设为 `None` | Stand 显式重新创建全部任务奖励 | Reward Manager 打印 21 个有效 term，包括 `alive` 和 `termination_penalty=-200` |
 | 全负奖励可能鼓励提前摔倒 | 加入存活、零水平速度、零 yaw 角速度和双支撑正奖励 | 两个 smoke run 均成功解析并完成 PPO 更新 |
 | 随机 CSV 起点首步跳变 | reset 后直接把 14 个手臂关节写到随机目标，速度为 0 | 静止阶段真实运行无接口错误，`csv_motion_scale=0` |
-| CSV 零阶保持 | 改为连续相位并对相邻帧线性插值 | 低速阶段真实运行，`csv_motion_scale=0.25` |
+| CSV 零阶保持 | 改为连续相位并对相邻帧线性插值 | 最终阶段真实运行，`csv_motion_scale=1.0000`、`curriculum_stage=2.0000` |
 | 初始根状态含随机位置/速度 | Stand 的 x/y/yaw 与六维根速度全部固定为 0 | 新 run 保存的解析配置与 Event Manager 正常 |
 | 早期课程混入 push | Stand 显式关闭 `push_robot`，专用脚本默认随机化强度 0 | Event Manager 中不存在 interval push |
 | 当前训练起点更新 | Stand 基线改为 `BaselineModel9996/model_9996.pt`；脚本锁定 SHA-256 和大小 | 真实 smoke 明确打印 `Loaded policy-only ... model_9996.pt`，并保存新的 `model_0.pt` |
@@ -927,7 +945,7 @@ base_ang_vel(3) + projected_gravity(3) + velocity_command(3)
 
 - 当前权重能否同时获得 20 s 高完成率和更低的 torso RMS，需看正式 TensorBoard 和固定评估，冒烟测试不能回答性能问题；
 - 课程目前按全局 step 固定切换，不是按完成率自动晋级；如果阶段 0 在 500 iteration 时仍未收敛，应延长 `STATIC_ITERATIONS`；
-- 当前最终速度为原轨迹 `0.25x`。只有低速课程收敛后，才应单独实验 `0.5x` 和 `1.0x`；
+- 当前课程最终速度已经提升为原轨迹 `1.0x`；必须单独观察阶段 1 后半段和阶段 2 的完成率，确认全速扰动没有引入新的摔倒模式；
 - 仍需统计目标被 soft joint limit 裁剪的比例，并记录目标/实际 arm `q/dq/ddq` 以诊断执行器跟踪；
 - 20 s 训练完成率不能替代约 405 s 全轨迹固定评估；
 - Stand 仍继承 AMP walking 配置并加载运动数据，功能上无误但启动慢，后续可把纯静态任务拆成更轻的 runner/config。
@@ -975,8 +993,8 @@ base_ang_vel(3) + projected_gravity(3) + velocity_command(3)
 | 阶段 | iteration | 手臂扰动 | 目标 |
 |---|---:|---|---|
 | A：任意姿态静止 | `0..499` | 每次 reset 随机抽取 CSV 姿态并保持 | 先学会在轨迹任一点静态站稳 |
-| B：平滑加速 | `500..1499` | 速度从 `0` 线性升到 `0.25x` | 避免课程边界突然增加扰动 |
-| C：缓慢运动 | `1500..2999` | 连续 `0.25x` 轨迹 | 学会对缓慢手臂运动做纯反馈补偿 |
+| B：全速渐入 | `500..1499` | 速度从 `0` 线性升到 `1.0x` | 避免课程边界突然增加扰动 |
+| C：全速适应 | `1500..2999` | 连续原始 `1.0x` 轨迹 | 学会对完整速度手臂运动做纯反馈补偿 |
 
 三段在一个 run 中完成，当前入口始终从同一个 `model_9996` policy-only 初始化，style reward 为 0，baseline KL 为 `0.003`。episode 固定 20 s，初始根状态严格静止，push 和 domain randomization 在第一轮课程中关闭。
 
@@ -990,7 +1008,7 @@ base_ang_vel(3) + projected_gravity(3) + velocity_command(3)
 - `ArmHack/csv_motion_scale` 在阶段 A 必须为 0；
 - 固定 100 episode 的随机静止姿态评估是否通过。
 
-若阶段 A 未收敛，应停止当前实验并增大 `STATIC_ITERATIONS`，而不是继续把手臂加速。阶段 C 收敛后，再分别启动 `0.5x` 与 `1.0x` 的单变量实验；质量、摩擦、执行器随机化和 interval push 最后逐步加入，不与手臂速度升级同时修改。
+若阶段 A 未收敛，应停止当前实验并增大 `STATIC_ITERATIONS`，而不是继续把手臂加速。阶段 C 已直接训练 `1.0x`；若其失败，应先比较阶段 B 中 `0.25x/0.5x/0.75x` 附近的指标定位临界速度，再调整 ramp 时长。质量、摩擦、执行器随机化和 interval push 最后逐步加入，不与手臂速度课程同时修改。
 
 ### 12.3 明确禁止的观测改动
 
@@ -1015,7 +1033,7 @@ seed、episode 时长、随机化开关
 
 ### 13.2 三类评估分开报告
 
-- 训练分布统计：20 s、随机 phase、`0.25x`，统计至少 100 个 episode 的完成率和 termination 分布；它用于总体统计，不作为人工 GUI 抽样；
+- 训练分布统计：20 s、随机 phase、最终 `1.0x`，统计至少 100 个 episode 的完成率和 termination 分布；它用于总体统计，不作为人工 GUI 抽样；
 - 确定性日常评估：使用第 9 节的固定可视化数据集，逐项覆盖 6+3 个姿态和 4+3 条轨迹，报告每个 item 是否完成；
 - 完整源数据压力测试：固定 phase、固定零初速和固定物理参数，以 `1.0x` 播放约 405 s 原始 CSV；历史 `MAX_STEPS=10123` 只覆盖约 202.46 s，不能称作完整播放。
 
@@ -1023,7 +1041,7 @@ seed、episode 时长、随机化开关
 
 ### 13.3 严格长时回放模板
 
-`STAND_CKPT` 必须手工指向正式模型。回放 reset 会直接把手臂初始化到第 0 帧，所以没有默认姿态到首帧的目标跳变。为了在约 410 s 内覆盖完整原始轨迹，下面显式关闭训练课程并用 `1.0x` 速度播放；它与默认训练的 `0.25x` 低速分布不同，属于更强的长时压力测试。若坚持用训练速度完整覆盖约 404.92 s 的源轨迹，需要约 `1619.67 s` 仿真时间和约 `80,984` 个 50 Hz control step，不适合作为日常 GUI 快速检查。
+`STAND_CKPT` 必须手工指向正式模型。回放 reset 会直接把手臂初始化到第 0 帧，所以没有默认姿态到首帧的目标跳变。为了在约 410 s 内覆盖完整原始轨迹，下面显式关闭训练课程并用 `1.0x` 速度播放；这与当前课程最终阶段速度一致，是完整数据压力测试。约 404.92 s 原始轨迹需要约 20,246 个 50 Hz control step，模板保留少量尾部余量。
 
 ```bash
 STAND_CKPT='/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714/model_2999.pt'

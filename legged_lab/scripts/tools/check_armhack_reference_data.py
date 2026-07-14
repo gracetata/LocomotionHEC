@@ -243,6 +243,8 @@ def check_stand_arm_only_test_data() -> None:
         raise ValueError("Stand test data must explicitly contain arm-only 14-DoF targets")
     if generation.get("controlled_joint_names") != ARM_JOINT_COLUMNS:
         raise ValueError("Stand test data joint list must contain exactly the canonical 14 arm joints")
+    if not math.isclose(float(generation.get("trajectory_speed_scale", -1.0)), 1.0, abs_tol=1.0e-12):
+        raise ValueError("Stand trajectory tests must use the original 1.0x arm-trajectory speed")
     if generation.get("seed") != 20260714 or generation.get("runtime_random_sampling") is not False:
         raise ValueError("Stand visualization suite must use seed 20260714 and disable runtime sampling")
     if len(manifest.get("representative_poses", [])) != 6:
@@ -253,6 +255,12 @@ def check_stand_arm_only_test_data() -> None:
         raise ValueError("Stand visualization suite must contain 4 representative trajectories")
     if len(manifest.get("synthesized_trajectories", [])) != 3:
         raise ValueError("Stand visualization suite must contain 3 synthesized trajectories")
+    for trajectory in [
+        *manifest.get("representative_trajectories", []),
+        *manifest.get("synthesized_trajectories", []),
+    ]:
+        if not math.isclose(float(trajectory.get("equivalent_source_speed", -1.0)), 1.0, abs_tol=1.0e-12):
+            raise ValueError(f"Stand trajectory is not 1.0x: {trajectory.get('path', '<unknown>')}")
 
     generated_hashes = manifest.get("generated_file_sha256", {})
     actual_csv_names = {
@@ -287,15 +295,19 @@ def check_stand_arm_only_test_data() -> None:
             raise ValueError(
                 f"Visualization CSV {file_name} has a discontinuous frame jump: {max_frame_delta:.6f} rad"
             )
-        if file_name.startswith("trajectories/representative/") and rows != 1001:
-            raise ValueError(f"Representative trajectory {file_name} must contain 20 s at 50 Hz")
-        if file_name.startswith("trajectories/synthesized/") and rows != 1001:
-            raise ValueError(f"Synthesized trajectory {file_name} must contain 20 s at 50 Hz")
+        if file_name.startswith("trajectories/representative/") and (
+            rows != 251 or not math.isclose(final_time, 5.0, abs_tol=1.0e-8)
+        ):
+            raise ValueError(f"Representative trajectory {file_name} must contain 5 s at 50 Hz and 1.0x speed")
+        if file_name.startswith("trajectories/synthesized/") and (
+            rows != 251 or not math.isclose(final_time, 5.0, abs_tol=1.0e-8)
+        ):
+            raise ValueError(f"Synthesized trajectory {file_name} must contain 5 s at 50 Hz and 1.0x speed")
         if final_time < 0.0:
             raise ValueError(f"Visualization CSV {file_name} has a negative duration")
 
     all_file = manifest.get("files", {}).get("all", {})
-    if float(all_file.get("duration_s", -1.0)) < 200.0:
+    if float(all_file.get("duration_s", -1.0)) < 100.0:
         raise ValueError("Unexpectedly short deterministic all-sequence duration")
     print(
         "[OK] Stand arm-only test data: 6 representative poses, 4 representative trajectories, "

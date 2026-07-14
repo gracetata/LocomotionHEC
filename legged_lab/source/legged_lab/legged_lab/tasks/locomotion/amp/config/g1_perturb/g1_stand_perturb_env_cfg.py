@@ -40,10 +40,10 @@ class G1StandPerturbEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg
         csv_curriculum_enabled=True,
         # G1 AMP collects 24 control steps per PPO iteration. The first 500
         # iterations use random static poses; the next 1000 ramp continuously
-        # to quarter-speed motion.
+        # to the original recorded arm-trajectory speed.
         csv_curriculum_static_steps=12_000,
         csv_curriculum_ramp_steps=24_000,
-        csv_curriculum_motion_scale=0.25,
+        csv_curriculum_motion_scale=1.0,
     )
 
     def __post_init__(self):

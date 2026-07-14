@@ -13,6 +13,7 @@ import argparse
 import csv
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,7 +74,7 @@ def _load_source(path: Path) -> tuple[list[str], np.ndarray, np.ndarray]:
 def _write_trajectory(path: Path, joint_names: list[str], positions: np.ndarray, fps: float) -> float:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(["time_s", *joint_names])
         for index, pose in enumerate(positions):
             writer.writerow([f"{index / fps:.8f}", *(f"{value:.8f}" for value in pose)])
@@ -314,42 +315,41 @@ def _synthesize_poses(
 
 
 def _synthesize_trajectories(
-    representative_poses: np.ndarray,
+    representative_trajectories: list[np.ndarray],
+    representative_windows: list[MotionWindow],
     count: int,
     rng: np.random.Generator,
-    fps: float,
+    speed_scale: float,
 ) -> tuple[list[np.ndarray], list[dict[str, object]]]:
-    """Create 20 s arm-only trajectories between valid interpolated arm poses."""
+    """Blend pairs of measured 1x arm trajectories without creating full-body data."""
+    if len(representative_trajectories) < 2:
+        raise ValueError("At least two representative trajectories are required for synthesis.")
+    if any(trajectory.shape != representative_trajectories[0].shape for trajectory in representative_trajectories):
+        raise ValueError("Representative trajectories must share the same shape before synthesis.")
+
     trajectories: list[np.ndarray] = []
     metadata: list[dict[str, object]] = []
     for trajectory_index in range(count):
-        anchors: list[np.ndarray] = []
-        anchor_metadata: list[dict[str, object]] = []
-        for _ in range(4):
-            parent_indices = rng.choice(len(representative_poses), size=2, replace=False)
-            alpha = float(rng.uniform(0.15, 0.85))
-            anchor = (1.0 - alpha) * representative_poses[parent_indices[0]] + alpha * representative_poses[
-                parent_indices[1]
-            ]
-            anchors.append(anchor)
-            anchor_metadata.append(
-                {
-                    "parents": [int(value + 1) for value in parent_indices],
-                    "interpolation_alpha": alpha,
-                    "weights": [1.0 - alpha, alpha],
-                }
-            )
-        hold_start = np.repeat(anchors[0][None, :], int(round(2.0 * fps)) + 1, axis=0)
-        transitions = [_min_jerk(anchors[index], anchors[index + 1], 5.0, fps) for index in range(3)]
-        hold_end = np.repeat(anchors[-1][None, :], int(round(3.0 * fps)), axis=0)
-        trajectory = np.concatenate([hold_start, *transitions, hold_end], axis=0)
+        parent_indices = rng.choice(len(representative_trajectories), size=2, replace=False)
+        alpha = float(rng.uniform(0.25, 0.75))
+        first_index, second_index = (int(value) for value in parent_indices)
+        trajectory = (
+            (1.0 - alpha) * representative_trajectories[first_index]
+            + alpha * representative_trajectories[second_index]
+        )
         trajectories.append(trajectory)
         metadata.append(
             {
                 "trajectory_id": f"synth_trajectory_{trajectory_index + 1:02d}",
-                "duration_s": (len(trajectory) - 1) / fps,
-                "anchor_generation": anchor_metadata,
-                "profile": "quintic minimum-jerk, 2 s initial hold, three 5 s transitions, 3 s final hold",
+                "parent_representative_trajectory_indices": [first_index + 1, second_index + 1],
+                "parent_source_windows_s": [
+                    [representative_windows[first_index].start_s, representative_windows[first_index].end_s],
+                    [representative_windows[second_index].start_s, representative_windows[second_index].end_s],
+                ],
+                "interpolation_alpha": alpha,
+                "parent_weights": [1.0 - alpha, alpha],
+                "equivalent_source_speed": speed_scale,
+                "profile": "frame-aligned convex blend of two measured arm-only trajectories",
                 "data_scope": "arm_only_14_dof",
             }
         )
@@ -365,7 +365,7 @@ def _write_pose_catalog(
     synthesized_poses: np.ndarray,
 ) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(["pose_id", "kind", "source_time_s", *joint_names])
         for index, (source_index, pose) in enumerate(
             zip(representative_indices, representative_poses, strict=True), start=1
@@ -381,6 +381,11 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
     joint_names, times, positions = _load_source(args.source)
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
+    if not np.isclose(args.trajectory_speed_scale, 1.0, rtol=0.0, atol=1.0e-12):
+        raise ValueError("Stand evaluation trajectories are fixed to the original 1.0x source speed.")
+    for generated_directory in ("poses", "trajectories", "sequences"):
+        shutil.rmtree(output / generated_directory, ignore_errors=True)
+    (output / "manifest.json").unlink(missing_ok=True)
     rng = np.random.default_rng(args.seed)
 
     representative_indices, representative_poses, _lower, _upper = _select_representative_poses(
@@ -445,13 +450,14 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
     )
     representative_trajectories: list[np.ndarray] = []
     representative_trajectory_metadata: list[dict[str, object]] = []
+    playback_duration_s = args.source_window_s / args.trajectory_speed_scale
     for index, window in enumerate(selected_windows, start=1):
         trajectory = _resample_source_window(
             times,
             positions,
             window.start_s,
             window.end_s,
-            args.playback_window_s,
+            playback_duration_s,
             args.fps,
         )
         representative_trajectories.append(trajectory)
@@ -459,7 +465,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
             output
             / "trajectories"
             / "representative"
-            / f"representative_arm_trajectory_{index:02d}_source_{int(window.start_s):03d}_{int(window.end_s):03d}s_025x_50hz.csv"
+            / f"representative_arm_trajectory_{index:02d}_source_{int(window.start_s):03d}_{int(window.end_s):03d}s_1x_50hz.csv"
         )
         duration = _write_trajectory(path, joint_names, trajectory, args.fps)
         representative_trajectory_metadata.append(
@@ -470,8 +476,8 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
                 "source_end_s": window.end_s,
                 "source_duration_s": args.source_window_s,
                 "playback_duration_s": duration,
-                "time_stretch": args.playback_window_s / args.source_window_s,
-                "equivalent_source_speed": args.source_window_s / args.playback_window_s,
+                "time_stretch": playback_duration_s / args.source_window_s,
+                "equivalent_source_speed": args.trajectory_speed_scale,
                 "max_joint_span_rad": window.max_joint_span_rad,
                 "dominant_joint": window.dominant_joint,
                 "motion_score": window.motion_score,
@@ -492,17 +498,18 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
     }
 
     synthesized_trajectories, synthesized_trajectory_metadata = _synthesize_trajectories(
-        representative_poses,
+        representative_trajectories,
+        selected_windows,
         args.synthesized_trajectory_count,
         rng,
-        args.fps,
+        args.trajectory_speed_scale,
     )
     for index, trajectory in enumerate(synthesized_trajectories, start=1):
         path = (
             output
             / "trajectories"
             / "synthesized"
-            / f"synthesized_arm_trajectory_{index:02d}_seed{args.seed}_minimum_jerk_50hz.csv"
+            / f"synthesized_arm_trajectory_{index:02d}_seed{args.seed}_measured_blend_1x_50hz.csv"
         )
         duration = _write_trajectory(path, joint_names, trajectory, args.fps)
         synthesized_trajectory_metadata[index - 1]["path"] = path.relative_to(output).as_posix()
@@ -582,7 +589,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         source_path = str(args.source)
 
     manifest: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "data_scope": "arm_only_14_dof",
         "contains_full_body_state": False,
         "source": {
@@ -597,9 +604,10 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
             "fps": args.fps,
             "controlled_joint_count": len(joint_names),
             "controlled_joint_names": joint_names,
+            "trajectory_speed_scale": args.trajectory_speed_scale,
             "representative_pose_method": "normalized farthest-point coverage from median pose",
             "representative_trajectory_method": "diverse non-overlapping 5 s high-motion windows",
-            "synthesis_method": "pairwise convex interpolation of measured arm poses plus quintic minimum-jerk arm trajectories",
+            "synthesis_method": "pairwise convex interpolation of measured arm poses and frame-aligned measured 1x arm trajectories",
             "runtime_random_sampling": False,
         },
         "representative_poses": [
@@ -640,7 +648,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--pose-transition-s", type=float, default=2.0)
     parser.add_argument("--static-pose-test-duration-s", type=float, default=20.0)
     parser.add_argument("--source-window-s", type=float, default=5.0)
-    parser.add_argument("--playback-window-s", type=float, default=20.0)
+    parser.add_argument("--trajectory-speed-scale", type=float, default=1.0)
     parser.add_argument("--window-stride-s", type=float, default=1.0)
     parser.add_argument("--minimum-window-separation-s", type=float, default=10.0)
     parser.add_argument("--trajectory-bridge-s", type=float, default=2.0)
