@@ -91,6 +91,18 @@ parser.add_argument(
     default=None,
     help="Arm-only test CSV recorded and verified in the report.",
 )
+parser.add_argument(
+    "--armhack_stand_manifest",
+    type=str,
+    default=None,
+    help="Deterministic ArmHack Stand manifest used for plot stage annotations.",
+)
+parser.add_argument(
+    "--armhack_stand_payload_kg",
+    type=float,
+    default=0.0,
+    help="Fixed added mass per wrist-yaw link recorded in the ArmHack Stand report.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -113,6 +125,7 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import csv
 import hashlib
+import json
 import math
 import os
 import time
@@ -408,15 +421,43 @@ def _sha256(path: Path) -> str:
 
 
 class _ArmHackStandJointFluctuationReport:
-    """Accumulate actual 29-DoF joint statistics for a Stand playback run."""
+    """Accumulate joint and torso world-frame 6D displacement statistics."""
 
-    def __init__(self, env, report_path: str, checkpoint_path: str, test_id: str, test_data_path: str | None):
+    _POSE_COMPONENTS = (
+        ("delta_x_w", "m"),
+        ("delta_y_w", "m"),
+        ("delta_z_w", "m"),
+        ("delta_roll_w", "rad"),
+        ("delta_pitch_w", "rad"),
+        ("delta_yaw_w", "rad"),
+    )
+    _POSE_NORM_COMPONENTS = (
+        ("horizontal_translation_norm", "m"),
+        ("translation_3d_norm", "m"),
+        ("rpy_displacement_norm", "rad"),
+    )
+
+    def __init__(
+        self,
+        env,
+        report_path: str,
+        checkpoint_path: str,
+        test_id: str,
+        test_data_path: str | None,
+        test_manifest_path: str | None,
+        payload_kg: float,
+    ):
         self._base_env = env.unwrapped
         self._robot = self._base_env.scene["robot"]
         self._report_path = Path(report_path).expanduser().resolve()
+        self._plot_path = self._report_path.with_name(f"{self._report_path.stem}__torso_world_6d.png")
         self._checkpoint_path = Path(checkpoint_path).expanduser().resolve()
         self._test_id = str(test_id)
         self._test_data_path = Path(test_data_path).expanduser().resolve() if test_data_path else None
+        self._test_manifest_path = (
+            Path(test_manifest_path).expanduser().resolve() if test_manifest_path else None
+        )
+        self._payload_kg = float(payload_kg)
         self._joint_names = list(self._robot.joint_names)
         self._arm_joint_names = set(getattr(self._base_env.cfg.upper_body_perturbation, "joint_names", []))
         num_joints = len(self._joint_names)
@@ -431,16 +472,40 @@ class _ArmHackStandJointFluctuationReport:
         self._termination_events = 0
         self._previous_joint_pos: torch.Tensor | None = None
 
+        torso_body_ids, _ = self._robot.find_bodies("torso_link", preserve_order=True)
+        if len(torso_body_ids) != 1:
+            raise ValueError(f"ArmHack Stand report expected one torso_link, got {torso_body_ids}")
+        self._torso_body_id = int(torso_body_ids[0])
+        self._torso_pose_reference_w = self._current_torso_pose_w()
+        self._initial_torso_pose_reference_mean_w = torch.mean(self._torso_pose_reference_w, dim=0).cpu()
+        self._torso_pose_sum = torch.zeros(6, dtype=torch.float64, device=device)
+        self._torso_pose_abs_sum = torch.zeros(6, dtype=torch.float64, device=device)
+        self._torso_pose_sum_sq = torch.zeros(6, dtype=torch.float64, device=device)
+        self._torso_pose_minimum = torch.full((6,), float("inf"), dtype=torch.float64, device=device)
+        self._torso_pose_maximum = torch.full((6,), float("-inf"), dtype=torch.float64, device=device)
+        self._torso_pose_sample_count = 0
+        self._torso_norm_sum = torch.zeros(3, dtype=torch.float64, device=device)
+        self._torso_norm_sum_sq = torch.zeros(3, dtype=torch.float64, device=device)
+        self._torso_norm_maximum = torch.zeros(3, dtype=torch.float64, device=device)
+        self._torso_pose_delta_trace: list[torch.Tensor] = []
+
+    def _current_torso_pose_w(self) -> torch.Tensor:
+        torso_pos_w = self._robot.data.body_pos_w[:, self._torso_body_id, :].detach().to(dtype=torch.float64)
+        torso_quat_w = self._robot.data.body_quat_w[:, self._torso_body_id, :].detach()
+        roll, pitch, yaw = math_utils.euler_xyz_from_quat(torso_quat_w)
+        torso_rpy_w = torch.stack((roll, pitch, yaw), dim=1).to(dtype=torch.float64)
+        return torch.cat((torso_pos_w, torso_rpy_w), dim=1)
+
     def update(self, dones: torch.Tensor) -> None:
+        done_mask = dones.detach().bool().reshape(-1)
+        self._termination_events += int(torch.sum(done_mask).item())
+
         joint_pos = self._robot.data.joint_pos.detach().to(dtype=torch.float64)
         self._sum += torch.sum(joint_pos, dim=0)
         self._sum_sq += torch.sum(joint_pos * joint_pos, dim=0)
         self._minimum = torch.minimum(self._minimum, torch.amin(joint_pos, dim=0))
         self._maximum = torch.maximum(self._maximum, torch.amax(joint_pos, dim=0))
         self._sample_count += int(joint_pos.shape[0])
-
-        done_mask = dones.detach().bool().reshape(-1)
-        self._termination_events += int(torch.sum(done_mask).item())
         if self._previous_joint_pos is not None:
             valid_mask = ~done_mask
             if torch.any(valid_mask):
@@ -450,9 +515,256 @@ class _ArmHackStandJointFluctuationReport:
                 self._delta_sample_count += int(torch.sum(valid_mask).item())
         self._previous_joint_pos = joint_pos.clone()
 
+        torso_pose_w = self._current_torso_pose_w()
+        if torch.any(done_mask):
+            self._torso_pose_reference_w[done_mask] = torso_pose_w[done_mask]
+        torso_pose_delta_w = torso_pose_w - self._torso_pose_reference_w
+        torso_pose_delta_w[:, 3:] = math_utils.wrap_to_pi(torso_pose_delta_w[:, 3:])
+        self._torso_pose_sum += torch.sum(torso_pose_delta_w, dim=0)
+        self._torso_pose_abs_sum += torch.sum(torch.abs(torso_pose_delta_w), dim=0)
+        self._torso_pose_sum_sq += torch.sum(torso_pose_delta_w * torso_pose_delta_w, dim=0)
+        self._torso_pose_minimum = torch.minimum(
+            self._torso_pose_minimum, torch.amin(torso_pose_delta_w, dim=0)
+        )
+        self._torso_pose_maximum = torch.maximum(
+            self._torso_pose_maximum, torch.amax(torso_pose_delta_w, dim=0)
+        )
+        self._torso_pose_sample_count += int(torso_pose_delta_w.shape[0])
+
+        torso_pose_norms = torch.stack(
+            (
+                torch.linalg.norm(torso_pose_delta_w[:, :2], dim=1),
+                torch.linalg.norm(torso_pose_delta_w[:, :3], dim=1),
+                torch.linalg.norm(torso_pose_delta_w[:, 3:], dim=1),
+            ),
+            dim=1,
+        )
+        self._torso_norm_sum += torch.sum(torso_pose_norms, dim=0)
+        self._torso_norm_sum_sq += torch.sum(torso_pose_norms * torso_pose_norms, dim=0)
+        self._torso_norm_maximum = torch.maximum(
+            self._torso_norm_maximum, torch.amax(torso_pose_norms, dim=0)
+        )
+        self._torso_pose_delta_trace.append(torch.mean(torso_pose_delta_w, dim=0).cpu())
+
+    def _load_stage_timeline(self, total_duration_s: float) -> list[dict[str, float | str]]:
+        timeline: list[dict[str, float | str]] = []
+        if self._test_manifest_path is not None:
+            if not self._test_manifest_path.is_file():
+                raise FileNotFoundError(f"ArmHack Stand manifest does not exist: {self._test_manifest_path}")
+            manifest = json.loads(self._test_manifest_path.read_text(encoding="utf-8"))
+            files = manifest.get("files", {})
+            if self._test_id in {
+                "all",
+                "representative_poses",
+                "synthesized_poses",
+                "randomized_poses",
+                "representative_trajectories",
+                "synthesized_trajectories",
+                "randomized_trajectories",
+            }:
+                file_metadata = files.get(self._test_id, {})
+                timeline = list(file_metadata.get("detailed_timeline") or file_metadata.get("timeline") or [])
+            elif "_item" in self._test_id:
+                mode, item_text = self._test_id.rsplit("_item", 1)
+                item_index = int(item_text) - 1
+                collection_key_by_mode = {
+                    "representative_pose": ("representative_poses", "pose_id"),
+                    "synthesized_pose": ("synthesized_poses", "pose_id"),
+                    "randomized_pose": ("randomized_poses", "pose_id"),
+                    "representative_trajectory": ("representative_trajectories", "trajectory_id"),
+                    "synthesized_trajectory": ("synthesized_trajectories", "trajectory_id"),
+                    "randomized_trajectory": ("randomized_trajectories", "trajectory_id"),
+                }
+                collection_key, label_key = collection_key_by_mode[mode]
+                item = manifest[collection_key][item_index]
+                duration_s = float(item.get("duration_s", item.get("playback_duration_s", total_duration_s)))
+                timeline = [
+                    {
+                        "kind": "static_hold" if "pose" in mode else "trajectory",
+                        "label": str(item[label_key]),
+                        "start_s": 0.0,
+                        "end_s": min(duration_s, total_duration_s),
+                    }
+                ]
+
+        cleaned: list[dict[str, float | str]] = []
+        for stage in timeline:
+            start_s = max(float(stage.get("start_s", 0.0)), 0.0)
+            end_s = min(float(stage.get("end_s", total_duration_s)), total_duration_s)
+            if end_s <= start_s:
+                continue
+            cleaned.append(
+                {
+                    "kind": str(stage.get("kind", "stage")),
+                    "label": str(stage.get("label", "unspecified")),
+                    "start_s": start_s,
+                    "end_s": end_s,
+                }
+            )
+        cleaned.sort(key=lambda stage: float(stage["start_s"]))
+        if not cleaned:
+            cleaned.append(
+                {"kind": "stage", "label": self._test_id, "start_s": 0.0, "end_s": total_duration_s}
+            )
+        last_end_s = max(float(stage["end_s"]) for stage in cleaned)
+        if last_end_s < total_duration_s - 1.0e-9:
+            cleaned.append(
+                {"kind": "final_hold", "label": "final_hold", "start_s": last_end_s, "end_s": total_duration_s}
+            )
+        return cleaned
+
+    @staticmethod
+    def _stage_color(stage: dict[str, float | str]) -> str:
+        kind = str(stage["kind"])
+        label = str(stage["label"])
+        if "transition" in kind or "bridge" in kind:
+            return "#B0BEC5"
+        if label.startswith("representative_pose"):
+            return "#4E79A7"
+        if label.startswith("synth_pose"):
+            return "#B07AA1"
+        if label.startswith("randomized_pose"):
+            return "#76B7B2"
+        if label.startswith("representative_trajectory"):
+            return "#59A14F"
+        if label.startswith("synth_trajectory"):
+            return "#F28E2B"
+        if label.startswith("randomized_trajectory"):
+            return "#EDC948"
+        return "#BAB0AC"
+
+    @staticmethod
+    def _short_stage_label(stage: dict[str, float | str]) -> str:
+        kind = str(stage["kind"])
+        label = str(stage["label"])
+        if "transition" in kind:
+            return "T"
+        if "bridge" in kind:
+            return "B"
+        if label == "final_hold":
+            return "H"
+        replacements = (
+            ("representative_pose_", "RP"),
+            ("synth_pose_", "SP"),
+            ("randomized_pose_", "GP"),
+            ("representative_trajectory_", "RT"),
+            ("synth_trajectory_", "ST"),
+            ("randomized_trajectory_", "GT"),
+        )
+        for prefix, short_prefix in replacements:
+            if label.startswith(prefix):
+                return short_prefix + label.removeprefix(prefix)
+        return label[:8]
+
+    def _write_torso_pose_plot(
+        self,
+        control_dt: float,
+        total_duration_s: float,
+        stage_timeline: list[dict[str, float | str]],
+    ) -> None:
+        if not self._torso_pose_delta_trace:
+            raise RuntimeError("Cannot plot ArmHack torso pose without pose samples.")
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.patches import Patch
+
+        pose_delta = torch.stack(self._torso_pose_delta_trace).numpy()
+        times_s = (np.arange(len(pose_delta), dtype=np.float64) + 1.0) * float(control_dt)
+        self._plot_path.parent.mkdir(parents=True, exist_ok=True)
+
+        figure = plt.figure(figsize=(18.0, 10.0), layout="constrained")
+        grid = figure.add_gridspec(3, 1, height_ratios=(3.0, 3.0, 1.15), hspace=0.16)
+        position_axis = figure.add_subplot(grid[0, 0])
+        rotation_axis = figure.add_subplot(grid[1, 0], sharex=position_axis)
+        stage_axis = figure.add_subplot(grid[2, 0], sharex=position_axis)
+
+        position_colors = ("#1F77B4", "#D62728", "#2CA02C")
+        rotation_colors = ("#9467BD", "#FF7F0E", "#17BECF")
+        for index, (label, color) in enumerate(zip(("dx_w", "dy_w", "dz_w"), position_colors, strict=True)):
+            position_axis.plot(times_s, pose_delta[:, index], label=label, color=color, linewidth=1.15)
+        for index, (label, color) in enumerate(
+            zip(("droll_w", "dpitch_w", "dyaw_w"), rotation_colors, strict=True), start=3
+        ):
+            rotation_axis.plot(times_s, pose_delta[:, index], label=label, color=color, linewidth=1.15)
+
+        for stage in stage_timeline:
+            start_s = float(stage["start_s"])
+            end_s = float(stage["end_s"])
+            color = self._stage_color(stage)
+            position_axis.axvspan(start_s, end_s, color=color, alpha=0.055, linewidth=0.0)
+            rotation_axis.axvspan(start_s, end_s, color=color, alpha=0.055, linewidth=0.0)
+            stage_axis.axvspan(
+                start_s,
+                end_s,
+                facecolor=color,
+                alpha=0.88,
+                linewidth=0.4,
+                edgecolor="white",
+            )
+            duration_s = end_s - start_s
+            stage_axis.text(
+                0.5 * (start_s + end_s),
+                0.5,
+                self._short_stage_label(stage),
+                ha="center",
+                va="center",
+                rotation=90 if duration_s < 2.5 else 0,
+                fontsize=6.5,
+                color="#111111",
+                clip_on=True,
+            )
+
+        for axis in (position_axis, rotation_axis):
+            axis.axhline(0.0, color="#333333", linewidth=0.7, alpha=0.65)
+            axis.grid(True, color="#D9D9D9", linewidth=0.55, alpha=0.7)
+            axis.legend(loc="upper right", ncol=3, frameon=True, fontsize=8)
+        position_axis.set_ylabel("World translation displacement (m)")
+        rotation_axis.set_ylabel("World RPY displacement (rad)")
+        rotation_axis.set_xlabel("Test time (s)")
+        position_axis.tick_params(labelbottom=False)
+
+        stage_axis.set_ylim(0.0, 1.0)
+        stage_axis.set_yticks([])
+        stage_axis.set_xlabel("Test stage timeline (s)")
+        stage_axis.set_xlim(0.0, max(total_duration_s, control_dt))
+        stage_axis.set_title(
+            "RP=representative pose, SP=measured-blend pose, GP=randomized-bank pose, "
+            "RT=representative trajectory, ST=measured-blend trajectory, "
+            "GT=randomized pose-interpolation trajectory, T=transition, B=bridge",
+            fontsize=8,
+        )
+        stage_axis.legend(
+            handles=[
+                Patch(color="#4E79A7", label="RP"),
+                Patch(color="#B07AA1", label="SP"),
+                Patch(color="#76B7B2", label="GP"),
+                Patch(color="#59A14F", label="RT"),
+                Patch(color="#F28E2B", label="ST"),
+                Patch(color="#EDC948", label="GT"),
+                Patch(color="#B0BEC5", label="transition / bridge"),
+            ],
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.48),
+            ncol=7,
+            fontsize=8,
+            frameon=False,
+        )
+        figure.suptitle(
+            f"ArmHack Stand torso world-frame 6D displacement — {self._test_id}",
+            fontsize=14,
+            fontweight="bold",
+        )
+        figure.savefig(self._plot_path, dpi=160, bbox_inches="tight")
+        plt.close(figure)
+
     def write(self, play_metrics: dict, steps: int, control_dt: float) -> None:
         if self._sample_count <= 0:
-            raise RuntimeError("Cannot write ArmHack Stand joint report without joint samples.")
+            raise RuntimeError("Cannot write ArmHack Stand report without joint samples.")
+        if self._torso_pose_sample_count <= 0:
+            raise RuntimeError("Cannot write ArmHack Stand report without torso pose samples.")
 
         mean = self._sum / self._sample_count
         variance = torch.clamp(self._sum_sq / self._sample_count - mean * mean, min=0.0)
@@ -468,6 +780,41 @@ class _ArmHackStandJointFluctuationReport:
         position_range = position_range.cpu().tolist()
         mean_abs_step_delta = mean_abs_step_delta.cpu().tolist()
 
+        torso_mean = self._torso_pose_sum / self._torso_pose_sample_count
+        torso_mean_abs = self._torso_pose_abs_sum / self._torso_pose_sample_count
+        torso_variance = torch.clamp(
+            self._torso_pose_sum_sq / self._torso_pose_sample_count - torso_mean * torso_mean,
+            min=0.0,
+        )
+        torso_std = torch.sqrt(torso_variance)
+        torso_rms = torch.sqrt(self._torso_pose_sum_sq / self._torso_pose_sample_count)
+        torso_max_abs = torch.maximum(torch.abs(self._torso_pose_minimum), torch.abs(self._torso_pose_maximum))
+        torso_range = self._torso_pose_maximum - self._torso_pose_minimum
+        torso_norm_mean = self._torso_norm_sum / self._torso_pose_sample_count
+        torso_norm_variance = torch.clamp(
+            self._torso_norm_sum_sq / self._torso_pose_sample_count - torso_norm_mean * torso_norm_mean,
+            min=0.0,
+        )
+        torso_norm_std = torch.sqrt(torso_norm_variance)
+        torso_norm_rms = torch.sqrt(self._torso_norm_sum_sq / self._torso_pose_sample_count)
+        torso_values = [
+            tensor.cpu().tolist()
+            for tensor in (
+                torso_mean,
+                torso_mean_abs,
+                torso_std,
+                torso_rms,
+                torso_max_abs,
+                self._torso_pose_minimum,
+                self._torso_pose_maximum,
+                torso_range,
+            )
+        ]
+        torso_norm_values = [
+            tensor.cpu().tolist()
+            for tensor in (torso_norm_mean, torso_norm_std, torso_norm_rms, self._torso_norm_maximum)
+        ]
+
         test_data_columns: list[str] = []
         if self._test_data_path is not None:
             if not self._test_data_path.is_file():
@@ -481,10 +828,13 @@ class _ArmHackStandJointFluctuationReport:
                     f"got {test_data_columns}"
                 )
 
+        total_duration_s = steps * control_dt
+        stage_timeline = self._load_stage_timeline(total_duration_s)
+        self._write_torso_pose_plot(control_dt, total_duration_s, stage_timeline)
         self._report_path.parent.mkdir(parents=True, exist_ok=True)
         generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
         lines = [
-            "# ArmHack Stand 关节波动测试报告",
+            "# ArmHack Stand 关节与躯干 6D 位移测试报告",
             "",
             "## 测试身份",
             "",
@@ -498,17 +848,29 @@ class _ArmHackStandJointFluctuationReport:
                 if self._test_data_path is not None
                 else "- 测试数据 SHA-256：未提供"
             ),
+            f"- 测试清单：`{self._test_manifest_path}`" if self._test_manifest_path else "- 测试清单：未提供",
+            (
+                f"- 测试清单 SHA-256：`{_sha256(self._test_manifest_path)}`"
+                if self._test_manifest_path is not None
+                else "- 测试清单 SHA-256：未提供"
+            ),
+            f"- 6D 曲线图：`{self._plot_path}`",
             f"- 控制步数：`{steps}`",
             f"- 控制周期：`{control_dt:.6f} s`",
-            f"- 仿真测试时长：`{steps * control_dt:.3f} s`",
+            f"- 仿真测试时长：`{total_duration_s:.3f} s`",
             f"- 环境采样数：`{self._sample_count}`",
             f"- termination/reset 事件数：`{self._termination_events}`",
+            f"- 左/右腕末端附加质量：各 `{self._payload_kg:.6f} kg`（固定测试值）",
             "- 测试输入范围：仅双臂 14 关节；腰、腿和根节点不在测试 CSV 中。",
             "",
             "## 统计口径",
             "",
             "`平均逐步波动` 是同一 episode 内相邻 50 Hz 控制帧实际关节角之差绝对值的均值："
-            " `mean(|q[t]-q[t-1]|)`。reset 前后的跳变不计入。另列出实际关节角均值、标准差和极差。",
+            " `mean(|q[t]-q[t-1]|)`。reset 前后的跳变不计入。",
+            "",
+            "躯干 6D 位移使用 `torso_link` 的世界坐标位姿，并相对每个 episode 的起始位姿计算："
+            "位置为 `p_w(t)-p_w(0)`；姿态为世界系 XYZ Euler 角之差并 wrap 到 `[-pi, pi]`。"
+            "发生 reset 时立即用 reset 后位姿重建参考，因此 reset 跳变不进入位移统计。",
             "",
             "## 每关节实际波动",
             "",
@@ -520,6 +882,66 @@ class _ArmHackStandJointFluctuationReport:
             lines.append(
                 f"| `{joint_name}` | {group} | {mean_abs_step_delta[index]:.8f} | "
                 f"{mean[index]:.8f} | {std[index]:.8f} | {position_range[index]:.8f} |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "## 躯干世界坐标系 6D 位移",
+                "",
+                "初始参考位姿（所有环境均值）为："
+                f" `x={self._initial_torso_pose_reference_mean_w[0]:.6f} m, "
+                f"y={self._initial_torso_pose_reference_mean_w[1]:.6f} m, "
+                f"z={self._initial_torso_pose_reference_mean_w[2]:.6f} m, "
+                f"roll={self._initial_torso_pose_reference_mean_w[3]:.6f} rad, "
+                f"pitch={self._initial_torso_pose_reference_mean_w[4]:.6f} rad, "
+                f"yaw={self._initial_torso_pose_reference_mean_w[5]:.6f} rad`。",
+                "",
+                "| 分量 | 单位 | 有符号均值 | 绝对值均值 | 标准差 | RMS | 最大绝对值 | 最小值 | 最大值 | 极差 |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for index, (component, unit) in enumerate(self._POSE_COMPONENTS):
+            lines.append(
+                f"| `{component}` | {unit} | {torso_values[0][index]:.8f} | "
+                f"{torso_values[1][index]:.8f} | {torso_values[2][index]:.8f} | "
+                f"{torso_values[3][index]:.8f} | {torso_values[4][index]:.8f} | "
+                f"{torso_values[5][index]:.8f} | {torso_values[6][index]:.8f} | "
+                f"{torso_values[7][index]:.8f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "| 综合位移 | 单位 | 均值 | 标准差 | RMS | 最大值 |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for index, (component, unit) in enumerate(self._POSE_NORM_COMPONENTS):
+            lines.append(
+                f"| `{component}` | {unit} | {torso_norm_values[0][index]:.8f} | "
+                f"{torso_norm_values[1][index]:.8f} | {torso_norm_values[2][index]:.8f} | "
+                f"{torso_norm_values[3][index]:.8f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### 6D 位移曲线与测试阶段",
+                "",
+                f"![Torso world-frame 6D displacement]({self._plot_path.name})",
+                "",
+                "曲线是每个控制帧上所有测试环境 6D 位移的均值；确定性可视化默认只有 1 个环境。"
+                "背景色和底部色带由 manifest 的详细时间线生成。",
+                "",
+                "| 开始 s | 结束 s | 时长 s | 类型 | 姿态或轨迹阶段 |",
+                "|---:|---:|---:|---|---|",
+            ]
+        )
+        for stage in stage_timeline:
+            start_s = float(stage["start_s"])
+            end_s = float(stage["end_s"])
+            lines.append(
+                f"| {start_s:.3f} | {end_s:.3f} | {end_s - start_s:.3f} | "
+                f"`{stage['kind']}` | `{stage['label']}` |"
             )
 
         lines.extend(["", "## 躯干稳定指标", ""])
@@ -536,13 +958,15 @@ class _ArmHackStandJointFluctuationReport:
                 "",
                 "## 结论边界",
                 "",
-                "该报告记录仿真中的实际关节波动和 termination 次数。双臂是外部测试输入；腰腿的波动是策略为保持平衡产生的响应。"
+                "该报告记录仿真中的实际关节波动、torso 世界坐标系 6D 位移和 termination 次数。"
+                "双臂是外部测试输入；腰腿的波动是策略为保持平衡产生的响应。"
                 "若 termination/reset 事件数大于 0，不能把该测试项判定为完整稳定通过。",
                 "",
             ]
         )
         self._report_path.write_text("\n".join(lines), encoding="utf-8")
-        print(f"[REPORT] ArmHack Stand joint fluctuation report: {self._report_path}")
+        print(f"[REPORT] ArmHack Stand report: {self._report_path}")
+        print(f"[REPORT] ArmHack Stand torso world-frame 6D plot: {self._plot_path}")
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -675,14 +1099,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     }
     armhack_stand_report = None
     if args_cli.armhack_stand_report_path:
-        if "StandPerturb" not in task_name:
-            raise ValueError("--armhack_stand_report_path is only valid for an ArmHack StandPerturb task.")
+        if not any(token in task_name for token in ("StandPerturb", "StandRandomizedPayload")):
+            raise ValueError("--armhack_stand_report_path is only valid for an ArmHack Stand task.")
         armhack_stand_report = _ArmHackStandJointFluctuationReport(
             env=env,
             report_path=args_cli.armhack_stand_report_path,
             checkpoint_path=resume_path,
             test_id=args_cli.armhack_stand_test_id,
             test_data_path=args_cli.armhack_stand_test_data,
+            test_manifest_path=args_cli.armhack_stand_manifest,
+            payload_kg=args_cli.armhack_stand_payload_kg,
         )
     # simulate environment
     while simulation_app.is_running():

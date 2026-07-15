@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 from collections.abc import Sequence
 from pathlib import Path
@@ -123,7 +124,7 @@ class UpperBodyPerturbationCfg:
 
     enabled: bool = True
     joint_names: list[str] = G1_UPPER_BODY_JOINT_NAMES
-    source: Literal["sine", "csv", "pose_set"] = "sine"
+    source: Literal["sine", "csv", "pose_set", "random_pose_trajectory"] = "sine"
     csv_path: str = ""
     csv_time_column: str = "time_s"
     csv_loop: bool = True
@@ -147,6 +148,13 @@ class UpperBodyPerturbationCfg:
     clip_to_joint_limits: bool = True
     pose_set: list[list[float]] = []
     pose_probabilities: list[float] = []
+    random_pose_bank_path: str = ""
+    random_initialize_joint_state_on_reset: bool = True
+    random_curriculum_enabled: bool = False
+    random_curriculum_static_steps: int = 0
+    random_curriculum_ramp_steps: int = 0
+    random_curriculum_motion_scale: float = 1.0
+    random_transition_duration_range_s: tuple[float, float] = (2.0, 6.0)
 
 
 class G1PerturbAmpEnv(ManagerBasedAmpEnv):
@@ -167,6 +175,12 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._pose_set_targets: torch.Tensor | None = None
         self._pose_probabilities: torch.Tensor | None = None
         self._active_pose_targets: torch.Tensor | None = None
+        self._random_pose_bank: torch.Tensor | None = None
+        self._random_velocity_limits: torch.Tensor | None = None
+        self._random_segment_start_targets: torch.Tensor | None = None
+        self._random_segment_goal_targets: torch.Tensor | None = None
+        self._random_segment_elapsed_s: torch.Tensor | None = None
+        self._random_segment_duration_s: torch.Tensor | None = None
 
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
@@ -182,6 +196,12 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._pose_set_targets = torch.empty((0, 0), dtype=torch.float32, device=self.device)
         self._pose_probabilities = torch.empty(0, dtype=torch.float32, device=self.device)
         self._active_pose_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
+        self._random_pose_bank = torch.empty((0, 0), dtype=torch.float32, device=self.device)
+        self._random_velocity_limits = torch.empty(0, dtype=torch.float32, device=self.device)
+        self._random_segment_start_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
+        self._random_segment_goal_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
+        self._random_segment_elapsed_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._random_segment_duration_s = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
 
         self._perturbation_cfg = getattr(self.cfg, "upper_body_perturbation", None)
         if self._perturbation_cfg is not None and self._perturbation_cfg.enabled:
@@ -190,29 +210,43 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             self._perturbation_cfg = None
 
     def step(self, action: torch.Tensor):
-        csv_motion_scale: float | None = None
+        motion_scale: float | None = None
         if self._perturbation_cfg is not None:
             action = self._compose_perturbed_action(action.to(self.device))
             if self._perturbation_cfg.source == "csv":
-                csv_motion_scale = self._csv_curriculum_motion_scale()
-                self._advance_csv_sample_times(csv_motion_scale)
+                motion_scale = self._csv_curriculum_motion_scale()
+                self._advance_csv_sample_times(motion_scale)
+            elif self._perturbation_cfg.source == "random_pose_trajectory":
+                motion_scale = self._random_curriculum_motion_scale()
+                self._advance_random_pose_trajectories(motion_scale)
 
         step_result = super().step(action)
-        if csv_motion_scale is not None:
+        if motion_scale is not None:
             log_extras = self.extras.setdefault("log", {})
-            log_extras["ArmHack/csv_motion_scale"] = torch.tensor(csv_motion_scale, device=self.device)
-            target_scale = max(float(self._perturbation_cfg.csv_curriculum_motion_scale), 0.0)
-            if csv_motion_scale <= 0.0:
+            source = self._perturbation_cfg.source
+            if source == "csv":
+                target_scale = max(float(self._perturbation_cfg.csv_curriculum_motion_scale), 0.0)
+                log_extras["ArmHack/csv_motion_scale"] = torch.tensor(motion_scale, device=self.device)
+                log_extras["ArmHack/csv_start_time_mean_s"] = torch.mean(self._csv_start_time_offsets)
+                log_extras["ArmHack/csv_start_time_std_s"] = torch.std(
+                    self._csv_start_time_offsets, unbiased=False
+                )
+            else:
+                target_scale = max(float(self._perturbation_cfg.random_curriculum_motion_scale), 0.0)
+                log_extras["ArmHack/random_motion_scale"] = torch.tensor(motion_scale, device=self.device)
+                log_extras["ArmHack/random_pose_bank_size"] = torch.tensor(
+                    float(self._random_pose_bank.shape[0]), device=self.device
+                )
+                log_extras["ArmHack/random_transition_duration_mean_s"] = torch.mean(
+                    self._random_segment_duration_s
+                )
+            if motion_scale <= 0.0:
                 stage = 0.0
-            elif csv_motion_scale + 1.0e-8 < target_scale:
+            elif motion_scale + 1.0e-8 < target_scale:
                 stage = 1.0
             else:
                 stage = 2.0
             log_extras["ArmHack/curriculum_stage"] = torch.tensor(stage, device=self.device)
-            log_extras["ArmHack/csv_start_time_mean_s"] = torch.mean(self._csv_start_time_offsets)
-            log_extras["ArmHack/csv_start_time_std_s"] = torch.std(
-                self._csv_start_time_offsets, unbiased=False
-            )
         return step_result
 
     def _reset_idx(self, env_ids: Sequence[int] | torch.Tensor):
@@ -232,6 +266,10 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 self._initialize_csv_arm_joint_state(env_ids_tensor)
         elif cfg.source == "pose_set":
             self._sample_pose_targets(env_ids_tensor)
+        elif cfg.source == "random_pose_trajectory":
+            self._reset_random_pose_trajectories(env_ids_tensor)
+            if cfg.random_initialize_joint_state_on_reset:
+                self._initialize_random_arm_joint_state(env_ids_tensor)
 
     def _initialize_upper_body_perturbation(self) -> None:
         action_term = self.action_manager.get_term("joint_pos")
@@ -282,6 +320,9 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 self._initialize_csv_arm_joint_state(all_env_ids)
         elif cfg.source == "pose_set":
             self._initialize_pose_set()
+        elif cfg.source == "random_pose_trajectory":
+            self._validate_random_pose_trajectory_cfg()
+            self._initialize_random_pose_trajectory()
 
     def _compose_perturbed_action(self, raw_policy_action: torch.Tensor) -> torch.Tensor:
         cfg = self._perturbation_cfg
@@ -301,6 +342,8 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             targets = self._sample_csv_targets()
         elif cfg.source == "pose_set":
             targets = self._active_pose_targets
+        elif cfg.source == "random_pose_trajectory":
+            targets = self._sample_random_pose_trajectory_targets()
         else:
             episode_time_s = self.episode_length_buf.to(dtype=torch.float32).unsqueeze(-1) * self.step_dt
             phase = (
@@ -419,6 +462,179 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             (self.num_envs, expected_num_joints), dtype=torch.float32, device=self.device
         )
         self._sample_pose_targets(torch.arange(self.num_envs, device=self.device, dtype=torch.long))
+
+    def _validate_random_pose_trajectory_cfg(self) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        if not cfg.random_pose_bank_path:
+            raise ValueError(
+                "upper_body_perturbation.random_pose_bank_path must be set when "
+                "source='random_pose_trajectory'."
+            )
+        if cfg.random_curriculum_static_steps < 0 or cfg.random_curriculum_ramp_steps < 0:
+            raise ValueError("Random pose curriculum step counts must be non-negative.")
+        if cfg.random_curriculum_motion_scale < 0.0:
+            raise ValueError("random_curriculum_motion_scale must be non-negative.")
+        duration_range = tuple(float(value) for value in cfg.random_transition_duration_range_s)
+        if len(duration_range) != 2 or duration_range[0] <= 0.0 or duration_range[1] < duration_range[0]:
+            raise ValueError(
+                "random_transition_duration_range_s must be a positive ordered pair, "
+                f"got {cfg.random_transition_duration_range_s}."
+            )
+
+    def _initialize_random_pose_trajectory(self) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        resolved_path = self._resolve_csv_path(cfg.random_pose_bank_path)
+        payload = json.loads(resolved_path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != 1 or payload.get("data_scope") != "arm_only_14_dof":
+            raise ValueError(f"Unsupported ArmHack random-pose bank schema: {resolved_path}")
+        if payload.get("joint_names") != list(cfg.joint_names):
+            raise ValueError(
+                "Random-pose bank joint order must exactly match upper_body_perturbation.joint_names: "
+                f"{resolved_path}"
+            )
+        pose_entries = payload.get("poses")
+        if not isinstance(pose_entries, list) or len(pose_entries) < 2:
+            raise ValueError(f"Random-pose bank must contain at least two poses: {resolved_path}")
+        pose_values = [entry.get("positions_rad") for entry in pose_entries if isinstance(entry, dict)]
+        expected_num_joints = self._upper_action_indices.numel()
+        if len(pose_values) != len(pose_entries) or any(
+            not isinstance(values, list) or len(values) != expected_num_joints for values in pose_values
+        ):
+            raise ValueError(
+                f"Every random-pose bank entry must contain {expected_num_joints} positions_rad values: "
+                f"{resolved_path}"
+            )
+        pose_bank = torch.tensor(pose_values, dtype=torch.float32, device=self.device)
+        if not torch.all(torch.isfinite(pose_bank)):
+            raise ValueError(f"Random-pose bank contains non-finite positions: {resolved_path}")
+
+        velocity_values = payload.get("interpolation_velocity_limits_rad_s")
+        if not isinstance(velocity_values, list) or len(velocity_values) != expected_num_joints:
+            raise ValueError(
+                "Random-pose bank interpolation_velocity_limits_rad_s must match the joint count: "
+                f"{resolved_path}"
+            )
+        velocity_limits = torch.tensor(velocity_values, dtype=torch.float32, device=self.device)
+        if not torch.all(torch.isfinite(velocity_limits)) or torch.any(velocity_limits <= 0.0):
+            raise ValueError(f"Random-pose bank velocity limits must be finite and positive: {resolved_path}")
+
+        self._random_pose_bank = pose_bank
+        self._random_velocity_limits = velocity_limits
+        self._random_segment_start_targets = torch.zeros(
+            (self.num_envs, expected_num_joints), dtype=torch.float32, device=self.device
+        )
+        self._random_segment_goal_targets = torch.zeros_like(self._random_segment_start_targets)
+        self._random_segment_elapsed_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._random_segment_duration_s = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
+
+        all_env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        self._reset_random_pose_trajectories(all_env_ids)
+        if cfg.random_initialize_joint_state_on_reset:
+            self._initialize_random_arm_joint_state(all_env_ids)
+
+    def _sample_random_pose_bank_targets(self, count: int) -> torch.Tensor:
+        if self._random_pose_bank.numel() == 0:
+            raise RuntimeError("Random arm-pose bank is not initialized.")
+        pose_indices = torch.randint(self._random_pose_bank.shape[0], (count,), device=self.device)
+        return self._random_pose_bank[pose_indices]
+
+    def _sample_random_transition_durations(
+        self,
+        start_targets: torch.Tensor,
+        goal_targets: torch.Tensor,
+    ) -> torch.Tensor:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        lower_s, upper_s = (float(value) for value in cfg.random_transition_duration_range_s)
+        nominal_duration = lower_s + torch.rand(start_targets.shape[0], device=self.device) * (
+            upper_s - lower_s
+        )
+        # Quintic minimum-jerk interpolation has max d(blend)/du = 1.875.
+        required_duration = torch.amax(
+            1.875 * torch.abs(goal_targets - start_targets) / self._random_velocity_limits.unsqueeze(0),
+            dim=1,
+        )
+        return torch.maximum(nominal_duration, required_duration).clamp(min=float(self.step_dt))
+
+    def _reset_random_pose_trajectories(self, env_ids: torch.Tensor) -> None:
+        if env_ids.numel() == 0:
+            return
+        start_targets = self._sample_random_pose_bank_targets(env_ids.numel())
+        goal_targets = self._sample_random_pose_bank_targets(env_ids.numel())
+        self._random_segment_start_targets[env_ids] = start_targets
+        self._random_segment_goal_targets[env_ids] = goal_targets
+        self._random_segment_elapsed_s[env_ids] = 0.0
+        self._random_segment_duration_s[env_ids] = self._sample_random_transition_durations(
+            start_targets, goal_targets
+        )
+
+    def _sample_random_pose_trajectory_targets(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+        elapsed = self._random_segment_elapsed_s if env_ids is None else self._random_segment_elapsed_s[env_ids]
+        duration = self._random_segment_duration_s if env_ids is None else self._random_segment_duration_s[env_ids]
+        start = (
+            self._random_segment_start_targets
+            if env_ids is None
+            else self._random_segment_start_targets[env_ids]
+        )
+        goal = (
+            self._random_segment_goal_targets
+            if env_ids is None
+            else self._random_segment_goal_targets[env_ids]
+        )
+        phase = torch.clamp(elapsed / torch.clamp(duration, min=float(self.step_dt)), min=0.0, max=1.0)
+        blend = 10.0 * phase**3 - 15.0 * phase**4 + 6.0 * phase**5
+        return torch.lerp(start, goal, blend.unsqueeze(-1))
+
+    def _advance_random_pose_trajectories(self, motion_scale: float) -> None:
+        if motion_scale <= 0.0 or self._random_segment_elapsed_s.numel() == 0:
+            return
+        self._random_segment_elapsed_s.add_(float(motion_scale) * float(self.step_dt))
+        for _ in range(8):
+            completed = self._random_segment_elapsed_s >= self._random_segment_duration_s
+            if not torch.any(completed):
+                return
+            env_ids = torch.nonzero(completed, as_tuple=False).squeeze(-1)
+            overshoot = self._random_segment_elapsed_s[env_ids] - self._random_segment_duration_s[env_ids]
+            new_start = self._random_segment_goal_targets[env_ids].clone()
+            new_goal = self._sample_random_pose_bank_targets(env_ids.numel())
+            self._random_segment_start_targets[env_ids] = new_start
+            self._random_segment_goal_targets[env_ids] = new_goal
+            self._random_segment_duration_s[env_ids] = self._sample_random_transition_durations(
+                new_start, new_goal
+            )
+            self._random_segment_elapsed_s[env_ids] = overshoot
+        raise RuntimeError("Random arm-pose trajectory advanced across more than eight segments in one step.")
+
+    def _random_curriculum_motion_scale(self) -> float:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        target_scale = max(float(cfg.random_curriculum_motion_scale), 0.0)
+        if not cfg.random_curriculum_enabled:
+            return target_scale
+        step = max(int(self.common_step_counter), 0)
+        static_steps = max(int(cfg.random_curriculum_static_steps), 0)
+        ramp_steps = max(int(cfg.random_curriculum_ramp_steps), 0)
+        if step < static_steps:
+            return 0.0
+        if ramp_steps == 0:
+            return target_scale
+        ramp_fraction = min(max((step - static_steps) / ramp_steps, 0.0), 1.0)
+        return target_scale * ramp_fraction
+
+    def _initialize_random_arm_joint_state(self, env_ids: torch.Tensor) -> None:
+        if env_ids.numel() == 0:
+            return
+        targets = self._sample_random_pose_trajectory_targets(env_ids)
+        targets = self._clip_upper_position_targets(targets, env_ids=env_ids)
+        robot = self.scene["robot"]
+        robot.write_joint_state_to_sim(
+            targets,
+            torch.zeros_like(targets),
+            joint_ids=self._upper_asset_joint_ids,
+            env_ids=env_ids,
+        )
 
     def _load_csv_trajectory(self) -> tuple[torch.Tensor, torch.Tensor]:
         cfg = self._perturbation_cfg

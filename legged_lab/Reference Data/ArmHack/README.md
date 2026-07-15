@@ -10,13 +10,16 @@ ArmHack/
 │   ├── raw/
 │   │   └── g1_full_body_motion_sdk_50hz.csv
 │   ├── g1_arm_trajectory_named_50hz.csv
+│   ├── RandomizedTraining/
+│   │   └── random_arm_pose_bank_seed20260715.json
 │   └── TestData/ArmOnly/
 │       ├── manifest.json
 │       ├── poses/
 │       │   ├── arm_pose_catalog.csv
 │       │   ├── representative/*_hold20s_50hz.csv
-│       │   └── synthesized/*_hold20s_50hz.csv
-│       ├── trajectories/{representative,synthesized}/
+│       │   ├── synthesized/*_hold20s_50hz.csv
+│       │   └── randomized/*_hold20s_50hz.csv
+│       ├── trajectories/{representative,synthesized,randomized}/
 │       └── sequences/*_arm_only_*_50hz.csv
 └── WalkPerturbFinetune/
     ├── g1_arm_pose_set.json
@@ -35,23 +38,28 @@ ArmHack/
 
 `g1_arm_trajectory_named_50hz.csv` 是由 `scripts/tools/extract_armhack_stand_arm_csv.py` 生成的规范训练文件，只包含 `time_s` 和 14 个具名手臂关节。训练环境不再读取或执行 CSV 中的下肢目标，也不再依赖数字 q 列的隐式顺序。
 
-`TestData/ArmOnly/` 是从完整规范轨迹离线构造的确定性 Stand 测试集，不是新的训练分布。所有回放 CSV 都严格只有 `time_s + 14 个双臂关节`；不含根节点、腰、髋、膝或踝。`scripts/tools/build_armhack_stand_visualization_suite.py` 会遍历完整轨迹并固定选出 6 个代表姿态、4 段代表运动窗口；随后以种子 `20260714` 对两组实测双臂姿态做凸插值，生成 3 个双臂姿态，并对两段等长实测 `1.0x` 双臂轨迹做逐帧凸组合，生成 3 条合成 `1.0x` 轨迹。合成过程不会扰动或生成任何腰腿关节。生成结果、父数据与权重、源时刻/窗口、速度倍率和每个 CSV 的 SHA-256 均记录在 `manifest.json`。
+`RandomizedTraining/random_arm_pose_bank_seed20260715.json` 是 Stand 第二阶段续训的姿态库。构建脚本 `scripts/tools/build_armhack_stand_randomized_training_data.py` 先在训练可达的 20,109 帧中选出 64 个最远点覆盖锚点，再用 2–4 个完整 14-DoF 实测姿态的 Dirichlet 凸组合生成 448 个新姿态，合计 512 个。这种做法保留左右臂和同一手臂各关节之间的相关性，且每个关节都严格位于原训练数据的分量范围内。训练时在两个姿态间做五次 minimum-jerk 插值；名义时长随机取 2–6 s，若峰值关节速度超过原数据 P99 速度上限，环境会自动延长过渡时间。姿态库只含双臂，不含根节点或腰腿数据。
+
+`TestData/ArmOnly/` 是确定性 Stand 测试集。所有回放 CSV 都严格只有 `time_s + 14 个双臂关节`，不含根节点、腰、髋、膝或踝。schema v5 保留原有 6 个代表姿态、3 个旧合成姿态、4 条实测轨迹和 3 条实测轨迹凸组合，又从新姿态库固定选出 8 个覆盖姿态和 6 条 minimum-jerk 插值轨迹。完整序列为 208.08 s / 10,404 个 50 Hz 控制步，共 59 个保持、轨迹或过渡阶段。原 `404.897585 s` 双臂下垂姿态仍显式排除。姿态库来源、固定样本、轨迹端点、每个 CSV 的 SHA-256 和详细时间线都记录在 `manifest.json`，并用于 torso 世界系 6D 测试图的阶段标注。
 
 可视化运行时不再随机抽取数据，统一由以下入口顺序或逐项播放：
 
 ```bash
 bash scripts/vis_g1_armhack_stand_eval.sh
 MODE=representative_trajectory ITEM=1 bash scripts/vis_g1_armhack_stand_eval.sh
+MODE=randomized_poses PAYLOAD_KG=0 bash scripts/vis_g1_armhack_stand_eval.sh
+MODE=randomized_trajectories PAYLOAD_KG=1.0 bash scripts/vis_g1_armhack_stand_eval.sh
 ```
 
 重新生成和校验：
 
 ```bash
+python scripts/tools/build_armhack_stand_randomized_training_data.py
 python scripts/tools/build_armhack_stand_visualization_suite.py
 python scripts/tools/check_armhack_reference_data.py --stand-only
 ```
 
-固定种子重建已经验证能逐文件复现全部 22 个生成 CSV 的 SHA-256，其中 1 个是姿态目录表、21 个是可回放 CSV。9 个单姿态文件均保持 20 s；4 条代表轨迹和 3 条合成轨迹均为 5 s、50 Hz、原始 `1.0x` 时间尺度。播放端固定使用 `csv_motion_scale=1.0`，不会再次缩放。
+固定种子重建已验证能复现 512 个训练姿态和全部测试 CSV。当前姿态目录含 17 个单姿态（6 代表 + 3 旧合成 + 8 新随机覆盖）；轨迹目录含 13 条 5 s 轨迹（4 代表 + 3 旧合成 + 6 新姿态插值）。播放端固定使用 `csv_motion_scale=1.0`，不会再次缩放。
 
 SHA-256：
 
@@ -61,6 +69,9 @@ b43256da27b11a593fc244ab2dd7fb899490a575d7749ed858ac342e3a208c50
 
 g1_arm_trajectory_named_50hz.csv:
 afe3819937ecfa19fae835b8cc77038378ec40a821acd0fdf2feef0054583601
+
+RandomizedTraining/random_arm_pose_bank_seed20260715.json:
+1ff56b9a59abaa01d5aadaa2f60685517b3f5db1dc3c2f06ad6acfd5ff3246a1
 ```
 
 ### WalkPerturbFinetune

@@ -25,6 +25,12 @@ DEFAULT_SOURCE = (
     PROJECT_ROOT / "Reference Data" / "ArmHack" / "StandPerturb" / "g1_arm_trajectory_named_50hz.csv"
 )
 DEFAULT_OUTPUT = DEFAULT_SOURCE.parent / "TestData" / "ArmOnly"
+DEFAULT_RANDOM_POSE_BANK = (
+    DEFAULT_SOURCE.parent / "RandomizedTraining" / "random_arm_pose_bank_seed20260715.json"
+)
+DEFAULT_TRAINING_EPISODE_HORIZON_S = 20.0
+DEFAULT_TRAINING_CSV_END_MARGIN_S = 0.25
+REMOVED_ARMS_DOWN_SOURCE_TIME_S = 404.897585
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,33 @@ def _load_source(path: Path) -> tuple[list[str], np.ndarray, np.ndarray]:
     return joint_names, times, positions
 
 
+def _load_random_pose_bank(
+    path: Path,
+    expected_joint_names: list[str],
+) -> tuple[np.ndarray, list[dict[str, object]], np.ndarray, dict[str, object]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1 or payload.get("data_scope") != "arm_only_14_dof":
+        raise ValueError(f"Unsupported randomized ArmHack pose-bank schema: {path}")
+    bank_joint_names = payload.get("joint_names")
+    if not isinstance(bank_joint_names, list) or set(bank_joint_names) != set(expected_joint_names):
+        raise ValueError(f"Random pose-bank joints differ from the Stand CSV: {path}")
+    entries = payload.get("poses")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"Random pose bank is empty: {path}")
+    bank_poses = np.asarray([entry["positions_rad"] for entry in entries], dtype=np.float64)
+    bank_velocity_limits = np.asarray(payload.get("interpolation_velocity_limits_rad_s"), dtype=np.float64)
+    reorder = [bank_joint_names.index(name) for name in expected_joint_names]
+    poses = bank_poses[:, reorder]
+    velocity_limits = bank_velocity_limits[reorder]
+    if poses.ndim != 2 or poses.shape[1] != len(expected_joint_names):
+        raise ValueError(f"Random pose bank must have shape (N, {len(expected_joint_names)}): {path}")
+    if velocity_limits.shape != (len(expected_joint_names),) or np.any(velocity_limits <= 0.0):
+        raise ValueError(f"Random pose-bank velocity limits are invalid: {path}")
+    if not np.all(np.isfinite(poses)) or not np.all(np.isfinite(velocity_limits)):
+        raise ValueError(f"Random pose bank contains non-finite values: {path}")
+    return poses, entries, velocity_limits, payload
+
+
 def _write_trajectory(path: Path, joint_names: list[str], positions: np.ndarray, fps: float) -> float:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -86,6 +119,115 @@ def _min_jerk(start: np.ndarray, end: np.ndarray, duration_s: float, fps: float)
     phase = np.arange(1, count + 1, dtype=np.float64) / count
     blend = 10.0 * phase**3 - 15.0 * phase**4 + 6.0 * phase**5
     return start[None, :] + blend[:, None] * (end - start)[None, :]
+
+
+def _coverage_indices(positions: np.ndarray, count: int) -> np.ndarray:
+    if count <= 0 or count > len(positions):
+        raise ValueError(f"Cannot select {count} coverage poses from {len(positions)} candidates.")
+    center = np.median(positions, axis=0)
+    scale = np.maximum(np.percentile(positions, 95.0, axis=0) - np.percentile(positions, 5.0, axis=0), 0.05)
+    normalized = np.clip((positions - center) / scale, -4.0, 4.0)
+    selected = [int(np.argmin(np.linalg.norm(normalized, axis=1)))]
+    min_distance = np.linalg.norm(normalized - normalized[selected[0]], axis=1)
+    while len(selected) < count:
+        next_index = int(np.argmax(min_distance))
+        selected.append(next_index)
+        min_distance = np.minimum(min_distance, np.linalg.norm(normalized - normalized[next_index], axis=1))
+    return np.asarray(selected, dtype=np.int64)
+
+
+def _velocity_safe_transition_duration_s(
+    start: np.ndarray,
+    end: np.ndarray,
+    velocity_limits: np.ndarray,
+    nominal_duration_s: float,
+) -> float:
+    # Quintic minimum-jerk interpolation has max d(blend)/du = 1.875.
+    required_duration_s = float(np.max(1.875 * np.abs(end - start) / velocity_limits))
+    return max(float(nominal_duration_s), required_duration_s)
+
+
+def _velocity_safe_pose_sequence(
+    poses: np.ndarray,
+    labels: list[str],
+    velocity_limits: np.ndarray,
+    fps: float,
+    hold_s: float,
+    nominal_transition_s: float,
+) -> tuple[np.ndarray, list[dict[str, float | str]]]:
+    hold_count = max(int(round(hold_s * fps)), 1)
+    frames: list[np.ndarray] = []
+    timeline: list[dict[str, float | str]] = []
+    cursor = 0
+    for index, (pose, label) in enumerate(zip(poses, labels, strict=True)):
+        if index > 0:
+            transition_duration_s = _velocity_safe_transition_duration_s(
+                poses[index - 1], pose, velocity_limits, nominal_transition_s
+            )
+            transition = _min_jerk(poses[index - 1], pose, transition_duration_s, fps)
+            transition_start = cursor / fps
+            frames.extend(transition)
+            cursor += len(transition)
+            timeline.append(
+                {
+                    "kind": "velocity_safe_transition",
+                    "label": f"{labels[index - 1]}_to_{label}",
+                    "start_s": transition_start,
+                    "end_s": cursor / fps,
+                }
+            )
+        hold_start = cursor / fps
+        frames.extend(np.repeat(pose[None, :], hold_count, axis=0))
+        cursor += hold_count
+        timeline.append({"kind": "static_hold", "label": label, "start_s": hold_start, "end_s": cursor / fps})
+    return np.asarray(frames), timeline
+
+
+def _random_pose_interpolation_trajectories(
+    poses: np.ndarray,
+    pose_labels: list[str],
+    velocity_limits: np.ndarray,
+    count: int,
+    nominal_duration_s: float,
+    fps: float,
+    rng: np.random.Generator,
+) -> tuple[list[np.ndarray], list[dict[str, object]]]:
+    if len(poses) < 2:
+        raise ValueError("At least two randomized poses are required for interpolation trajectories.")
+    trajectories: list[np.ndarray] = []
+    metadata: list[dict[str, object]] = []
+    used_pairs: set[tuple[int, int]] = set()
+    while len(trajectories) < count:
+        start_index, end_index = (int(value) for value in rng.choice(len(poses), size=2, replace=False))
+        pair = (start_index, end_index)
+        if pair in used_pairs:
+            continue
+        used_pairs.add(pair)
+        duration_s = _velocity_safe_transition_duration_s(
+            poses[start_index], poses[end_index], velocity_limits, nominal_duration_s
+        )
+        trajectory = np.concatenate(
+            (
+                poses[start_index][None, :],
+                _min_jerk(poses[start_index], poses[end_index], duration_s, fps),
+            ),
+            axis=0,
+        )
+        trajectory_id = f"randomized_trajectory_{len(trajectories) + 1:02d}"
+        trajectories.append(trajectory)
+        metadata.append(
+            {
+                "trajectory_id": trajectory_id,
+                "start_pose_id": pose_labels[start_index],
+                "end_pose_id": pose_labels[end_index],
+                "duration_s": (len(trajectory) - 1) / fps,
+                "nominal_duration_s": nominal_duration_s,
+                "interpolation": "quintic minimum jerk",
+                "velocity_limited": True,
+                "data_scope": "arm_only_14_dof",
+            }
+        )
+    return trajectories, metadata
 
 
 def _pose_sequence(
@@ -118,16 +260,6 @@ def _pose_sequence(
         cursor += hold_count
         timeline.append({"kind": "static_hold", "label": label, "start_s": hold_start, "end_s": cursor / fps})
     return np.asarray(frames), timeline
-
-
-def _concat_sequences(sequences: list[np.ndarray], fps: float, bridge_s: float) -> np.ndarray:
-    if not sequences:
-        raise ValueError("At least one sequence is required.")
-    frames = [sequences[0]]
-    for sequence in sequences[1:]:
-        frames.append(_min_jerk(frames[-1][-1], sequence[0], bridge_s, fps))
-        frames.append(sequence[1:] if len(sequence) > 1 else sequence)
-    return np.concatenate(frames, axis=0)
 
 
 def _concat_labeled_sequences(
@@ -173,18 +305,66 @@ def _concat_labeled_sequences(
     return np.concatenate(frames, axis=0), timeline
 
 
+def _expand_group_timelines(
+    section_timeline: list[dict[str, float | str]],
+    child_timelines: dict[str, list[dict[str, float | str]]],
+) -> list[dict[str, float | str]]:
+    """Expand top-level sections into plot-ready pose/trajectory stages."""
+    detailed: list[dict[str, float | str]] = []
+    for section in section_timeline:
+        section_kind = str(section["kind"])
+        section_label = str(section["label"])
+        section_start = float(section["start_s"])
+        section_end = float(section["end_s"])
+        if section_kind != "section":
+            detailed.append(dict(section))
+            continue
+
+        child_timeline = child_timelines.get(section_label, [])
+        if not child_timeline:
+            detailed.append(dict(section))
+            continue
+        for child in child_timeline:
+            child_start = section_start + float(child["start_s"])
+            child_end = min(section_start + float(child["end_s"]), section_end)
+            if child_end <= child_start:
+                continue
+            detailed.append(
+                {
+                    "kind": str(child["kind"]),
+                    "label": str(child["label"]),
+                    "group": section_label,
+                    "start_s": child_start,
+                    "end_s": child_end,
+                }
+            )
+    return detailed
+
+
 def _select_representative_poses(
     times: np.ndarray,
     positions: np.ndarray,
     count: int,
     stride: int,
+    maximum_source_time_s: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    lower = np.percentile(positions, 1.0, axis=0)
-    upper = np.percentile(positions, 99.0, axis=0)
-    center = np.median(positions, axis=0)
-    scale = np.maximum(np.percentile(positions, 95.0, axis=0) - np.percentile(positions, 5.0, axis=0), 0.05)
+    eligible_indices = np.flatnonzero(times <= maximum_source_time_s + 1.0e-9)
+    if len(eligible_indices) < count:
+        raise ValueError(
+            "Training-reachable static-pose interval contains too few samples: "
+            f"{len(eligible_indices)} available, {count} requested."
+        )
+    eligible_positions = positions[eligible_indices]
+    lower = np.percentile(eligible_positions, 1.0, axis=0)
+    upper = np.percentile(eligible_positions, 99.0, axis=0)
+    center = np.median(eligible_positions, axis=0)
+    scale = np.maximum(
+        np.percentile(eligible_positions, 95.0, axis=0)
+        - np.percentile(eligible_positions, 5.0, axis=0),
+        0.05,
+    )
 
-    candidate_indices = np.arange(0, len(times), max(stride, 1), dtype=np.int64)
+    candidate_indices = eligible_indices[:: max(stride, 1)]
     normalized = np.clip((positions[candidate_indices] - center) / scale, -3.0, 3.0)
     first = int(np.argmin(np.linalg.norm(normalized, axis=1)))
     selected_local = [first]
@@ -206,9 +386,11 @@ def _motion_candidates(
     joint_scale: np.ndarray,
     window_s: float,
     stride_s: float,
+    maximum_source_time_s: float,
 ) -> list[MotionWindow]:
     candidates: list[MotionWindow] = []
-    for start_s in np.arange(0.0, times[-1] - window_s + 1.0e-9, stride_s):
+    candidate_end_s = min(float(times[-1]), maximum_source_time_s)
+    for start_s in np.arange(0.0, candidate_end_s - window_s + 1.0e-9, stride_s):
         lower_index = int(np.searchsorted(times, start_s, side="left"))
         upper_index = int(np.searchsorted(times, start_s + window_s, side="right"))
         window = positions[lower_index:upper_index]
@@ -363,6 +545,7 @@ def _write_pose_catalog(
     times: np.ndarray,
     representative_poses: np.ndarray,
     synthesized_poses: np.ndarray,
+    randomized_poses: np.ndarray,
 ) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
@@ -375,10 +558,15 @@ def _write_pose_catalog(
             )
         for index, pose in enumerate(synthesized_poses, start=1):
             writer.writerow([f"synth_pose_{index:02d}", "synthesized", "", *(f"{v:.8f}" for v in pose)])
+        for index, pose in enumerate(randomized_poses, start=1):
+            writer.writerow([f"randomized_pose_{index:02d}", "randomized_bank", "", *(f"{v:.8f}" for v in pose)])
 
 
 def build_suite(args: argparse.Namespace) -> dict[str, object]:
     joint_names, times, positions = _load_source(args.source)
+    random_bank_poses, random_bank_entries, random_velocity_limits, random_bank_payload = (
+        _load_random_pose_bank(args.random_pose_bank, joint_names)
+    )
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     if not np.isclose(args.trajectory_speed_scale, 1.0, rtol=0.0, atol=1.0e-12):
@@ -388,13 +576,61 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
     (output / "manifest.json").unlink(missing_ok=True)
     rng = np.random.default_rng(args.seed)
 
+    if args.training_episode_horizon_s <= 0.0:
+        raise ValueError("training_episode_horizon_s must be positive.")
+    if args.training_csv_end_margin_s < 0.0:
+        raise ValueError("training_csv_end_margin_s must be non-negative.")
+    maximum_motion_source_time_s = float(times[-1]) - args.training_csv_end_margin_s
+    maximum_static_pose_source_time_s = (
+        maximum_motion_source_time_s
+        - args.training_episode_horizon_s * args.trajectory_speed_scale
+    )
+    if maximum_static_pose_source_time_s <= 0.0:
+        raise ValueError(
+            "Training sampling contract leaves no valid static-pose start interval: "
+            f"source_duration={times[-1]:.6f}s, "
+            f"episode_horizon={args.training_episode_horizon_s:.6f}s, "
+            f"end_margin={args.training_csv_end_margin_s:.6f}s."
+        )
+
     representative_indices, representative_poses, _lower, _upper = _select_representative_poses(
-        times, positions, args.representative_pose_count, args.pose_stride
+        times,
+        positions,
+        args.representative_pose_count,
+        args.pose_stride,
+        maximum_static_pose_source_time_s,
     )
     joint_scale = np.maximum(np.percentile(positions, 95.0, axis=0) - np.percentile(positions, 5.0, axis=0), 0.05)
     synthesized_poses, synthesized_pose_metadata = _synthesize_poses(
         representative_poses, args.synthesized_pose_count, rng
     )
+    generated_bank_indices = np.asarray(
+        [
+            index
+            for index, entry in enumerate(random_bank_entries)
+            if entry.get("kind") == "convex_synthesized"
+        ],
+        dtype=np.int64,
+    )
+    if len(generated_bank_indices) < args.randomized_pose_count:
+        raise ValueError(
+            f"Random pose bank has only {len(generated_bank_indices)} synthesized poses; "
+            f"{args.randomized_pose_count} requested."
+        )
+    selected_generated_local = _coverage_indices(
+        random_bank_poses[generated_bank_indices], args.randomized_pose_count
+    )
+    randomized_bank_indices = generated_bank_indices[selected_generated_local]
+    randomized_poses = random_bank_poses[randomized_bank_indices]
+    randomized_pose_metadata: list[dict[str, object]] = [
+        {
+            "pose_id": f"randomized_pose_{index + 1:02d}",
+            "pose_bank_index": int(bank_index),
+            "pose_bank_pose_id": str(random_bank_entries[bank_index]["pose_id"]),
+            "data_scope": "arm_only_14_dof",
+        }
+        for index, bank_index in enumerate(randomized_bank_indices)
+    ]
 
     pose_catalog_path = output / "poses" / "arm_pose_catalog.csv"
     pose_catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -405,6 +641,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         times,
         representative_poses,
         synthesized_poses,
+        randomized_poses,
     )
 
     representative_pose_labels = [f"representative_pose_{index + 1:02d}" for index in range(len(representative_poses))]
@@ -423,11 +660,21 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         args.pose_hold_s,
         args.pose_transition_s,
     )
+    randomized_pose_labels = [metadata["pose_id"] for metadata in randomized_pose_metadata]
+    randomized_pose_sequence, randomized_pose_timeline = _velocity_safe_pose_sequence(
+        randomized_poses,
+        randomized_pose_labels,
+        random_velocity_limits,
+        args.fps,
+        args.pose_hold_s,
+        args.pose_transition_s,
+    )
 
     files: dict[str, dict[str, object]] = {}
     for name, sequence, timeline in (
         ("representative_poses", representative_pose_sequence, representative_pose_timeline),
         ("synthesized_poses", synthesized_pose_sequence, synthesized_pose_timeline),
+        ("randomized_poses", randomized_pose_sequence, randomized_pose_timeline),
     ):
         path = output / "sequences" / f"{name}_arm_only_sequence_50hz.csv"
         duration = _write_trajectory(path, joint_names, sequence, args.fps)
@@ -444,6 +691,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         joint_scale,
         args.source_window_s,
         args.window_stride_s,
+        maximum_motion_source_time_s,
     )
     selected_windows = _select_motion_windows(
         candidates, args.representative_trajectory_count, args.minimum_window_separation_s
@@ -483,8 +731,15 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
                 "motion_score": window.motion_score,
             }
         )
-    representative_trajectory_sequence = _concat_sequences(
-        representative_trajectories, args.fps, args.trajectory_bridge_s
+    representative_trajectory_sequence, representative_trajectory_timeline = _concat_labeled_sequences(
+        [
+            (metadata["trajectory_id"], trajectory)
+            for metadata, trajectory in zip(
+                representative_trajectory_metadata, representative_trajectories, strict=True
+            )
+        ],
+        args.fps,
+        args.trajectory_bridge_s,
     )
     representative_trajectory_path = (
         output / "sequences" / "representative_trajectories_arm_only_sequence_50hz.csv"
@@ -495,6 +750,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
             representative_trajectory_path, joint_names, representative_trajectory_sequence, args.fps
         ),
         "items": representative_trajectory_metadata,
+        "timeline": representative_trajectory_timeline,
     }
 
     synthesized_trajectories, synthesized_trajectory_metadata = _synthesize_trajectories(
@@ -514,8 +770,15 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         duration = _write_trajectory(path, joint_names, trajectory, args.fps)
         synthesized_trajectory_metadata[index - 1]["path"] = path.relative_to(output).as_posix()
         synthesized_trajectory_metadata[index - 1]["duration_s"] = duration
-    synthesized_trajectory_sequence = _concat_sequences(
-        synthesized_trajectories, args.fps, args.trajectory_bridge_s
+    synthesized_trajectory_sequence, synthesized_trajectory_timeline = _concat_labeled_sequences(
+        [
+            (metadata["trajectory_id"], trajectory)
+            for metadata, trajectory in zip(
+                synthesized_trajectory_metadata, synthesized_trajectories, strict=True
+            )
+        ],
+        args.fps,
+        args.trajectory_bridge_s,
     )
     synthesized_trajectory_path = (
         output / "sequences" / f"synthesized_trajectories_arm_only_sequence_seed{args.seed}_50hz.csv"
@@ -526,17 +789,72 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
             synthesized_trajectory_path, joint_names, synthesized_trajectory_sequence, args.fps
         ),
         "items": synthesized_trajectory_metadata,
+        "timeline": synthesized_trajectory_timeline,
+    }
+
+    randomized_trajectories, randomized_trajectory_metadata = _random_pose_interpolation_trajectories(
+        randomized_poses,
+        [str(label) for label in randomized_pose_labels],
+        random_velocity_limits,
+        args.randomized_trajectory_count,
+        args.randomized_trajectory_nominal_duration_s,
+        args.fps,
+        rng,
+    )
+    for index, trajectory in enumerate(randomized_trajectories, start=1):
+        path = (
+            output
+            / "trajectories"
+            / "randomized"
+            / f"randomized_arm_trajectory_{index:02d}_seed20260715_minjerk_50hz.csv"
+        )
+        duration = _write_trajectory(path, joint_names, trajectory, args.fps)
+        randomized_trajectory_metadata[index - 1]["path"] = path.relative_to(output).as_posix()
+        randomized_trajectory_metadata[index - 1]["duration_s"] = duration
+    randomized_trajectory_sequence, randomized_trajectory_timeline = _concat_labeled_sequences(
+        [
+            (str(metadata["trajectory_id"]), trajectory)
+            for metadata, trajectory in zip(
+                randomized_trajectory_metadata, randomized_trajectories, strict=True
+            )
+        ],
+        args.fps,
+        args.trajectory_bridge_s,
+    )
+    randomized_trajectory_path = (
+        output / "sequences" / "randomized_trajectories_arm_only_sequence_seed20260715_50hz.csv"
+    )
+    files["randomized_trajectories"] = {
+        "path": randomized_trajectory_path.relative_to(output).as_posix(),
+        "duration_s": _write_trajectory(
+            randomized_trajectory_path, joint_names, randomized_trajectory_sequence, args.fps
+        ),
+        "items": randomized_trajectory_metadata,
+        "timeline": randomized_trajectory_timeline,
     }
 
     all_sequence, all_timeline = _concat_labeled_sequences(
         [
             ("representative_poses", representative_pose_sequence),
             ("synthesized_poses", synthesized_pose_sequence),
+            ("randomized_poses", randomized_pose_sequence),
             ("representative_trajectories", representative_trajectory_sequence),
             ("synthesized_trajectories", synthesized_trajectory_sequence),
+            ("randomized_trajectories", randomized_trajectory_sequence),
         ],
         args.fps,
         args.section_bridge_s,
+    )
+    all_detailed_timeline = _expand_group_timelines(
+        all_timeline,
+        {
+            "representative_poses": representative_pose_timeline,
+            "synthesized_poses": synthesized_pose_timeline,
+            "randomized_poses": randomized_pose_timeline,
+            "representative_trajectories": representative_trajectory_timeline,
+            "synthesized_trajectories": synthesized_trajectory_timeline,
+            "randomized_trajectories": randomized_trajectory_timeline,
+        },
     )
     all_path = output / "sequences" / f"all_arm_only_evaluation_sequence_seed{args.seed}_50hz.csv"
     files["all"] = {
@@ -545,10 +863,13 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         "section_order": [
             "representative_poses",
             "synthesized_poses",
+            "randomized_poses",
             "representative_trajectories",
             "synthesized_trajectories",
+            "randomized_trajectories",
         ],
         "timeline": all_timeline,
+        "detailed_timeline": all_detailed_timeline,
     }
 
     static_pose_frames = int(round(args.static_pose_test_duration_s * args.fps)) + 1
@@ -582,6 +903,18 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         )
         synthesized_pose_metadata[index - 1]["path"] = path.relative_to(output).as_posix()
         synthesized_pose_metadata[index - 1]["duration_s"] = duration
+    for index, pose in enumerate(randomized_poses, start=1):
+        path = (
+            output
+            / "poses"
+            / "randomized"
+            / f"randomized_arm_pose_{index:02d}_seed20260715_hold20s_50hz.csv"
+        )
+        duration = _write_trajectory(
+            path, joint_names, np.repeat(pose[None, :], static_pose_frames, axis=0), args.fps
+        )
+        randomized_pose_metadata[index - 1]["path"] = path.relative_to(output).as_posix()
+        randomized_pose_metadata[index - 1]["duration_s"] = duration
 
     try:
         source_path = str(args.source.relative_to(PROJECT_ROOT))
@@ -589,7 +922,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         source_path = str(args.source)
 
     manifest: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 5,
         "data_scope": "arm_only_14_dof",
         "contains_full_body_state": False,
         "source": {
@@ -599,17 +932,53 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
             "duration_s": float(times[-1]),
             "joint_names": joint_names,
         },
+        "random_pose_bank": {
+            "path": args.random_pose_bank.relative_to(PROJECT_ROOT).as_posix(),
+            "sha256": _sha256(args.random_pose_bank),
+            "schema_version": random_bank_payload["schema_version"],
+            "bank_size": random_bank_payload["generation"]["bank_size"],
+            "seed": random_bank_payload["generation"]["seed"],
+        },
         "generation": {
             "seed": args.seed,
             "fps": args.fps,
             "controlled_joint_count": len(joint_names),
             "controlled_joint_names": joint_names,
             "trajectory_speed_scale": args.trajectory_speed_scale,
-            "representative_pose_method": "normalized farthest-point coverage from median pose",
-            "representative_trajectory_method": "diverse non-overlapping 5 s high-motion windows",
+            "training_sampling_contract": {
+                "csv_loop": False,
+                "episode_horizon_s": args.training_episode_horizon_s,
+                "csv_end_margin_s": args.training_csv_end_margin_s,
+                "static_pose_source_time_range_s": [0.0, maximum_static_pose_source_time_s],
+                "moving_trajectory_source_time_range_s": [0.0, maximum_motion_source_time_s],
+            },
+            "representative_pose_method": (
+                "normalized farthest-point coverage from median pose within the "
+                "training-reachable static-start interval"
+            ),
+            "representative_trajectory_method": (
+                "diverse non-overlapping 5 s high-motion windows within the "
+                "training-reachable moving interval"
+            ),
             "synthesis_method": "pairwise convex interpolation of measured arm poses and frame-aligned measured 1x arm trajectories",
+            "randomized_pose_method": (
+                "farthest-point coverage of the new convex-synthesized entries in the Stand random pose bank"
+            ),
+            "randomized_trajectory_method": (
+                "velocity-limited quintic minimum-jerk interpolation between deterministic randomized poses"
+            ),
             "runtime_random_sampling": False,
         },
+        "excluded_test_postures": [
+            {
+                "label": "former_representative_pose_02_arms_down",
+                "source_time_s": REMOVED_ARMS_DOWN_SOURCE_TIME_S,
+                "reason": (
+                    "explicitly removed from the Stand pose test set; this source time is also "
+                    "outside the training-reachable static-start interval"
+                ),
+            }
+        ],
         "representative_poses": [
             {
                 **representative_pose_file_metadata[index],
@@ -620,8 +989,10 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
             for index, source_index in enumerate(representative_indices)
         ],
         "synthesized_poses": synthesized_pose_metadata,
+        "randomized_poses": randomized_pose_metadata,
         "representative_trajectories": representative_trajectory_metadata,
         "synthesized_trajectories": synthesized_trajectory_metadata,
+        "randomized_trajectories": randomized_trajectory_metadata,
         "files": files,
     }
     generated_paths = [path for path in output.rglob("*.csv")]
@@ -637,12 +1008,16 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--random-pose-bank", type=Path, default=DEFAULT_RANDOM_POSE_BANK)
     parser.add_argument("--seed", type=int, default=20260714)
     parser.add_argument("--fps", type=float, default=50.0)
     parser.add_argument("--representative-pose-count", type=int, default=6)
     parser.add_argument("--synthesized-pose-count", type=int, default=3)
     parser.add_argument("--representative-trajectory-count", type=int, default=4)
     parser.add_argument("--synthesized-trajectory-count", type=int, default=3)
+    parser.add_argument("--randomized-pose-count", type=int, default=8)
+    parser.add_argument("--randomized-trajectory-count", type=int, default=6)
+    parser.add_argument("--randomized-trajectory-nominal-duration-s", type=float, default=5.0)
     parser.add_argument("--pose-stride", type=int, default=10)
     parser.add_argument("--pose-hold-s", type=float, default=4.0)
     parser.add_argument("--pose-transition-s", type=float, default=2.0)
@@ -653,6 +1028,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-window-separation-s", type=float, default=10.0)
     parser.add_argument("--trajectory-bridge-s", type=float, default=2.0)
     parser.add_argument("--section-bridge-s", type=float, default=3.0)
+    parser.add_argument(
+        "--training-episode-horizon-s",
+        type=float,
+        default=DEFAULT_TRAINING_EPISODE_HORIZON_S,
+        help="Stand training episode horizon used to bound static-pose reset starts.",
+    )
+    parser.add_argument(
+        "--training-csv-end-margin-s",
+        type=float,
+        default=DEFAULT_TRAINING_CSV_END_MARGIN_S,
+        help="Stand training CSV end margin excluded from all evaluation candidates.",
+    )
     return parser.parse_args()
 
 
@@ -660,6 +1047,7 @@ def main() -> None:
     args = _parse_args()
     args.source = args.source.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
+    args.random_pose_bank = args.random_pose_bank.expanduser().resolve()
     manifest = build_suite(args)
     print(f"Built deterministic ArmHack Stand arm-only test data: {args.output}")
     print(f"Source SHA-256: {manifest['source']['sha256']}")
@@ -673,6 +1061,10 @@ def main() -> None:
             f"source={trajectory['source_start_s']:.1f}..{trajectory['source_end_s']:.1f}s, "
             f"dominant={trajectory['dominant_joint']}, span={trajectory['max_joint_span_rad']:.4f}rad"
         )
+    print(
+        f"Randomized evaluation: {len(manifest['randomized_poses'])} poses + "
+        f"{len(manifest['randomized_trajectories'])} pose-interpolation trajectories"
+    )
     print(f"All-sequence duration: {manifest['files']['all']['duration_s']:.3f}s")
 
 

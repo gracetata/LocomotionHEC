@@ -24,6 +24,34 @@ gym.register(
 )
 
 gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_stand_randomized_payload_env_cfg:G1StandRandomizedPayloadEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_stand_randomized_payload_env_cfg:G1StandRandomizedPayloadEnvCfg_PLAY"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
     id="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0",
     entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
     disable_env_checker=True,

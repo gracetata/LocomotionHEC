@@ -17,6 +17,15 @@ TASK_INIT_FILE = (
 STAND_CFG_FILE = (
     PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "config" / "g1_perturb" / "g1_stand_perturb_env_cfg.py"
 )
+STAND_RANDOMIZED_CFG_FILE = (
+    PACKAGE_ROOT
+    / "tasks"
+    / "locomotion"
+    / "amp"
+    / "config"
+    / "g1_perturb"
+    / "g1_stand_randomized_payload_env_cfg.py"
+)
 WALK_CFG_FILE = (
     PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "config" / "g1_perturb" / "g1_walk_perturb_env_cfg.py"
 )
@@ -49,6 +58,23 @@ REFERENCE_CHECK_FILE = Path(__file__).resolve().parents[3] / "scripts" / "tools"
 TRAIN_SCRIPT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "train_g1_amp.sh"
 STAND_TRAIN_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand.sh"
+)
+STAND_RANDOMIZED_TRAIN_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_randomized_payload.sh"
+)
+STAND_RANDOM_DATA_BUILDER_FILE = (
+    Path(__file__).resolve().parents[3]
+    / "scripts"
+    / "tools"
+    / "build_armhack_stand_randomized_training_data.py"
+)
+STAND_RANDOM_POSE_BANK = (
+    PROJECT_ROOT
+    / "Reference Data"
+    / "ArmHack"
+    / "StandPerturb"
+    / "RandomizedTraining"
+    / "random_arm_pose_bank_seed20260715.json"
 )
 STAND_VIS_EVAL_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "vis_g1_armhack_stand_eval.sh"
@@ -94,6 +120,7 @@ def test_g1_perturb_files_exist():
         ENV_INIT_FILE,
         TASK_INIT_FILE,
         STAND_CFG_FILE,
+        STAND_RANDOMIZED_CFG_FILE,
         WALK_CFG_FILE,
         AGENT_CFG_FILE,
         REFERENCE_DATA_MODULE,
@@ -106,6 +133,9 @@ def test_g1_perturb_files_exist():
         REFERENCE_CHECK_FILE,
         TRAIN_SCRIPT_FILE,
         STAND_TRAIN_SCRIPT_FILE,
+        STAND_RANDOMIZED_TRAIN_SCRIPT_FILE,
+        STAND_RANDOM_DATA_BUILDER_FILE,
+        STAND_RANDOM_POSE_BANK,
         STAND_VIS_EVAL_SCRIPT_FILE,
         STAND_VIS_BUILDER_FILE,
         STAND_VIS_MANIFEST,
@@ -132,7 +162,9 @@ def test_g1_perturb_env_exports_and_joint_groups_present():
     assert "G1_FULL_BODY_SDK_JOINT_NAMES" in env_text
     assert "class G1PerturbAmpEnv(ManagerBasedAmpEnv):" in env_text
     assert "def step(self, action: torch.Tensor):" in env_text
-    assert 'source: Literal["sine", "csv", "pose_set"] = "sine"' in env_text
+    assert 'source: Literal["sine", "csv", "pose_set", "random_pose_trajectory"] = "sine"' in env_text
+    assert "_advance_random_pose_trajectories" in env_text
+    assert "contains_future_policy_observation" not in env_text
     assert "csv_use_g1_action_order_q_columns" in env_text
     assert 'csv_q_column_joint_order: Literal["lab", "sdk"] = "lab"' in env_text
     assert "csv_randomize_start_on_reset" in env_text
@@ -164,6 +196,8 @@ def test_g1_perturb_task_registration_present():
 
     assert "LeggedLab-Isaac-AMP-G1-StandPerturb-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-StandPerturb-Play-v0" in task_init_text
+    assert "LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0" in task_init_text
+    assert "LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0" in task_init_text
     assert 'entry_point="legged_lab.envs:G1PerturbAmpEnv"' in task_init_text
@@ -308,6 +342,17 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
     assert len(visualization_manifest["representative_trajectories"]) == 4
     assert len(visualization_manifest["synthesized_poses"]) == 3
     assert len(visualization_manifest["synthesized_trajectories"]) == 3
+    assert len(visualization_manifest["randomized_poses"]) == 8
+    assert len(visualization_manifest["randomized_trajectories"]) == 6
+    assert visualization_manifest["schema_version"] == 5
+    assert visualization_manifest["random_pose_bank"]["seed"] == 20260715
+    assert visualization_manifest["random_pose_bank"]["bank_size"] == 512
+    detailed_timeline = visualization_manifest["files"]["all"]["detailed_timeline"]
+    assert len(detailed_timeline) == 59
+    assert detailed_timeline[0]["label"] == "representative_pose_01"
+    assert detailed_timeline[-1]["label"] == "randomized_trajectory_06"
+    assert detailed_timeline[0]["start_s"] == 0.0
+    assert detailed_timeline[-1]["end_s"] == visualization_manifest["files"]["all"]["duration_s"]
     assert all(
         trajectory["equivalent_source_speed"] == 1.0
         for trajectory in visualization_manifest["representative_trajectories"]
@@ -316,6 +361,22 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
         trajectory["equivalent_source_speed"] == 1.0
         for trajectory in visualization_manifest["synthesized_trajectories"]
     )
+
+
+def test_stand_random_pose_bank_is_arm_only_and_reproducible():
+    pose_bank = json.loads(STAND_RANDOM_POSE_BANK.read_text(encoding="utf-8"))
+    assert pose_bank["schema_version"] == 1
+    assert pose_bank["data_scope"] == "arm_only_14_dof"
+    assert pose_bank["generation"]["seed"] == 20260715
+    assert pose_bank["generation"]["bank_size"] == 512
+    assert pose_bank["generation"]["source_anchor_count"] == 64
+    assert pose_bank["generation"]["random_convex_pose_count"] == 448
+    assert pose_bank["generation"]["independent_per_joint_uniform_sampling"] is False
+    assert pose_bank["generation"]["contains_future_policy_observation"] is False
+    assert len(pose_bank["joint_names"]) == 14
+    assert len(pose_bank["interpolation_velocity_limits_rad_s"]) == 14
+    assert len(pose_bank["poses"]) == 512
+    assert all(len(pose["positions_rad"]) == 14 for pose in pose_bank["poses"])
 
 
 def test_stand_reference_csv_contains_only_named_arm_columns():
@@ -381,6 +442,9 @@ def test_runner_cfg_and_amp_runner_support_policy_only_resume():
 def test_train_scripts_have_isolated_working_defaults():
     train_script_text = _read_text(TRAIN_SCRIPT_FILE)
     stand_train_script_text = _read_text(STAND_TRAIN_SCRIPT_FILE)
+    stand_randomized_train_script_text = _read_text(STAND_RANDOMIZED_TRAIN_SCRIPT_FILE)
+    stand_randomized_cfg_text = _read_text(STAND_RANDOMIZED_CFG_FILE)
+    stand_random_data_builder_text = _read_text(STAND_RANDOM_DATA_BUILDER_FILE)
     walk_train_script_text = _read_text(WALK_TRAIN_SCRIPT_FILE)
     vis_script_text = _read_text(VIS_SCRIPT_FILE)
     stand_vis_eval_text = _read_text(STAND_VIS_EVAL_SCRIPT_FILE)
@@ -400,6 +464,18 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "FINAL_MOTION_SCALE=${FINAL_MOTION_SCALE:-1.0}" in stand_train_script_text
     assert "BASELINE_KL_ENABLE=True" in stand_train_script_text
     assert "agent.load_policy_only=True" in stand_train_script_text
+    assert 'TASK="LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0"' in stand_randomized_train_script_text
+    assert "model_2999.pt" in stand_randomized_train_script_text
+    assert "2c87cc2cc3706c1024594d14d85a34e7bf468b54f6b66e49b6155ef72a2dbd16" in stand_randomized_train_script_text
+    assert "PAYLOAD_MAX_KG=${PAYLOAD_MAX_KG:-1.0}" in stand_randomized_train_script_text
+    assert "random_curriculum_static_steps" in stand_randomized_train_script_text
+    assert "agent.load_policy_only=True" in stand_randomized_train_script_text
+    assert "agent.reset_iteration_on_policy_only_load=True" in stand_randomized_train_script_text
+    assert 'body_names=["left_wrist_yaw_link", "right_wrist_yaw_link"]' in stand_randomized_cfg_text
+    assert '"mass_distribution_params": (0.0, 1.0)' in stand_randomized_cfg_text
+    assert 'perturbation.source = "random_pose_trajectory"' in stand_randomized_cfg_text
+    assert "2-to-4-parent Dirichlet convex combinations" in stand_random_data_builder_text
+    assert "MIN_SAFE_VELOCITY_RAD_S = 0.20" in stand_random_data_builder_text
     assert 'TASK="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0"' in walk_train_script_text
     assert "checkpoint/model_9996/locomotion.onnx" in walk_train_script_text
     assert "BaselineLocomotionModel9996/model_9996.pt" in walk_train_script_text
@@ -428,7 +504,12 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "CONDA_BASE=${CONDA_BASE:-${HOME}/anaconda3}" in vis_script_text
     assert "TestData/ArmOnly" in stand_vis_eval_text
     assert "all_arm_only_evaluation_sequence_seed20260714_50hz.csv" in stand_vis_eval_text
+    assert "2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715" in stand_vis_eval_text
     assert "Test Reports/StandArmOnly" in stand_vis_eval_text
+    assert 'CHECKPOINT_SHA256=$(sha256sum "${CHECKPOINT}"' in stand_vis_eval_text
+    assert "MODEL_ID=${MODEL_ID:-${CHECKPOINT_STEM}_${CHECKPOINT_SHORT_SHA}}" in stand_vis_eval_text
+    assert 'REPORT_CONDITION_ID="${TEST_ID}__payload_${PAYLOAD_TAG}kg"' in stand_vis_eval_text
+    assert '--armhack_stand_manifest "${MANIFEST}"' in stand_vis_eval_text
     assert "csv_randomize_start_on_reset=False" in stand_vis_eval_text
     assert "csv_curriculum_enabled=False" in stand_vis_eval_text
     assert "csv_curriculum_motion_scale=1.0" in stand_vis_eval_text
@@ -439,5 +520,22 @@ def test_train_scripts_have_isolated_working_defaults():
     assert '"data_scope": "arm_only_14_dof"' in stand_vis_builder_text
     assert '"contains_full_body_state": False' in stand_vis_builder_text
     assert '"trajectory_speed_scale": args.trajectory_speed_scale' in stand_vis_builder_text
+    assert '"schema_version": 5' in stand_vis_builder_text
+    assert '"training_sampling_contract"' in stand_vis_builder_text
+    assert '"detailed_timeline": all_detailed_timeline' in stand_vis_builder_text
+    assert "REMOVED_ARMS_DOWN_SOURCE_TIME_S = 404.897585" in stand_vis_builder_text
+    assert "maximum_static_pose_source_time_s" in stand_vis_builder_text
+    assert "randomized_poses" in stand_vis_eval_text
+    assert "randomized_trajectories" in stand_vis_eval_text
+    assert 'TASK=LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0' in stand_vis_eval_text
+    assert "PAYLOAD_KG=${PAYLOAD_KG:-0.0}" in stand_vis_eval_text
+    assert '--armhack_stand_payload_kg "${PAYLOAD_KG}"' in stand_vis_eval_text
+    assert '"--armhack_stand_manifest"' in play_script_text
+    assert '"--armhack_stand_payload_kg"' in play_script_text
+    assert "body_pos_w" in play_script_text
+    assert "euler_xyz_from_quat" in play_script_text
+    assert "torso_world_6d.png" in play_script_text
+    assert "躯干世界坐标系 6D 位移" in play_script_text
     assert "--armhack_stand_report_path" in play_script_text
     assert "mean_abs_step_delta" in play_script_text
+    assert "左/右腕末端附加质量" in play_script_text

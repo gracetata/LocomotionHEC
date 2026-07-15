@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 5,
   "data_scope": "arm_only_14_dof",
   "contains_full_body_state": false,
   "source": {
@@ -24,6 +24,13 @@
       "right_wrist_yaw_joint"
     ]
   },
+  "random_pose_bank": {
+    "path": "Reference Data/ArmHack/StandPerturb/RandomizedTraining/random_arm_pose_bank_seed20260715.json",
+    "sha256": "1ff56b9a59abaa01d5aadaa2f60685517b3f5db1dc3c2f06ad6acfd5ff3246a1",
+    "schema_version": 1,
+    "bank_size": 512,
+    "seed": 20260715
+  },
   "generation": {
     "seed": 20260714,
     "fps": 50.0,
@@ -45,11 +52,33 @@
       "right_wrist_yaw_joint"
     ],
     "trajectory_speed_scale": 1.0,
-    "representative_pose_method": "normalized farthest-point coverage from median pose",
-    "representative_trajectory_method": "diverse non-overlapping 5 s high-motion windows",
+    "training_sampling_contract": {
+      "csv_loop": false,
+      "episode_horizon_s": 20.0,
+      "csv_end_margin_s": 0.25,
+      "static_pose_source_time_range_s": [
+        0.0,
+        384.66779200010933
+      ],
+      "moving_trajectory_source_time_range_s": [
+        0.0,
+        404.66779200010933
+      ]
+    },
+    "representative_pose_method": "normalized farthest-point coverage from median pose within the training-reachable static-start interval",
+    "representative_trajectory_method": "diverse non-overlapping 5 s high-motion windows within the training-reachable moving interval",
     "synthesis_method": "pairwise convex interpolation of measured arm poses and frame-aligned measured 1x arm trajectories",
+    "randomized_pose_method": "farthest-point coverage of the new convex-synthesized entries in the Stand random pose bank",
+    "randomized_trajectory_method": "velocity-limited quintic minimum-jerk interpolation between deterministic randomized poses",
     "runtime_random_sampling": false
   },
+  "excluded_test_postures": [
+    {
+      "label": "former_representative_pose_02_arms_down",
+      "source_time_s": 404.897585,
+      "reason": "explicitly removed from the Stand pose test set; this source time is also outside the training-reachable static-start interval"
+    }
+  ],
   "representative_poses": [
     {
       "pose_id": "representative_pose_01",
@@ -63,40 +92,40 @@
       "pose_id": "representative_pose_02",
       "path": "poses/representative/representative_arm_pose_02_hold20s_50hz.csv",
       "duration_s": 20.0,
-      "source_row": 20120,
-      "source_time_s": 404.8975850000279,
+      "source_row": 5290,
+      "source_time_s": 106.44788000010885,
       "data_scope": "arm_only_14_dof"
     },
     {
       "pose_id": "representative_pose_03",
       "path": "poses/representative/representative_arm_pose_03_hold20s_50hz.csv",
       "duration_s": 20.0,
-      "source_row": 1750,
-      "source_time_s": 35.204045000020415,
+      "source_row": 6620,
+      "source_time_s": 133.21484100003727,
       "data_scope": "arm_only_14_dof"
     },
     {
       "pose_id": "representative_pose_04",
       "path": "poses/representative/representative_arm_pose_04_hold20s_50hz.csv",
       "duration_s": 20.0,
-      "source_row": 6620,
-      "source_time_s": 133.21484100003727,
+      "source_row": 11930,
+      "source_time_s": 240.07584800000768,
       "data_scope": "arm_only_14_dof"
     },
     {
       "pose_id": "representative_pose_05",
       "path": "poses/representative/representative_arm_pose_05_hold20s_50hz.csv",
       "duration_s": 20.0,
-      "source_row": 19230,
-      "source_time_s": 386.98248700005934,
+      "source_row": 14180,
+      "source_time_s": 285.3319420000771,
       "data_scope": "arm_only_14_dof"
     },
     {
       "pose_id": "representative_pose_06",
       "path": "poses/representative/representative_arm_pose_06_hold20s_50hz.csv",
       "duration_s": 20.0,
-      "source_row": 5230,
-      "source_time_s": 105.240482000052,
+      "source_row": 6750,
+      "source_time_s": 135.8310080000665,
       "data_scope": "arm_only_14_dof"
     }
   ],
@@ -144,6 +173,72 @@
       ],
       "data_scope": "arm_only_14_dof",
       "path": "poses/synthesized/synthesized_arm_pose_03_seed20260714_hold20s_50hz.csv",
+      "duration_s": 20.0
+    }
+  ],
+  "randomized_poses": [
+    {
+      "pose_id": "randomized_pose_01",
+      "pose_bank_index": 473,
+      "pose_bank_pose_id": "random_convex_pose_0410",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_01_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_02",
+      "pose_bank_index": 119,
+      "pose_bank_pose_id": "random_convex_pose_0056",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_02_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_03",
+      "pose_bank_index": 143,
+      "pose_bank_pose_id": "random_convex_pose_0080",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_03_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_04",
+      "pose_bank_index": 142,
+      "pose_bank_pose_id": "random_convex_pose_0079",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_04_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_05",
+      "pose_bank_index": 346,
+      "pose_bank_pose_id": "random_convex_pose_0283",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_05_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_06",
+      "pose_bank_index": 349,
+      "pose_bank_pose_id": "random_convex_pose_0286",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_06_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_07",
+      "pose_bank_index": 453,
+      "pose_bank_pose_id": "random_convex_pose_0390",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_07_seed20260715_hold20s_50hz.csv",
+      "duration_s": 20.0
+    },
+    {
+      "pose_id": "randomized_pose_08",
+      "pose_bank_index": 102,
+      "pose_bank_pose_id": "random_convex_pose_0039",
+      "data_scope": "arm_only_14_dof",
+      "path": "poses/randomized/randomized_arm_pose_08_seed20260715_hold20s_50hz.csv",
       "duration_s": 20.0
     }
   ],
@@ -284,6 +379,74 @@
       "duration_s": 5.0
     }
   ],
+  "randomized_trajectories": [
+    {
+      "trajectory_id": "randomized_trajectory_01",
+      "start_pose_id": "randomized_pose_07",
+      "end_pose_id": "randomized_pose_08",
+      "duration_s": 5.0,
+      "nominal_duration_s": 5.0,
+      "interpolation": "quintic minimum jerk",
+      "velocity_limited": true,
+      "data_scope": "arm_only_14_dof",
+      "path": "trajectories/randomized/randomized_arm_trajectory_01_seed20260715_minjerk_50hz.csv"
+    },
+    {
+      "trajectory_id": "randomized_trajectory_02",
+      "start_pose_id": "randomized_pose_02",
+      "end_pose_id": "randomized_pose_01",
+      "duration_s": 5.0,
+      "nominal_duration_s": 5.0,
+      "interpolation": "quintic minimum jerk",
+      "velocity_limited": true,
+      "data_scope": "arm_only_14_dof",
+      "path": "trajectories/randomized/randomized_arm_trajectory_02_seed20260715_minjerk_50hz.csv"
+    },
+    {
+      "trajectory_id": "randomized_trajectory_03",
+      "start_pose_id": "randomized_pose_01",
+      "end_pose_id": "randomized_pose_06",
+      "duration_s": 5.0,
+      "nominal_duration_s": 5.0,
+      "interpolation": "quintic minimum jerk",
+      "velocity_limited": true,
+      "data_scope": "arm_only_14_dof",
+      "path": "trajectories/randomized/randomized_arm_trajectory_03_seed20260715_minjerk_50hz.csv"
+    },
+    {
+      "trajectory_id": "randomized_trajectory_04",
+      "start_pose_id": "randomized_pose_03",
+      "end_pose_id": "randomized_pose_06",
+      "duration_s": 5.0,
+      "nominal_duration_s": 5.0,
+      "interpolation": "quintic minimum jerk",
+      "velocity_limited": true,
+      "data_scope": "arm_only_14_dof",
+      "path": "trajectories/randomized/randomized_arm_trajectory_04_seed20260715_minjerk_50hz.csv"
+    },
+    {
+      "trajectory_id": "randomized_trajectory_05",
+      "start_pose_id": "randomized_pose_01",
+      "end_pose_id": "randomized_pose_02",
+      "duration_s": 5.0,
+      "nominal_duration_s": 5.0,
+      "interpolation": "quintic minimum jerk",
+      "velocity_limited": true,
+      "data_scope": "arm_only_14_dof",
+      "path": "trajectories/randomized/randomized_arm_trajectory_05_seed20260715_minjerk_50hz.csv"
+    },
+    {
+      "trajectory_id": "randomized_trajectory_06",
+      "start_pose_id": "randomized_pose_07",
+      "end_pose_id": "randomized_pose_06",
+      "duration_s": 5.0,
+      "nominal_duration_s": 5.0,
+      "interpolation": "quintic minimum jerk",
+      "velocity_limited": true,
+      "data_scope": "arm_only_14_dof",
+      "path": "trajectories/randomized/randomized_arm_trajectory_06_seed20260715_minjerk_50hz.csv"
+    }
+  ],
   "files": {
     "representative_poses": {
       "path": "sequences/representative_poses_arm_only_sequence_50hz.csv",
@@ -393,6 +556,102 @@
         }
       ]
     },
+    "randomized_poses": {
+      "path": "sequences/randomized_poses_arm_only_sequence_50hz.csv",
+      "duration_s": 58.12,
+      "timeline": [
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_01",
+          "start_s": 0.0,
+          "end_s": 4.0
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_01_to_randomized_pose_02",
+          "start_s": 4.0,
+          "end_s": 7.86
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_02",
+          "start_s": 7.86,
+          "end_s": 11.86
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_02_to_randomized_pose_03",
+          "start_s": 11.86,
+          "end_s": 16.02
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_03",
+          "start_s": 16.02,
+          "end_s": 20.02
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_03_to_randomized_pose_04",
+          "start_s": 20.02,
+          "end_s": 24.82
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_04",
+          "start_s": 24.82,
+          "end_s": 28.82
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_04_to_randomized_pose_05",
+          "start_s": 28.82,
+          "end_s": 32.58
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_05",
+          "start_s": 32.58,
+          "end_s": 36.58
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_05_to_randomized_pose_06",
+          "start_s": 36.58,
+          "end_s": 40.62
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_06",
+          "start_s": 40.62,
+          "end_s": 44.62
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_06_to_randomized_pose_07",
+          "start_s": 44.62,
+          "end_s": 47.54
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_07",
+          "start_s": 47.54,
+          "end_s": 51.54
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_07_to_randomized_pose_08",
+          "start_s": 51.54,
+          "end_s": 54.14
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_08",
+          "start_s": 54.14,
+          "end_s": 58.14
+        }
+      ]
+    },
     "representative_trajectories": {
       "path": "sequences/representative_trajectories_arm_only_sequence_50hz.csv",
       "duration_s": 26.0,
@@ -448,6 +707,50 @@
           "max_joint_span_rad": 1.122395,
           "dominant_joint": "right_shoulder_pitch_joint",
           "motion_score": 3.772905736657666
+        }
+      ],
+      "timeline": [
+        {
+          "kind": "section",
+          "label": "representative_trajectory_01",
+          "start_s": 0.0,
+          "end_s": 5.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectory_02",
+          "start_s": 5.0,
+          "end_s": 7.0
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_02",
+          "start_s": 7.0,
+          "end_s": 12.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectory_03",
+          "start_s": 12.0,
+          "end_s": 14.0
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_03",
+          "start_s": 14.0,
+          "end_s": 19.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectory_04",
+          "start_s": 19.0,
+          "end_s": 21.0
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_04",
+          "start_s": 21.0,
+          "end_s": 26.0
         }
       ]
     },
@@ -536,16 +839,190 @@
           "path": "trajectories/synthesized/synthesized_arm_trajectory_03_seed20260714_measured_blend_1x_50hz.csv",
           "duration_s": 5.0
         }
+      ],
+      "timeline": [
+        {
+          "kind": "section",
+          "label": "synth_trajectory_01",
+          "start_s": 0.0,
+          "end_s": 5.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synth_trajectory_02",
+          "start_s": 5.0,
+          "end_s": 7.0
+        },
+        {
+          "kind": "section",
+          "label": "synth_trajectory_02",
+          "start_s": 7.0,
+          "end_s": 12.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synth_trajectory_03",
+          "start_s": 12.0,
+          "end_s": 14.0
+        },
+        {
+          "kind": "section",
+          "label": "synth_trajectory_03",
+          "start_s": 14.0,
+          "end_s": 19.0
+        }
+      ]
+    },
+    "randomized_trajectories": {
+      "path": "sequences/randomized_trajectories_arm_only_sequence_seed20260715_50hz.csv",
+      "duration_s": 40.0,
+      "items": [
+        {
+          "trajectory_id": "randomized_trajectory_01",
+          "start_pose_id": "randomized_pose_07",
+          "end_pose_id": "randomized_pose_08",
+          "duration_s": 5.0,
+          "nominal_duration_s": 5.0,
+          "interpolation": "quintic minimum jerk",
+          "velocity_limited": true,
+          "data_scope": "arm_only_14_dof",
+          "path": "trajectories/randomized/randomized_arm_trajectory_01_seed20260715_minjerk_50hz.csv"
+        },
+        {
+          "trajectory_id": "randomized_trajectory_02",
+          "start_pose_id": "randomized_pose_02",
+          "end_pose_id": "randomized_pose_01",
+          "duration_s": 5.0,
+          "nominal_duration_s": 5.0,
+          "interpolation": "quintic minimum jerk",
+          "velocity_limited": true,
+          "data_scope": "arm_only_14_dof",
+          "path": "trajectories/randomized/randomized_arm_trajectory_02_seed20260715_minjerk_50hz.csv"
+        },
+        {
+          "trajectory_id": "randomized_trajectory_03",
+          "start_pose_id": "randomized_pose_01",
+          "end_pose_id": "randomized_pose_06",
+          "duration_s": 5.0,
+          "nominal_duration_s": 5.0,
+          "interpolation": "quintic minimum jerk",
+          "velocity_limited": true,
+          "data_scope": "arm_only_14_dof",
+          "path": "trajectories/randomized/randomized_arm_trajectory_03_seed20260715_minjerk_50hz.csv"
+        },
+        {
+          "trajectory_id": "randomized_trajectory_04",
+          "start_pose_id": "randomized_pose_03",
+          "end_pose_id": "randomized_pose_06",
+          "duration_s": 5.0,
+          "nominal_duration_s": 5.0,
+          "interpolation": "quintic minimum jerk",
+          "velocity_limited": true,
+          "data_scope": "arm_only_14_dof",
+          "path": "trajectories/randomized/randomized_arm_trajectory_04_seed20260715_minjerk_50hz.csv"
+        },
+        {
+          "trajectory_id": "randomized_trajectory_05",
+          "start_pose_id": "randomized_pose_01",
+          "end_pose_id": "randomized_pose_02",
+          "duration_s": 5.0,
+          "nominal_duration_s": 5.0,
+          "interpolation": "quintic minimum jerk",
+          "velocity_limited": true,
+          "data_scope": "arm_only_14_dof",
+          "path": "trajectories/randomized/randomized_arm_trajectory_05_seed20260715_minjerk_50hz.csv"
+        },
+        {
+          "trajectory_id": "randomized_trajectory_06",
+          "start_pose_id": "randomized_pose_07",
+          "end_pose_id": "randomized_pose_06",
+          "duration_s": 5.0,
+          "nominal_duration_s": 5.0,
+          "interpolation": "quintic minimum jerk",
+          "velocity_limited": true,
+          "data_scope": "arm_only_14_dof",
+          "path": "trajectories/randomized/randomized_arm_trajectory_06_seed20260715_minjerk_50hz.csv"
+        }
+      ],
+      "timeline": [
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_01",
+          "start_s": 0.0,
+          "end_s": 5.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_02",
+          "start_s": 5.0,
+          "end_s": 7.0
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_02",
+          "start_s": 7.0,
+          "end_s": 12.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_03",
+          "start_s": 12.0,
+          "end_s": 14.0
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_03",
+          "start_s": 14.0,
+          "end_s": 19.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_04",
+          "start_s": 19.0,
+          "end_s": 21.0
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_04",
+          "start_s": 21.0,
+          "end_s": 26.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_05",
+          "start_s": 26.0,
+          "end_s": 28.0
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_05",
+          "start_s": 28.0,
+          "end_s": 33.0
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_06",
+          "start_s": 33.0,
+          "end_s": 35.0
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_06",
+          "start_s": 35.0,
+          "end_s": 40.0
+        }
       ]
     },
     "all": {
       "path": "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv",
-      "duration_s": 103.96,
+      "duration_s": 208.08,
       "section_order": [
         "representative_poses",
         "synthesized_poses",
+        "randomized_poses",
         "representative_trajectories",
-        "synthesized_trajectories"
+        "synthesized_trajectories",
+        "randomized_trajectories"
       ],
       "timeline": [
         {
@@ -568,47 +1045,497 @@
         },
         {
           "kind": "smooth_section_bridge",
-          "label": "to_representative_trajectories",
+          "label": "to_randomized_poses",
           "start_s": 52.96,
           "end_s": 55.96
         },
         {
           "kind": "section",
-          "label": "representative_trajectories",
+          "label": "randomized_poses",
           "start_s": 55.96,
-          "end_s": 81.96
+          "end_s": 114.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectories",
+          "start_s": 114.08,
+          "end_s": 117.08
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectories",
+          "start_s": 117.08,
+          "end_s": 143.08
         },
         {
           "kind": "smooth_section_bridge",
           "label": "to_synthesized_trajectories",
-          "start_s": 81.96,
-          "end_s": 84.96
+          "start_s": 143.08,
+          "end_s": 146.08
         },
         {
           "kind": "section",
           "label": "synthesized_trajectories",
-          "start_s": 84.96,
-          "end_s": 103.96
+          "start_s": 146.08,
+          "end_s": 165.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectories",
+          "start_s": 165.08,
+          "end_s": 168.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectories",
+          "start_s": 168.08,
+          "end_s": 208.08
+        }
+      ],
+      "detailed_timeline": [
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_01",
+          "group": "representative_poses",
+          "start_s": 0.0,
+          "end_s": 4.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_01_to_representative_pose_02",
+          "group": "representative_poses",
+          "start_s": 4.0,
+          "end_s": 6.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_02",
+          "group": "representative_poses",
+          "start_s": 6.0,
+          "end_s": 10.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_02_to_representative_pose_03",
+          "group": "representative_poses",
+          "start_s": 10.0,
+          "end_s": 12.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_03",
+          "group": "representative_poses",
+          "start_s": 12.0,
+          "end_s": 16.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_03_to_representative_pose_04",
+          "group": "representative_poses",
+          "start_s": 16.0,
+          "end_s": 18.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_04",
+          "group": "representative_poses",
+          "start_s": 18.0,
+          "end_s": 22.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_04_to_representative_pose_05",
+          "group": "representative_poses",
+          "start_s": 22.0,
+          "end_s": 24.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_05",
+          "group": "representative_poses",
+          "start_s": 24.0,
+          "end_s": 28.0
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "representative_pose_05_to_representative_pose_06",
+          "group": "representative_poses",
+          "start_s": 28.0,
+          "end_s": 30.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "representative_pose_06",
+          "group": "representative_poses",
+          "start_s": 30.0,
+          "end_s": 33.98
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synthesized_poses",
+          "start_s": 33.98,
+          "end_s": 36.98
+        },
+        {
+          "kind": "static_hold",
+          "label": "synth_pose_01",
+          "group": "synthesized_poses",
+          "start_s": 36.98,
+          "end_s": 40.98
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "synth_pose_01_to_synth_pose_02",
+          "group": "synthesized_poses",
+          "start_s": 40.98,
+          "end_s": 42.98
+        },
+        {
+          "kind": "static_hold",
+          "label": "synth_pose_02",
+          "group": "synthesized_poses",
+          "start_s": 42.98,
+          "end_s": 46.98
+        },
+        {
+          "kind": "smooth_transition",
+          "label": "synth_pose_02_to_synth_pose_03",
+          "group": "synthesized_poses",
+          "start_s": 46.98,
+          "end_s": 48.98
+        },
+        {
+          "kind": "static_hold",
+          "label": "synth_pose_03",
+          "group": "synthesized_poses",
+          "start_s": 48.98,
+          "end_s": 52.96
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_poses",
+          "start_s": 52.96,
+          "end_s": 55.96
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_01",
+          "group": "randomized_poses",
+          "start_s": 55.96,
+          "end_s": 59.96
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_01_to_randomized_pose_02",
+          "group": "randomized_poses",
+          "start_s": 59.96,
+          "end_s": 63.82
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_02",
+          "group": "randomized_poses",
+          "start_s": 63.82,
+          "end_s": 67.82
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_02_to_randomized_pose_03",
+          "group": "randomized_poses",
+          "start_s": 67.82,
+          "end_s": 71.98
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_03",
+          "group": "randomized_poses",
+          "start_s": 71.98,
+          "end_s": 75.98
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_03_to_randomized_pose_04",
+          "group": "randomized_poses",
+          "start_s": 75.98,
+          "end_s": 80.78
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_04",
+          "group": "randomized_poses",
+          "start_s": 80.78,
+          "end_s": 84.78
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_04_to_randomized_pose_05",
+          "group": "randomized_poses",
+          "start_s": 84.78,
+          "end_s": 88.53999999999999
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_05",
+          "group": "randomized_poses",
+          "start_s": 88.53999999999999,
+          "end_s": 92.53999999999999
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_05_to_randomized_pose_06",
+          "group": "randomized_poses",
+          "start_s": 92.53999999999999,
+          "end_s": 96.58
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_06",
+          "group": "randomized_poses",
+          "start_s": 96.58,
+          "end_s": 100.58
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_06_to_randomized_pose_07",
+          "group": "randomized_poses",
+          "start_s": 100.58,
+          "end_s": 103.5
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_07",
+          "group": "randomized_poses",
+          "start_s": 103.5,
+          "end_s": 107.5
+        },
+        {
+          "kind": "velocity_safe_transition",
+          "label": "randomized_pose_07_to_randomized_pose_08",
+          "group": "randomized_poses",
+          "start_s": 107.5,
+          "end_s": 110.1
+        },
+        {
+          "kind": "static_hold",
+          "label": "randomized_pose_08",
+          "group": "randomized_poses",
+          "start_s": 110.1,
+          "end_s": 114.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectories",
+          "start_s": 114.08,
+          "end_s": 117.08
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_01",
+          "group": "representative_trajectories",
+          "start_s": 117.08,
+          "end_s": 122.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectory_02",
+          "group": "representative_trajectories",
+          "start_s": 122.08,
+          "end_s": 124.08
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_02",
+          "group": "representative_trajectories",
+          "start_s": 124.08,
+          "end_s": 129.07999999999998
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectory_03",
+          "group": "representative_trajectories",
+          "start_s": 129.07999999999998,
+          "end_s": 131.07999999999998
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_03",
+          "group": "representative_trajectories",
+          "start_s": 131.07999999999998,
+          "end_s": 136.07999999999998
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_representative_trajectory_04",
+          "group": "representative_trajectories",
+          "start_s": 136.07999999999998,
+          "end_s": 138.07999999999998
+        },
+        {
+          "kind": "section",
+          "label": "representative_trajectory_04",
+          "group": "representative_trajectories",
+          "start_s": 138.07999999999998,
+          "end_s": 143.07999999999998
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synthesized_trajectories",
+          "start_s": 143.08,
+          "end_s": 146.08
+        },
+        {
+          "kind": "section",
+          "label": "synth_trajectory_01",
+          "group": "synthesized_trajectories",
+          "start_s": 146.08,
+          "end_s": 151.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synth_trajectory_02",
+          "group": "synthesized_trajectories",
+          "start_s": 151.08,
+          "end_s": 153.08
+        },
+        {
+          "kind": "section",
+          "label": "synth_trajectory_02",
+          "group": "synthesized_trajectories",
+          "start_s": 153.08,
+          "end_s": 158.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_synth_trajectory_03",
+          "group": "synthesized_trajectories",
+          "start_s": 158.08,
+          "end_s": 160.08
+        },
+        {
+          "kind": "section",
+          "label": "synth_trajectory_03",
+          "group": "synthesized_trajectories",
+          "start_s": 160.08,
+          "end_s": 165.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectories",
+          "start_s": 165.08,
+          "end_s": 168.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_01",
+          "group": "randomized_trajectories",
+          "start_s": 168.08,
+          "end_s": 173.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_02",
+          "group": "randomized_trajectories",
+          "start_s": 173.08,
+          "end_s": 175.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_02",
+          "group": "randomized_trajectories",
+          "start_s": 175.08,
+          "end_s": 180.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_03",
+          "group": "randomized_trajectories",
+          "start_s": 180.08,
+          "end_s": 182.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_03",
+          "group": "randomized_trajectories",
+          "start_s": 182.08,
+          "end_s": 187.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_04",
+          "group": "randomized_trajectories",
+          "start_s": 187.08,
+          "end_s": 189.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_04",
+          "group": "randomized_trajectories",
+          "start_s": 189.08,
+          "end_s": 194.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_05",
+          "group": "randomized_trajectories",
+          "start_s": 194.08,
+          "end_s": 196.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_05",
+          "group": "randomized_trajectories",
+          "start_s": 196.08,
+          "end_s": 201.08
+        },
+        {
+          "kind": "smooth_section_bridge",
+          "label": "to_randomized_trajectory_06",
+          "group": "randomized_trajectories",
+          "start_s": 201.08,
+          "end_s": 203.08
+        },
+        {
+          "kind": "section",
+          "label": "randomized_trajectory_06",
+          "group": "randomized_trajectories",
+          "start_s": 203.08,
+          "end_s": 208.08
         }
       ]
     }
   },
   "generated_file_sha256": {
-    "poses/arm_pose_catalog.csv": "695e2b0de7206c1625419a7ac8b3e81ee3989497100dca67f1b9fc58c3d627c0",
+    "poses/arm_pose_catalog.csv": "cc4dd38c5e212f7de0c790b091cc3dd528bec02b5a0a65e0a66b1e02a5837cca",
+    "poses/randomized/randomized_arm_pose_01_seed20260715_hold20s_50hz.csv": "6c9e3844b660031e09f5f2eed554ff3e565210c3a67716e6e4b5a780dfd9a5ae",
+    "poses/randomized/randomized_arm_pose_02_seed20260715_hold20s_50hz.csv": "0e00a3ad080d4884a2f43c5ff224be2bccdfb853f465bab07b67a2dd7d7bbe01",
+    "poses/randomized/randomized_arm_pose_03_seed20260715_hold20s_50hz.csv": "c7ada97c543a7ea0720aab9d1f2aee1a79df75957c1f0347914f5c7352c582e9",
+    "poses/randomized/randomized_arm_pose_04_seed20260715_hold20s_50hz.csv": "44ea7d08b3d9c38eb51b83c79a54b003625e483a502dd6aa3604fd3c08e0e77e",
+    "poses/randomized/randomized_arm_pose_05_seed20260715_hold20s_50hz.csv": "fd236a185e888821dce675001fd9b7a0127cfa32356e41063f51ee1a021de321",
+    "poses/randomized/randomized_arm_pose_06_seed20260715_hold20s_50hz.csv": "b72bf34cffd0d326f842198b6853c704a8aa2394d23c8e561c297bb8b3fb8dcd",
+    "poses/randomized/randomized_arm_pose_07_seed20260715_hold20s_50hz.csv": "71939a35c1327e8328aad7d14bd31a1d55a4f09d8c567265f560547df1b3b27b",
+    "poses/randomized/randomized_arm_pose_08_seed20260715_hold20s_50hz.csv": "76b8aa6e23b66f61e4b4f5f5874700461f1a3c1b2608c12d7075715278b1c812",
     "poses/representative/representative_arm_pose_01_hold20s_50hz.csv": "e06fe1daf17290d5cf80500b21557516d44916b10e402118d0f857a56d69bc93",
-    "poses/representative/representative_arm_pose_02_hold20s_50hz.csv": "6c6f7ec6df95aefebb6cd86c2dcba1a324dfe40cf9b58106e3300d0f6437ac45",
-    "poses/representative/representative_arm_pose_03_hold20s_50hz.csv": "aa63e7c726aa827bde2a40c4d0d9ce70092895a49bda75419c3e4ba8833f7633",
-    "poses/representative/representative_arm_pose_04_hold20s_50hz.csv": "fefac3d3d2255258484e903e10af145685a0439da11ccb5270c253111f7b8b75",
-    "poses/representative/representative_arm_pose_05_hold20s_50hz.csv": "3ba31ff7a0facce526aed08324831b515d98717921d55130f1c26249fb4e0b8c",
-    "poses/representative/representative_arm_pose_06_hold20s_50hz.csv": "24274a69761e7e1865d7d3753f62439c2cba70203f333fb90c791e17f957f6a1",
-    "poses/synthesized/synthesized_arm_pose_01_seed20260714_hold20s_50hz.csv": "c60335f710c9fa3751debf0eec79c59ed9b61cfa29b3d58684e8b5db96b91e57",
-    "poses/synthesized/synthesized_arm_pose_02_seed20260714_hold20s_50hz.csv": "84e04afded70b2a2f4237cc279e85f1150cc19d3948a46829942fcfee43f11ee",
-    "poses/synthesized/synthesized_arm_pose_03_seed20260714_hold20s_50hz.csv": "f2ce58b73056f88e365bfa7c295c4c68cff50dfd6fd0e6527e08fd2b0f3deaee",
-    "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv": "b7c604e3b83491d7e6be69997c79c0002acd92ae713effbcc7475f7512f241ee",
-    "sequences/representative_poses_arm_only_sequence_50hz.csv": "0c4f91a9dcbcdb3093ecc78171d74f1020512bcc9d271c47d7fe9d19b2d5b047",
+    "poses/representative/representative_arm_pose_02_hold20s_50hz.csv": "b881fd8c9ea11ee892088e66b9b6dda77409cff448d0f74c6306e6efa692c6b4",
+    "poses/representative/representative_arm_pose_03_hold20s_50hz.csv": "fefac3d3d2255258484e903e10af145685a0439da11ccb5270c253111f7b8b75",
+    "poses/representative/representative_arm_pose_04_hold20s_50hz.csv": "149fad4000e9236b8dc07c6794200ff9e7294f8d54d83998df1ae1fa29084c77",
+    "poses/representative/representative_arm_pose_05_hold20s_50hz.csv": "4ea1cbb1cffaba6d2651c0a5bad857d1f22f0334f71e4085c425095daa33d370",
+    "poses/representative/representative_arm_pose_06_hold20s_50hz.csv": "db45ebf75d2fd708fef726a04c6726cfbba6ebc36908ce4dfc48754d75b3f62f",
+    "poses/synthesized/synthesized_arm_pose_01_seed20260714_hold20s_50hz.csv": "ed1b5596409e810db33c03fd19ca8e0d6a8c9c85cc67aed5a8dab88a3681268a",
+    "poses/synthesized/synthesized_arm_pose_02_seed20260714_hold20s_50hz.csv": "d8395c764b530a8d9eb10bfce1f7a2832d811974fe01a9dc3fb7343b38499ff8",
+    "poses/synthesized/synthesized_arm_pose_03_seed20260714_hold20s_50hz.csv": "8b5ea20888d41ab0c14dbc506f1044c711ef12f2d32c2ce89aa35ac68f4d3ae2",
+    "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv": "0c9d1e3999b2063283cc2380a3f26d1967924361951e027b6dbf84e8ead4e156",
+    "sequences/randomized_poses_arm_only_sequence_50hz.csv": "8dbd9b429be444dd49dbd1c6bece4b75e85acb09eb652dc9265906e1252b8bac",
+    "sequences/randomized_trajectories_arm_only_sequence_seed20260715_50hz.csv": "792d7bd4a0c6c3eec3db5ee37406d3e980f0d3fb1696f556a3443f386d6a5c1e",
+    "sequences/representative_poses_arm_only_sequence_50hz.csv": "c7b0ea6c579d3437d6e2df74468f28e94624d9075a7fc10c0dcae994104f9a1b",
     "sequences/representative_trajectories_arm_only_sequence_50hz.csv": "e1bfac30dfc7b0df0ec4180f88ff943e0663e119bbc5576c88507a55372bdf63",
-    "sequences/synthesized_poses_arm_only_sequence_50hz.csv": "ad5832f3daf8bbabe53977e7d352836440ff75ec1fbe293ab1c7b8f2251362fe",
+    "sequences/synthesized_poses_arm_only_sequence_50hz.csv": "3da6c6231cf4529e1599c879ccb7794f8eff3f1655f4f34864d068641d701d61",
     "sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv": "cee874d05d1267574d44d87db07d21a38af878acda51a0e50788838bd9b6195d",
+    "trajectories/randomized/randomized_arm_trajectory_01_seed20260715_minjerk_50hz.csv": "92812860e8c4924664b2d18c204c7a3c39c903fb35925ff7d538f1413dc64088",
+    "trajectories/randomized/randomized_arm_trajectory_02_seed20260715_minjerk_50hz.csv": "5181b0d8ab5b081b0d910995ec0417bbe54fb1aae94b6c75befa964198d83082",
+    "trajectories/randomized/randomized_arm_trajectory_03_seed20260715_minjerk_50hz.csv": "fbc65cd59748937f74f1a1470b4ed7dceaa6149d823cc0530394cc53955fb952",
+    "trajectories/randomized/randomized_arm_trajectory_04_seed20260715_minjerk_50hz.csv": "d5c20059274d189ce6aea4e5bd720329fc8be14f9c9d90000ab6eab55e47cb61",
+    "trajectories/randomized/randomized_arm_trajectory_05_seed20260715_minjerk_50hz.csv": "f5026843006046d950e7047b84862272c15a39ad2bddeb30619758ae460fc6dc",
+    "trajectories/randomized/randomized_arm_trajectory_06_seed20260715_minjerk_50hz.csv": "5731d930209ce35d0f81f75e92ed47f9ad29a892ac22d1ac03446489674f5cbc",
     "trajectories/representative/representative_arm_trajectory_01_source_036_041s_1x_50hz.csv": "f70042b7671f6839faafd2aca11c0bd4622437bfdae602174101f04cb8d2cf09",
     "trajectories/representative/representative_arm_trajectory_02_source_102_107s_1x_50hz.csv": "9d6eaee0e324c72d53e426ea6e6e8a19cc9789457140d0dbd181f272025f5d16",
     "trajectories/representative/representative_arm_trajectory_03_source_234_239s_1x_50hz.csv": "f16611b03fcc2310528ef2204e0b68109efba159021d55a841e8032a583c1d4b",

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deterministic visualization for the ArmHack Stand checkpoint.
 #
-# The CSV suite is selected offline from the complete arm dataset.  Every CSV
-# contains only time_s plus 14 arm joints.  This
+# The CSV suite is selected offline from the training-reachable ranges of the
+# complete arm dataset. Every CSV contains only time_s plus 14 arm joints. This
 # launcher never randomizes the CSV start phase at runtime, so every mode is
 # reproducible and can be reviewed item by item.
 #
@@ -18,12 +18,13 @@ set -euo pipefail
 LEGGED_LAB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TEST_DATA_DIR="${LEGGED_LAB_DIR}/Reference Data/ArmHack/StandPerturb/TestData/ArmOnly"
 MANIFEST="${TEST_DATA_DIR}/manifest.json"
-DEFAULT_CHECKPOINT="${LEGGED_LAB_DIR}/ArmHack Checkpoints/StandPerturb/2026-07-14_16-49-13_armhack_stand_curriculum_from_model7999_full_20260714/model_2999.pt"
+DEFAULT_CHECKPOINT="${LEGGED_LAB_DIR}/ArmHack Checkpoints/StandPerturb/2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/model_2999.pt"
 
 MODE=${MODE:-all}
 ITEM=${ITEM:-}
 CHECKPOINT=${CHECKPOINT:-${DEFAULT_CHECKPOINT}}
 METADATA_PYTHON=${METADATA_PYTHON:-python3}
+PAYLOAD_KG=${PAYLOAD_KG:-0.0}
 
 if [[ ! -f "${MANIFEST}" ]]; then
     echo "Error: deterministic visualization manifest does not exist: ${MANIFEST}" >&2
@@ -36,6 +37,10 @@ if [[ ! -f "${CHECKPOINT}" ]]; then
 fi
 if ! command -v "${METADATA_PYTHON}" >/dev/null 2>&1; then
     echo "Error: metadata Python is unavailable: ${METADATA_PYTHON}" >&2
+    exit 1
+fi
+if ! awk -v value="${PAYLOAD_KG}" 'BEGIN { exit !(value >= 0.0 && value <= 3.0) }'; then
+    echo "Error: PAYLOAD_KG must be within [0, 3]." >&2
     exit 1
 fi
 
@@ -51,15 +56,19 @@ done
 case "${MODE}" in
     all)
         CSV_NAME="sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv"
-        DESCRIPTION="6 representative poses -> 3 synthesized poses -> 4 measured 1.0x trajectories -> 3 synthesized 1.0x trajectories"
+        DESCRIPTION="6 representative + 3 measured-blend + 8 randomized poses; 4 measured + 3 measured-blend + 6 randomized interpolation trajectories"
         ;;
     representative_poses)
         CSV_NAME="sequences/representative_poses_arm_only_sequence_50hz.csv"
-        DESCRIPTION="six representative source poses with smooth transitions"
+        DESCRIPTION="six training-reachable representative source poses with smooth transitions; arms-down tail pose removed"
         ;;
     synthesized_poses)
         CSV_NAME="sequences/synthesized_poses_arm_only_sequence_50hz.csv"
         DESCRIPTION="three fixed-seed synthesized poses with smooth transitions"
+        ;;
+    randomized_poses)
+        CSV_NAME="sequences/randomized_poses_arm_only_sequence_50hz.csv"
+        DESCRIPTION="eight deterministic coverage poses from the 512-pose randomized training bank"
         ;;
     representative_trajectories)
         CSV_NAME="sequences/representative_trajectories_arm_only_sequence_50hz.csv"
@@ -68,6 +77,10 @@ case "${MODE}" in
     synthesized_trajectories)
         CSV_NAME="sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv"
         DESCRIPTION="three fixed-seed convex blends of measured 1.0x arm trajectories"
+        ;;
+    randomized_trajectories)
+        CSV_NAME="sequences/randomized_trajectories_arm_only_sequence_seed20260715_50hz.csv"
+        DESCRIPTION="six velocity-limited minimum-jerk trajectories interpolated between randomized poses"
         ;;
     representative_pose)
         if [[ ! "${ITEM}" =~ ^[1-6]$ ]]; then
@@ -86,6 +99,15 @@ case "${MODE}" in
         printf -v ITEM_PADDED "%02d" "${ITEM}"
         CSV_NAME="poses/synthesized/synthesized_arm_pose_${ITEM_PADDED}_seed20260714_hold20s_50hz.csv"
         DESCRIPTION="fixed-seed synthesized pose ${ITEM_PADDED}"
+        ;;
+    randomized_pose)
+        if [[ ! "${ITEM}" =~ ^[1-8]$ ]]; then
+            echo "Error: MODE=randomized_pose requires ITEM=1..8" >&2
+            exit 1
+        fi
+        printf -v ITEM_PADDED "%02d" "${ITEM}"
+        CSV_NAME="poses/randomized/randomized_arm_pose_${ITEM_PADDED}_seed20260715_hold20s_50hz.csv"
+        DESCRIPTION="deterministic randomized-bank coverage pose ${ITEM_PADDED}"
         ;;
     representative_trajectory)
         if [[ ! "${ITEM}" =~ ^[1-4]$ ]]; then
@@ -111,11 +133,21 @@ case "${MODE}" in
         CSV_NAME="trajectories/synthesized/synthesized_arm_trajectory_${ITEM_PADDED}_seed20260714_measured_blend_1x_50hz.csv"
         DESCRIPTION="fixed-seed synthesized measured-trajectory blend ${ITEM_PADDED} at 1.0x speed"
         ;;
+    randomized_trajectory)
+        if [[ ! "${ITEM}" =~ ^[1-6]$ ]]; then
+            echo "Error: MODE=randomized_trajectory requires ITEM=1..6" >&2
+            exit 1
+        fi
+        printf -v ITEM_PADDED "%02d" "${ITEM}"
+        CSV_NAME="trajectories/randomized/randomized_arm_trajectory_${ITEM_PADDED}_seed20260715_minjerk_50hz.csv"
+        DESCRIPTION="velocity-limited minimum-jerk randomized-pose trajectory ${ITEM_PADDED}"
+        ;;
     *)
         echo "Error: unknown MODE=${MODE}" >&2
-        echo "Valid modes: all, representative_poses, synthesized_poses, representative_trajectories," >&2
-        echo "             synthesized_trajectories, representative_pose, synthesized_pose," >&2
-        echo "             representative_trajectory, synthesized_trajectory" >&2
+        echo "Valid modes: all, representative_poses, synthesized_poses, randomized_poses," >&2
+        echo "             representative_trajectories, synthesized_trajectories, randomized_trajectories," >&2
+        echo "             representative_pose, synthesized_pose, randomized_pose," >&2
+        echo "             representative_trajectory, synthesized_trajectory, randomized_trajectory" >&2
         exit 1
         ;;
 esac
@@ -149,9 +181,18 @@ PY
 CHECKPOINT_DIR=$(dirname "${CHECKPOINT}")
 CHECKPOINT_STEM=$(basename "${CHECKPOINT}")
 CHECKPOINT_STEM=${CHECKPOINT_STEM%.*}
+CHECKPOINT_SHA256=$(sha256sum "${CHECKPOINT}" | awk '{print $1}')
+CHECKPOINT_SHORT_SHA=${CHECKPOINT_SHA256:0:12}
+MODEL_ID=${MODEL_ID:-${CHECKPOINT_STEM}_${CHECKPOINT_SHORT_SHA}}
+if [[ ! "${MODEL_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "Error: MODEL_ID may contain only letters, digits, dot, underscore, and hyphen." >&2
+    exit 1
+fi
 TEST_ID="${MODE}${ITEM:+_item${ITEM}}"
+PAYLOAD_TAG=$(awk -v value="${PAYLOAD_KG}" 'BEGIN { printf "%.6g", value }' | tr '.' 'p')
+REPORT_CONDITION_ID="${TEST_ID}__payload_${PAYLOAD_TAG}kg"
 REPORT_DIR="${CHECKPOINT_DIR}/Test Reports/StandArmOnly"
-REPORT_PATH="${REPORT_DIR}/${CHECKPOINT_STEM}__${TEST_ID}.md"
+REPORT_PATH="${REPORT_DIR}/${MODEL_ID}__${REPORT_CONDITION_ID}.md"
 
 echo "============================================================"
 echo " ArmHack Stand deterministic visualization"
@@ -162,13 +203,15 @@ echo "CSV         : ${CSV_PATH}"
 echo "CSV duration: ${CSV_DURATION_S} s"
 echo "Episode     : ${EPISODE_LENGTH_S} s (includes a 1 s final hold)"
 echo "Checkpoint  : ${CHECKPOINT}"
+echo "Model ID    : ${MODEL_ID} (SHA-256 ${CHECKPOINT_SHA256})"
 echo "Report      : ${REPORT_PATH} (written when playback exits)"
 echo "Runtime RNG : disabled for arm pose/trajectory selection"
+echo "Fixed payload: ${PAYLOAD_KG} kg added to each wrist-yaw link"
 echo "============================================================"
 
 cd "${LEGGED_LAB_DIR}"
 
-TASK=LeggedLab-Isaac-AMP-G1-StandPerturb-Play-v0 \
+TASK=LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0 \
 CHECKPOINT="${CHECKPOINT}" \
 NUM_ENVS=${NUM_ENVS:-1} \
 HEADLESS=${HEADLESS:-False} \
@@ -186,7 +229,10 @@ bash scripts/vis_isaacsim_g1_amp.sh \
     --armhack_stand_report_path "${REPORT_PATH}" \
     --armhack_stand_test_id "${TEST_ID}" \
     --armhack_stand_test_data "${CSV_PATH}" \
+    --armhack_stand_manifest "${MANIFEST}" \
+    --armhack_stand_payload_kg "${PAYLOAD_KG}" \
     env.episode_length_s="${EPISODE_LENGTH_S}" \
+    env.upper_body_perturbation.source=csv \
     "env.upper_body_perturbation.csv_path='${CSV_PATH}'" \
     env.upper_body_perturbation.csv_randomize_start_on_reset=False \
     env.upper_body_perturbation.csv_initialize_joint_state_on_reset=True \
@@ -194,4 +240,5 @@ bash scripts/vis_isaacsim_g1_amp.sh \
     env.upper_body_perturbation.csv_curriculum_motion_scale=1.0 \
     env.upper_body_perturbation.csv_loop=False \
     env.upper_body_perturbation.csv_end_margin_s=0.0 \
+    "env.events.randomize_end_effector_payload.params.mass_distribution_params=[${PAYLOAD_KG},${PAYLOAD_KG}]" \
     "$@"

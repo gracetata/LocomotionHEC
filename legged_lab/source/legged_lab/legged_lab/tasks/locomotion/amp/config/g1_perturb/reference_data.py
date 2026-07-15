@@ -13,6 +13,12 @@ REFERENCE_DATA_ROOT_RELATIVE = Path("Reference Data") / "ArmHack"
 STAND_ARM_MOTION_RELATIVE_PATH = (
     REFERENCE_DATA_ROOT_RELATIVE / "StandPerturb" / "g1_arm_trajectory_named_50hz.csv"
 )
+STAND_RANDOM_POSE_BANK_RELATIVE_PATH = (
+    REFERENCE_DATA_ROOT_RELATIVE
+    / "StandPerturb"
+    / "RandomizedTraining"
+    / "random_arm_pose_bank_seed20260715.json"
+)
 WALK_ARM_POSE_SET_RELATIVE_PATH = (
     REFERENCE_DATA_ROOT_RELATIVE / "WalkPerturbFinetune" / "g1_arm_pose_set.json"
 )
