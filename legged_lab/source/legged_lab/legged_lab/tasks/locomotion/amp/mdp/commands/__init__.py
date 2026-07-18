@@ -21,6 +21,10 @@ Usage:
 """
 
 from .curvature_velocity_command import CurvatureVelocityCommand, CurvatureVelocityCommandCfg
+from .hybrid_nav2_mode_velocity_command import (
+    HybridNav2ModeVelocityCommand,
+    HybridNav2ModeVelocityCommandCfg,
+)
 from .mode_balanced_velocity_command import ModeBalancedVelocityCommand, ModeBalancedVelocityCommandCfg
 from .nav2_recorded_velocity_command import Nav2RecordedVelocityCommand, Nav2RecordedVelocityCommandCfg
 from .relative_pose_command import RelativePose2dCommand, RelativePose2dCommandCfg
@@ -28,6 +32,8 @@ from .relative_pose_command import RelativePose2dCommand, RelativePose2dCommandC
 __all__ = [
     "CurvatureVelocityCommand",
     "CurvatureVelocityCommandCfg",
+    "HybridNav2ModeVelocityCommand",
+    "HybridNav2ModeVelocityCommandCfg",
     "ModeBalancedVelocityCommand",
     "ModeBalancedVelocityCommandCfg",
     "Nav2RecordedVelocityCommand",

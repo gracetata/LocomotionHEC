@@ -5,7 +5,7 @@
 #   POLICY_PATH=legged_lab/logs/rsl_rl/g1_amp/<run>/exported/policy.pt USE_GLFW=True bash scripts/sim2sim_g1_amp_mujoco.sh
 #
 # Environment variables:
-#   UNITREE_PYTHON      : Python executable from unitree_sim2sim2real/.envrc conda env (default: /home/hecggdz/miniconda3/envs/env_leglab/bin/python).
+#   UNITREE_PYTHON      : Python executable with mujoco/torch/PyYAML (default: local gmr conda environment).
 #   POLICY_PATH         : TorchScript policy exported by scripts/export_g1_amp_policy.sh.
 #   ROBOT_ASSET         : MuJoCo robot XML preset: s3_g1_29dof, s3_g1_29dof_mjcf, g1_29dof, g1_29dof_mjcf (default: s3_g1_29dof).
 #   XML_PATH            : Explicit MuJoCo XML override; unset selects XML from ROBOT_ASSET.
@@ -102,7 +102,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 UNITREE_DIR="${ROOT_DIR}/unitree_sim2sim2real"
 
-UNITREE_PYTHON=${UNITREE_PYTHON:-/home/hecggdz/miniconda3/envs/env_leglab/bin/python}
+UNITREE_PYTHON=${UNITREE_PYTHON:-${HOME}/anaconda3/envs/gmr/bin/python}
 POLICY_PATH=${POLICY_PATH:-${ROOT_DIR}/outputs/baseline/exported/policy.pt}
 ROBOT_ASSET=${ROBOT_ASSET:-s3_g1_29dof}
 XML_PATH=${XML_PATH:-}
@@ -266,7 +266,8 @@ if [[ "${COMMAND_MODE}" == "joystick" && ! -r "${JOYSTICK_DEVICE}" ]]; then
     exit 1
 fi
 
-export LD_LIBRARY_PATH="/home/hecggdz/miniconda3/envs/unitree-rl/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+UNITREE_ENV_PREFIX=$(cd "$(dirname "${UNITREE_PYTHON}")/.." && pwd)
+export LD_LIBRARY_PATH="${UNITREE_ENV_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONPATH="${UNITREE_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 export G1_AMP_POLICY_PATH="${POLICY_PATH}"
 export G1_AMP_ROBOT_ASSET="${ROBOT_ASSET}"

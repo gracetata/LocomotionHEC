@@ -28,7 +28,7 @@ STAND_RANDOM_POSE_BANK = (
 )
 STAND_TRAINING_EPISODE_HORIZON_S = 20.0
 STAND_TRAINING_CSV_END_MARGIN_S = 0.25
-REMOVED_STAND_ARMS_DOWN_SOURCE_TIME_S = 404.897585
+SPECIAL_STAND_ARMS_DOWN_SOURCE_TIME_S = 404.897585
 
 EXPECTED_HASHES = {
     STAND_RAW_CSV: "b43256da27b11a593fc244ab2dd7fb899490a575d7749ed858ac342e3a208c50",
@@ -366,7 +366,7 @@ def check_stand_arm_only_test_data() -> None:
     if any(source_time > expected_static_max_time_s + 1.0e-9 for source_time in representative_pose_times):
         raise ValueError("Stand representative pose lies outside the training-reachable static-start interval")
     if any(
-        math.isclose(source_time, REMOVED_STAND_ARMS_DOWN_SOURCE_TIME_S, abs_tol=1.0e-6)
+        math.isclose(source_time, SPECIAL_STAND_ARMS_DOWN_SOURCE_TIME_S, abs_tol=1.0e-6)
         for source_time in representative_pose_times
     ):
         raise ValueError("Removed arms-down source pose is still present in the Stand test set")
@@ -374,7 +374,7 @@ def check_stand_arm_only_test_data() -> None:
     if not any(
         math.isclose(
             float(posture.get("source_time_s", math.inf)),
-            REMOVED_STAND_ARMS_DOWN_SOURCE_TIME_S,
+            SPECIAL_STAND_ARMS_DOWN_SOURCE_TIME_S,
             abs_tol=1.0e-6,
         )
         for posture in excluded_postures
@@ -390,6 +390,42 @@ def check_stand_arm_only_test_data() -> None:
         raise ValueError("Stand visualization suite must contain 8 randomized poses")
     if len(manifest.get("randomized_trajectories", [])) != 6:
         raise ValueError("Stand visualization suite must contain 6 randomized trajectories")
+
+    special_tests = manifest.get("special_tests", [])
+    if len(special_tests) != 1 or special_tests[0].get("test_id") != "down_to_horizontal":
+        raise ValueError("Stand visualization suite must contain the down_to_horizontal special test")
+    special_test = special_tests[0]
+    if special_test.get("data_scope") != "arm_only_14_dof":
+        raise ValueError("Stand down_to_horizontal test must contain arm-only 14-DoF targets")
+    if special_test.get("included_in_default_all_sequence") is not False:
+        raise ValueError("Stand down_to_horizontal boundary test must remain outside the default all sequence")
+    start_pose = special_test.get("start_pose", {})
+    end_pose = special_test.get("end_pose", {})
+    if not math.isclose(
+        float(start_pose.get("source_time_s", math.inf)),
+        SPECIAL_STAND_ARMS_DOWN_SOURCE_TIME_S,
+        abs_tol=1.0e-6,
+    ):
+        raise ValueError("Stand down_to_horizontal test has the wrong arms-down source pose")
+    if start_pose.get("outside_training_reachable_static_start_interval") is not True:
+        raise ValueError("Stand down_to_horizontal test must audit its out-of-distribution start pose")
+    if len(start_pose.get("positions_rad", [])) != 14 or len(end_pose.get("positions_rad", [])) != 14:
+        raise ValueError("Stand down_to_horizontal endpoints must each contain 14 arm joints")
+    if not math.isclose(float(special_test.get("actual_transition_duration_s", -1.0)), 6.0, abs_tol=1.0e-9):
+        raise ValueError("Stand down_to_horizontal transition must be the fixed velocity-safe 6 s profile")
+
+    special_file = manifest.get("files", {}).get("down_to_horizontal", {})
+    special_timeline = special_file.get("timeline", [])
+    if special_file.get("path") != "special/arms_down_to_forward_horizontal_20s_50hz.csv":
+        raise ValueError("Stand down_to_horizontal test path is invalid")
+    if not math.isclose(float(special_file.get("duration_s", -1.0)), 20.0, abs_tol=1.0e-9):
+        raise ValueError("Stand down_to_horizontal test must last 20 s")
+    if [stage.get("label") for stage in special_timeline] != [
+        "arms_down_hold",
+        "arms_down_to_forward_horizontal",
+        "arms_forward_horizontal_hold",
+    ]:
+        raise ValueError("Stand down_to_horizontal timeline stages are invalid")
 
     files = manifest.get("files", {})
     all_timeline = files.get("all", {}).get("detailed_timeline", [])
@@ -465,6 +501,10 @@ def check_stand_arm_only_test_data() -> None:
             rows != 251 or not math.isclose(final_time, 5.0, abs_tol=1.0e-8)
         ):
             raise ValueError(f"Synthesized trajectory {file_name} must contain 5 s at 50 Hz and 1.0x speed")
+        if file_name == "special/arms_down_to_forward_horizontal_20s_50hz.csv" and (
+            rows != 1001 or not math.isclose(final_time, 20.0, abs_tol=1.0e-8)
+        ):
+            raise ValueError("Stand down_to_horizontal test must contain 20 s at 50 Hz")
         if final_time < 0.0:
             raise ValueError(f"Visualization CSV {file_name} has a negative duration")
 
@@ -474,7 +514,8 @@ def check_stand_arm_only_test_data() -> None:
     print(
         "[OK] Stand arm-only test data: 6 representative poses, 4 representative trajectories, "
         "3 synthesized poses, 3 synthesized trajectories, 8 randomized poses, "
-        f"6 randomized trajectories, {checked_trajectory_files} playback CSVs"
+        f"6 randomized trajectories, 1 down-to-horizontal boundary test, "
+        f"{checked_trajectory_files} playback CSVs"
     )
 
 

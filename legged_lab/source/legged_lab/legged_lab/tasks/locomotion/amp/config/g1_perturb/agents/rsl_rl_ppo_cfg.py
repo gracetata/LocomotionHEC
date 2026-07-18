@@ -48,3 +48,20 @@ class G1WalkPerturbFinetuneRslRlOnPolicyRunnerAmpCfg(G1PerturbRslRlOnPolicyRunne
         self.algorithm.amp_cfg.grad_penalty_scale = 20.0
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 0.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
+
+
+@configclass
+class G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg(
+    G1WalkPerturbFinetuneRslRlOnPolicyRunnerAmpCfg
+):
+    """Walk-only P0/P1 runner with lower-body AMP enabled by default."""
+
+    experiment_name = "g1_walk_robust"
+    checkpoint_output_dir = "ArmHack Checkpoints/WalkPerturbFinetune"
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 1.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85

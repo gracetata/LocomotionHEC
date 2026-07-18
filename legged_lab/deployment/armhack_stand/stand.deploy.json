@@ -1,0 +1,267 @@
+{
+  "robot": "g1",
+  "checkpoint": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/model_2999.pt",
+  "onnx": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/deployment/armhack_stand/stand.onnx",
+  "torchscript": null,
+  "obs_dim": 96,
+  "action_dim": 29,
+  "control_frequency_hz": 50,
+  "sim_dt": 0.002,
+  "decimation": 10,
+  "action_scale": 0.25,
+  "action_formula": "q_target[action_joint] = default_joint_pos[action_joint] + 0.25 * action",
+  "policy_obs_layout": [
+    {
+      "name": "base_ang_vel",
+      "start": 0,
+      "end": 3
+    },
+    {
+      "name": "projected_gravity",
+      "start": 3,
+      "end": 6
+    },
+    {
+      "name": "velocity_commands",
+      "start": 6,
+      "end": 9
+    },
+    {
+      "name": "joint_pos_rel_g1_29dof_lab_order",
+      "start": 9,
+      "end": 38
+    },
+    {
+      "name": "joint_vel_g1_29dof_lab_order",
+      "start": 38,
+      "end": 67
+    },
+    {
+      "name": "last_action_g1_29dof_lab_order",
+      "start": 67,
+      "end": 96
+    }
+  ],
+  "full_joint_names": [
+    "left_hip_pitch_joint",
+    "right_hip_pitch_joint",
+    "waist_yaw_joint",
+    "left_hip_roll_joint",
+    "right_hip_roll_joint",
+    "waist_roll_joint",
+    "left_hip_yaw_joint",
+    "right_hip_yaw_joint",
+    "waist_pitch_joint",
+    "left_knee_joint",
+    "right_knee_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_shoulder_roll_joint",
+    "right_shoulder_roll_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+    "left_shoulder_yaw_joint",
+    "right_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "right_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "right_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "action_joint_names": [
+    "left_hip_pitch_joint",
+    "right_hip_pitch_joint",
+    "waist_yaw_joint",
+    "left_hip_roll_joint",
+    "right_hip_roll_joint",
+    "waist_roll_joint",
+    "left_hip_yaw_joint",
+    "right_hip_yaw_joint",
+    "waist_pitch_joint",
+    "left_knee_joint",
+    "right_knee_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_shoulder_roll_joint",
+    "right_shoulder_roll_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+    "left_shoulder_yaw_joint",
+    "right_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "right_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "right_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "default_joint_pos": {
+    "left_hip_pitch_joint": -0.1,
+    "right_hip_pitch_joint": -0.1,
+    "waist_yaw_joint": 0.0,
+    "left_hip_roll_joint": 0.0,
+    "right_hip_roll_joint": 0.0,
+    "waist_roll_joint": 0.0,
+    "left_hip_yaw_joint": 0.0,
+    "right_hip_yaw_joint": 0.0,
+    "waist_pitch_joint": 0.0,
+    "left_knee_joint": 0.3,
+    "right_knee_joint": 0.3,
+    "left_shoulder_pitch_joint": 0.3,
+    "right_shoulder_pitch_joint": 0.3,
+    "left_ankle_pitch_joint": -0.2,
+    "right_ankle_pitch_joint": -0.2,
+    "left_shoulder_roll_joint": 0.25,
+    "right_shoulder_roll_joint": -0.25,
+    "left_ankle_roll_joint": 0.0,
+    "right_ankle_roll_joint": 0.0,
+    "left_shoulder_yaw_joint": 0.0,
+    "right_shoulder_yaw_joint": 0.0,
+    "left_elbow_joint": 0.97,
+    "right_elbow_joint": 0.97,
+    "left_wrist_roll_joint": 0.15,
+    "right_wrist_roll_joint": -0.15,
+    "left_wrist_pitch_joint": 0.0,
+    "right_wrist_pitch_joint": 0.0,
+    "left_wrist_yaw_joint": 0.0,
+    "right_wrist_yaw_joint": 0.0
+  },
+  "pd_gains": {
+    "left_hip_pitch_joint": {
+      "kp": 100.0,
+      "kd": 2.0
+    },
+    "right_hip_pitch_joint": {
+      "kp": 100.0,
+      "kd": 2.0
+    },
+    "waist_yaw_joint": {
+      "kp": 200.0,
+      "kd": 5.0
+    },
+    "left_hip_roll_joint": {
+      "kp": 100.0,
+      "kd": 2.0
+    },
+    "right_hip_roll_joint": {
+      "kp": 100.0,
+      "kd": 2.0
+    },
+    "waist_roll_joint": {
+      "kp": 40.0,
+      "kd": 5.0
+    },
+    "left_hip_yaw_joint": {
+      "kp": 100.0,
+      "kd": 2.0
+    },
+    "right_hip_yaw_joint": {
+      "kp": 100.0,
+      "kd": 2.0
+    },
+    "waist_pitch_joint": {
+      "kp": 40.0,
+      "kd": 5.0
+    },
+    "left_knee_joint": {
+      "kp": 150.0,
+      "kd": 4.0
+    },
+    "right_knee_joint": {
+      "kp": 150.0,
+      "kd": 4.0
+    },
+    "left_shoulder_pitch_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_shoulder_pitch_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "left_ankle_pitch_joint": {
+      "kp": 40.0,
+      "kd": 2.0
+    },
+    "right_ankle_pitch_joint": {
+      "kp": 40.0,
+      "kd": 2.0
+    },
+    "left_shoulder_roll_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_shoulder_roll_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "left_ankle_roll_joint": {
+      "kp": 40.0,
+      "kd": 2.0
+    },
+    "right_ankle_roll_joint": {
+      "kp": 40.0,
+      "kd": 2.0
+    },
+    "left_shoulder_yaw_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_shoulder_yaw_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "left_elbow_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_elbow_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "left_wrist_roll_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_wrist_roll_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "left_wrist_pitch_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_wrist_pitch_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "left_wrist_yaw_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    },
+    "right_wrist_yaw_joint": {
+      "kp": 40.0,
+      "kd": 1.0
+    }
+  },
+  "default_command": {
+    "lin_vel_x": 0.0,
+    "lin_vel_y": 0.0,
+    "ang_vel_z": 0.0
+  },
+  "notes": [
+    "AMP discriminator tensors are deliberately excluded from this export.",
+    "The exported actor uses the 29-DoF IsaacLab AMP policy joint order from G1AmpEnvCfg.",
+    "MuJoCo XML actuator order differs from policy order; use unitree_sim2sim2real/deploy/deploy_mujoco/configs/g1_amp.yaml for mapping.",
+    "The export is offline and does not start Isaac Sim or GMR environments."
+  ]
+}

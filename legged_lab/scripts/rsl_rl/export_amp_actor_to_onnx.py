@@ -13,6 +13,7 @@ Inputs:
     --jit-output: Optional TorchScript path, e.g. ``<checkpoint_dir>/exported/policy.pt``.
     --metadata: Optional JSON path for deployment metadata. Defaults beside the ONNX file.
     --robot: Deployment metadata profile, ``t1`` by default for backward compatibility.
+    --default-command: Optional ``VX VY YAW_RATE`` metadata override; Stand uses ``0 0 0``.
 
 Outputs:
     ONNX actor policy with shape ``[1, obs_dim] -> [1, action_dim]``.
@@ -391,8 +392,16 @@ def write_metadata(
     obs_dim: int,
     action_dim: int,
     robot: str,
+    default_command: list[float] | None = None,
 ) -> None:
     profile = robot_profile(robot)
+    command = profile["default_command"]
+    if default_command is not None:
+        command = {
+            "lin_vel_x": float(default_command[0]),
+            "lin_vel_y": float(default_command[1]),
+            "ang_vel_z": float(default_command[2]),
+        }
     metadata = {
         "robot": robot,
         "checkpoint": str(checkpoint_path),
@@ -410,7 +419,7 @@ def write_metadata(
         "action_joint_names": profile["action_joint_names"],
         "default_joint_pos": profile["default_joint_pos"],
         "pd_gains": profile["pd_gains"],
-        "default_command": profile["default_command"],
+        "default_command": command,
         "notes": profile["notes"],
     }
     if "hec_mujoco_default_root_height" in profile:
@@ -428,6 +437,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot", choices=["t1", "g1"], default="t1", help="Deployment metadata profile.")
     parser.add_argument("--activation", default="elu", choices=["elu", "relu", "tanh"], help="Actor activation.")
     parser.add_argument("--opset", default=11, type=int, help="ONNX opset version.")
+    parser.add_argument(
+        "--default-command",
+        nargs=3,
+        type=float,
+        metavar=("VX", "VY", "YAW_RATE"),
+        default=None,
+        help="Override deployment metadata velocity command; ArmHack Stand must use: 0 0 0.",
+    )
     return parser.parse_args()
 
 
@@ -475,7 +492,16 @@ def main() -> None:
     except Exception as exc:
         raise RuntimeError(f"ONNX checker failed for {onnx_path}: {exc}") from exc
 
-    write_metadata(metadata_path, checkpoint_path, onnx_path, jit_path, obs_dim, action_dim, args.robot)
+    write_metadata(
+        metadata_path,
+        checkpoint_path,
+        onnx_path,
+        jit_path,
+        obs_dim,
+        action_dim,
+        args.robot,
+        args.default_command,
+    )
 
     with torch.no_grad():
         sample_output = actor(dummy_obs)

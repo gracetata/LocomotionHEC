@@ -561,6 +561,7 @@ class _ArmHackStandJointFluctuationReport:
                 "representative_trajectories",
                 "synthesized_trajectories",
                 "randomized_trajectories",
+                "down_to_horizontal",
             }:
                 file_metadata = files.get(self._test_id, {})
                 timeline = list(file_metadata.get("detailed_timeline") or file_metadata.get("timeline") or [])
@@ -619,6 +620,10 @@ class _ArmHackStandJointFluctuationReport:
         label = str(stage["label"])
         if "transition" in kind or "bridge" in kind:
             return "#B0BEC5"
+        if label == "arms_down_hold":
+            return "#2F4B7C"
+        if label == "arms_forward_horizontal_hold":
+            return "#00A087"
         if label.startswith("representative_pose"):
             return "#4E79A7"
         if label.startswith("synth_pose"):
@@ -638,11 +643,15 @@ class _ArmHackStandJointFluctuationReport:
         kind = str(stage["kind"])
         label = str(stage["label"])
         if "transition" in kind:
-            return "T"
+            return "D→H" if label == "arms_down_to_forward_horizontal" else "T"
         if "bridge" in kind:
             return "B"
         if label == "final_hold":
             return "H"
+        if label == "arms_down_hold":
+            return "AD"
+        if label == "arms_forward_horizontal_hold":
+            return "AH"
         replacements = (
             ("representative_pose_", "RP"),
             ("synth_pose_", "SP"),
@@ -733,7 +742,8 @@ class _ArmHackStandJointFluctuationReport:
         stage_axis.set_title(
             "RP=representative pose, SP=measured-blend pose, GP=randomized-bank pose, "
             "RT=representative trajectory, ST=measured-blend trajectory, "
-            "GT=randomized pose-interpolation trajectory, T=transition, B=bridge",
+            "GT=randomized pose-interpolation trajectory, AD=arms down, "
+            "D→H=down-to-horizontal transition, AH=arms horizontal, B=bridge",
             fontsize=8,
         )
         stage_axis.legend(
@@ -745,10 +755,12 @@ class _ArmHackStandJointFluctuationReport:
                 Patch(color="#F28E2B", label="ST"),
                 Patch(color="#EDC948", label="GT"),
                 Patch(color="#B0BEC5", label="transition / bridge"),
+                Patch(color="#2F4B7C", label="AD"),
+                Patch(color="#00A087", label="AH"),
             ],
             loc="upper center",
             bbox_to_anchor=(0.5, -0.48),
-            ncol=7,
+            ncol=9,
             fontsize=8,
             frameon=False,
         )

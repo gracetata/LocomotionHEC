@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "data_scope": "arm_only_14_dof",
+  "description": "ArmHack Stand 真机部署用双臂预设。空格键按列表循环切换，运行时在当前目标与下一姿态之间生成 minimum-jerk 轨迹。",
+  "arm_joint_names": [
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "default_transition_s": 4.0,
+  "poses": [
+    {
+      "id": "P0_symmetric_reference",
+      "label_zh": "对称基准姿态",
+      "source": "../TestData/ArmOnly/poses/representative/representative_arm_pose_01_hold20s_50hz.csv:first_row",
+      "positions_rad": [
+        0.277447, 0.777596, -0.229618, -0.47545, 0.847381, 0.400141, 0.046355,
+        0.27819, -0.778411, 0.228839, -0.473796, -0.848471, 0.400597, -0.046559
+      ]
+    },
+    {
+      "id": "P1_left_arm_reach",
+      "label_zh": "左臂变化姿态",
+      "source": "../TestData/ArmOnly/poses/synthesized/synthesized_arm_pose_01_seed20260714_hold20s_50hz.csv:first_row",
+      "positions_rad": [
+        -0.34488541, 0.76838958, -0.36848763, -0.22734424, 0.69565446, 0.30600785, -0.45442463,
+        0.27848299, -0.77838009, 0.2294179, -0.47526225, -0.84818573, 0.40058927, -0.04662855
+      ]
+    },
+    {
+      "id": "P2_bilateral_asymmetric",
+      "label_zh": "双臂非对称姿态",
+      "source": "../TestData/ArmOnly/poses/synthesized/synthesized_arm_pose_02_seed20260714_hold20s_50hz.csv:first_row",
+      "positions_rad": [
+        -0.15919717, 0.6775491, -0.40587946, -0.08893068, 0.79107113, 0.25082033, -0.12606958,
+        -0.23167748, -0.90062181, 0.23610224, -0.49966604, -0.65029934, 0.44628319, 0.55091795
+      ]
+    },
+    {
+      "id": "P3_left_arm_extended",
+      "label_zh": "左臂大范围变化姿态",
+      "source": "../TestData/ArmOnly/poses/randomized/randomized_arm_pose_03_seed20260715_hold20s_50hz.csv:first_row",
+      "positions_rad": [
+        -0.71492096, 0.6905761, -0.48411484, 0.16645596, 0.66620857, 0.24703983, -0.59028058,
+        0.27902406, -0.77822409, 0.22974929, -0.47601847, -0.84804618, 0.4006173, -0.04664953
+      ]
+    }
+  ]
+}

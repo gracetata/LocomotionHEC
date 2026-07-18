@@ -30,7 +30,12 @@ DEFAULT_RANDOM_POSE_BANK = (
 )
 DEFAULT_TRAINING_EPISODE_HORIZON_S = 20.0
 DEFAULT_TRAINING_CSV_END_MARGIN_S = 0.25
-REMOVED_ARMS_DOWN_SOURCE_TIME_S = 404.897585
+SPECIAL_ARMS_DOWN_SOURCE_TIME_S = 404.897585
+SPECIAL_HORIZONTAL_LEFT_SOURCE_TIME_S = 72.238928
+SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S = 323.462679
+SPECIAL_DOWN_HOLD_S = 5.0
+SPECIAL_DOWN_TO_HORIZONTAL_NOMINAL_TRANSITION_S = 6.0
+SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S = 20.0
 
 
 @dataclass(frozen=True)
@@ -181,6 +186,139 @@ def _velocity_safe_pose_sequence(
         cursor += hold_count
         timeline.append({"kind": "static_hold", "label": label, "start_s": hold_start, "end_s": cursor / fps})
     return np.asarray(frames), timeline
+
+
+def _source_pose_at_time(
+    times: np.ndarray,
+    positions: np.ndarray,
+    target_time_s: float,
+    label: str,
+) -> tuple[int, np.ndarray]:
+    index = int(np.argmin(np.abs(times - float(target_time_s))))
+    if not np.isclose(times[index], target_time_s, rtol=0.0, atol=1.0e-6):
+        raise ValueError(
+            f"Cannot resolve {label} at source time {target_time_s:.6f}s; "
+            f"nearest sample is {times[index]:.6f}s."
+        )
+    return index, positions[index].copy()
+
+
+def _build_down_to_horizontal_test(
+    joint_names: list[str],
+    times: np.ndarray,
+    positions: np.ndarray,
+    velocity_limits: np.ndarray,
+    fps: float,
+) -> tuple[np.ndarray, list[dict[str, float | str]], dict[str, object]]:
+    """Build the dedicated arms-down -> forward-horizontal boundary test.
+
+    The start pose is the canonical source tail that was deliberately excluded
+    from the default representative/all suite.  The target combines one
+    measured left-arm sample and one measured right-arm sample.  No leg, waist,
+    root, or future policy observation is generated.
+    """
+    if len(joint_names) != 14 or not all(name.startswith("left_") for name in joint_names[:7]):
+        raise ValueError("Special Stand test expects canonical left-seven then right-seven arm order.")
+    if not all(name.startswith("right_") for name in joint_names[7:]):
+        raise ValueError("Special Stand test expects canonical left-seven then right-seven arm order.")
+
+    down_index, down_pose = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_ARMS_DOWN_SOURCE_TIME_S,
+        "arms-down pose",
+    )
+    horizontal_left_index, horizontal_left_source = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_HORIZONTAL_LEFT_SOURCE_TIME_S,
+        "left horizontal-arm pose",
+    )
+    horizontal_right_index, horizontal_right_source = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S,
+        "right horizontal-arm pose",
+    )
+    horizontal_pose = np.concatenate((horizontal_left_source[:7], horizontal_right_source[7:]))
+    transition_duration_s = _velocity_safe_transition_duration_s(
+        down_pose,
+        horizontal_pose,
+        velocity_limits,
+        SPECIAL_DOWN_TO_HORIZONTAL_NOMINAL_TRANSITION_S,
+    )
+    transition_end_s = SPECIAL_DOWN_HOLD_S + transition_duration_s
+    if transition_end_s >= SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S:
+        raise ValueError(
+            "Velocity-safe down-to-horizontal transition leaves no final hold: "
+            f"end={transition_end_s:.6f}s total={SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S:.6f}s."
+        )
+
+    down_hold_count = int(round(SPECIAL_DOWN_HOLD_S * fps)) + 1
+    final_hold_count = int(round((SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S - transition_end_s) * fps))
+    frames = np.concatenate(
+        (
+            np.repeat(down_pose[None, :], down_hold_count, axis=0),
+            _min_jerk(down_pose, horizontal_pose, transition_duration_s, fps),
+            np.repeat(horizontal_pose[None, :], final_hold_count, axis=0),
+        ),
+        axis=0,
+    )
+    expected_frames = int(round(SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S * fps)) + 1
+    if len(frames) != expected_frames:
+        raise ValueError(
+            f"Special down-to-horizontal test expected {expected_frames} frames, got {len(frames)}."
+        )
+
+    timeline: list[dict[str, float | str]] = [
+        {
+            "kind": "static_hold",
+            "label": "arms_down_hold",
+            "start_s": 0.0,
+            "end_s": SPECIAL_DOWN_HOLD_S,
+        },
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_down_to_forward_horizontal",
+            "start_s": SPECIAL_DOWN_HOLD_S,
+            "end_s": transition_end_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_forward_horizontal_hold",
+            "start_s": transition_end_s,
+            "end_s": SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S,
+        },
+    ]
+    metadata: dict[str, object] = {
+        "test_id": "down_to_horizontal",
+        "data_scope": "arm_only_14_dof",
+        "profile": "5 s arms-down hold, 6 s velocity-safe minimum-jerk lift, 9 s forward-horizontal hold",
+        "duration_s": SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S,
+        "start_pose": {
+            "label": "arms_down",
+            "source_row": down_index,
+            "source_time_s": float(times[down_index]),
+            "outside_training_reachable_static_start_interval": True,
+            "positions_rad": down_pose.tolist(),
+        },
+        "end_pose": {
+            "label": "arms_forward_horizontal",
+            "construction": "left-seven and right-seven measured arm samples combined without full-body data",
+            "left_source_row": horizontal_left_index,
+            "left_source_time_s": float(times[horizontal_left_index]),
+            "right_source_row": horizontal_right_index,
+            "right_source_time_s": float(times[horizontal_right_index]),
+            "positions_rad": horizontal_pose.tolist(),
+        },
+        "interpolation": "quintic minimum jerk",
+        "nominal_transition_duration_s": SPECIAL_DOWN_TO_HORIZONTAL_NOMINAL_TRANSITION_S,
+        "actual_transition_duration_s": transition_duration_s,
+        "velocity_limited": True,
+        "runtime_random_sampling": False,
+        "included_in_default_all_sequence": False,
+    }
+    return frames, timeline, metadata
 
 
 def _random_pose_interpolation_trajectories(
@@ -571,7 +709,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     if not np.isclose(args.trajectory_speed_scale, 1.0, rtol=0.0, atol=1.0e-12):
         raise ValueError("Stand evaluation trajectories are fixed to the original 1.0x source speed.")
-    for generated_directory in ("poses", "trajectories", "sequences"):
+    for generated_directory in ("poses", "trajectories", "sequences", "special"):
         shutil.rmtree(output / generated_directory, ignore_errors=True)
     (output / "manifest.json").unlink(missing_ok=True)
     rng = np.random.default_rng(args.seed)
@@ -833,6 +971,30 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         "timeline": randomized_trajectory_timeline,
     }
 
+    down_to_horizontal_sequence, down_to_horizontal_timeline, down_to_horizontal_metadata = (
+        _build_down_to_horizontal_test(
+            joint_names,
+            times,
+            positions,
+            random_velocity_limits,
+            args.fps,
+        )
+    )
+    down_to_horizontal_path = (
+        output / "special" / "arms_down_to_forward_horizontal_20s_50hz.csv"
+    )
+    down_to_horizontal_metadata["path"] = down_to_horizontal_path.relative_to(output).as_posix()
+    files["down_to_horizontal"] = {
+        "path": down_to_horizontal_path.relative_to(output).as_posix(),
+        "duration_s": _write_trajectory(
+            down_to_horizontal_path,
+            joint_names,
+            down_to_horizontal_sequence,
+            args.fps,
+        ),
+        "timeline": down_to_horizontal_timeline,
+    }
+
     all_sequence, all_timeline = _concat_labeled_sequences(
         [
             ("representative_poses", representative_pose_sequence),
@@ -972,10 +1134,11 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         "excluded_test_postures": [
             {
                 "label": "former_representative_pose_02_arms_down",
-                "source_time_s": REMOVED_ARMS_DOWN_SOURCE_TIME_S,
+                "source_time_s": SPECIAL_ARMS_DOWN_SOURCE_TIME_S,
                 "reason": (
-                    "explicitly removed from the Stand pose test set; this source time is also "
-                    "outside the training-reachable static-start interval"
+                    "excluded from the default representative/all suite because this source time is "
+                    "outside the training-reachable static-start interval; intentionally reused only "
+                    "by the dedicated down_to_horizontal boundary stress test"
                 ),
             }
         ],
@@ -993,6 +1156,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         "representative_trajectories": representative_trajectory_metadata,
         "synthesized_trajectories": synthesized_trajectory_metadata,
         "randomized_trajectories": randomized_trajectory_metadata,
+        "special_tests": [down_to_horizontal_metadata],
         "files": files,
     }
     generated_paths = [path for path in output.rglob("*.csv")]
@@ -1064,6 +1228,12 @@ def main() -> None:
     print(
         f"Randomized evaluation: {len(manifest['randomized_poses'])} poses + "
         f"{len(manifest['randomized_trajectories'])} pose-interpolation trajectories"
+    )
+    special_test = manifest["special_tests"][0]
+    print(
+        "Special boundary test: "
+        f"{special_test['test_id']}, duration={special_test['duration_s']:.3f}s, "
+        f"transition={special_test['actual_transition_duration_s']:.3f}s"
     )
     print(f"All-sequence duration: {manifest['files']['all']['duration_s']:.3f}s")
 

@@ -40,6 +40,8 @@ import numpy as np
 import torch
 import yaml  # type: ignore[reportMissingImports]
 
+from armhack_stand import ArmHackStandReplay
+
 
 UNITREE_ROOT_DIR = Path(__file__).resolve().parents[2]
 PROJECT_ROOT_DIR = UNITREE_ROOT_DIR.parent
@@ -254,6 +256,27 @@ def load_config(config_path: str) -> dict:
     )
     config["early_motion_window_s"] = _env_float(
         "G1_AMP_EARLY_MOTION_WINDOW_S", float(config.get("early_motion_window_s", 1.0))
+    )
+    config["armhack_stand_enable"] = _env_bool(
+        "G1_AMP_ARMHACK_STAND_ENABLE", bool(config.get("armhack_stand_enable", False))
+    )
+    config["armhack_stand_csv_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_STAND_CSV_PATH", config.get("armhack_stand_csv_path", ""))
+    )
+    config["armhack_stand_manifest_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_STAND_MANIFEST_PATH", config.get("armhack_stand_manifest_path", ""))
+    )
+    config["armhack_stand_checkpoint_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_STAND_CHECKPOINT_PATH", config.get("armhack_stand_checkpoint_path", ""))
+    )
+    config["armhack_stand_report_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_STAND_REPORT_PATH", config.get("armhack_stand_report_path", ""))
+    )
+    config["armhack_stand_test_id"] = os.environ.get(
+        "G1_AMP_ARMHACK_STAND_TEST_ID", config.get("armhack_stand_test_id", "all")
+    )
+    config["armhack_stand_payload_kg"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_PAYLOAD_KG", float(config.get("armhack_stand_payload_kg", 0.0))
     )
     command_ranges = dict(config.get("command_ranges", {}))
     command_ranges["lin_vel_x"] = _env_yaml_list(
@@ -1670,6 +1693,16 @@ def run_mujoco(config: dict) -> None:
     default_angles = np.asarray(config["default_angles"], dtype=np.float32)
     kps = np.asarray(config["kps"], dtype=np.float32)
     kds = np.asarray(config["kds"], dtype=np.float32)
+    armhack_stand = (
+        ArmHackStandReplay(config, policy_joint_names, default_angles)
+        if bool(config.get("armhack_stand_enable", False))
+        else None
+    )
+    if armhack_stand is not None:
+        if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
+            raise ValueError("ArmHack Stand MuJoCo replay requires fixed independent zero commands.")
+        if not np.allclose(np.asarray(config["cmd_init"], dtype=np.float32), 0.0, atol=1.0e-8):
+            raise ValueError("ArmHack Stand MuJoCo replay requires cmd_init=[0, 0, 0].")
     rng = np.random.default_rng(int(config.get("command_seed", 1)))
     command_mode = str(config.get("command_mode", "independent")).lower()
     joystick = JoystickCommandReader(config) if command_mode == "joystick" else None
@@ -1709,7 +1742,10 @@ def run_mujoco(config: dict) -> None:
     data.qpos[3:7] = np.asarray(config["root_quat_init"], dtype=np.float32)
     for joint_name, default_angle in default_by_joint.items():
         data.qpos[qpos_addresses[joint_name]] = default_angle
-    mujoco.mj_forward(model, data)
+    if armhack_stand is not None:
+        armhack_stand.initialize_model_and_state(mujoco, model, data, qpos_addresses, torso_body_id)
+    else:
+        mujoco.mj_forward(model, data)
     rollout_metrics = init_rollout_metrics(data, torso_body_id, config)
     current_segment_id = 0
     next_command_time = max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
@@ -1725,7 +1761,7 @@ def run_mujoco(config: dict) -> None:
     policy = torch.jit.load(config["policy_path"], map_location="cpu")
     policy.eval()
 
-    def step_policy_if_needed(counter: int) -> np.ndarray:
+    def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
         if counter % int(config["control_decimation"]) != 0:
             return action
         obs = build_observation(
@@ -1740,6 +1776,8 @@ def run_mujoco(config: dict) -> None:
         )
         with torch.inference_mode():
             next_action = policy(torch.from_numpy(obs).unsqueeze(0)).detach().cpu().numpy().squeeze().astype(np.float32)
+        if armhack_stand is not None:
+            next_action = armhack_stand.compose_action(next_action, sim_time)
         return next_action
 
     def simulate_loop(viewer=None) -> None:
@@ -1773,7 +1811,8 @@ def run_mujoco(config: dict) -> None:
                     )
                     next_command_time += max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
                 command = smooth_command(command, target_command, float(model.opt.timestep), config)
-                action = step_policy_if_needed(counter)
+                control_step = counter % int(config["control_decimation"]) == 0
+                action = step_policy_if_needed(counter, sim_time)
                 target_policy = default_angles + action * float(config["action_scale"])
                 target_by_joint = dict(zip(policy_joint_names, target_policy))
                 apply_pd_control(
@@ -1789,6 +1828,13 @@ def run_mujoco(config: dict) -> None:
                 mujoco.mj_step(model, data)
                 counter += 1
                 sim_time += model.opt.timestep
+                if armhack_stand is not None and control_step:
+                    armhack_stand.record_control_sample(
+                        data,
+                        qpos_addresses,
+                        torso_body_id,
+                        sim_time,
+                    )
                 update_rollout_metrics(
                     model,
                     data,
@@ -1822,6 +1868,15 @@ def run_mujoco(config: dict) -> None:
         task_trace_csv_path = write_task_trace_csv(rollout_metrics, config)
         if task_trace_csv_path:
             report["task_trace"]["csv_path"] = task_trace_csv_path
+        if armhack_stand is not None:
+            report["armhack_stand"] = armhack_stand.finalize(
+                report,
+                sim_time,
+                float(config["simulation_dt"]) * int(config["control_decimation"]),
+            )
+            print(f"[REPORT] ArmHack Stand MuJoCo report: {armhack_stand.report_path}")
+            print(f"[REPORT] ArmHack Stand MuJoCo torso plot: {armhack_stand.plot_path}")
+            print(f"[REPORT] ArmHack Stand MuJoCo trace: {armhack_stand.trace_path}")
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:

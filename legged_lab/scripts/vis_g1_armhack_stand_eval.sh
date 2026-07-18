@@ -10,6 +10,7 @@
 #   bash scripts/vis_g1_armhack_stand_eval.sh
 #   MODE=representative_poses bash scripts/vis_g1_armhack_stand_eval.sh
 #   MODE=representative_trajectory ITEM=3 bash scripts/vis_g1_armhack_stand_eval.sh
+#   MODE=down_to_horizontal bash scripts/vis_g1_armhack_stand_eval.sh
 #   MODE=synthesized_trajectory ITEM=2 HEADLESS=True MAX_STEPS=1000 \
 #     bash scripts/vis_g1_armhack_stand_eval.sh
 
@@ -82,6 +83,10 @@ case "${MODE}" in
         CSV_NAME="sequences/randomized_trajectories_arm_only_sequence_seed20260715_50hz.csv"
         DESCRIPTION="six velocity-limited minimum-jerk trajectories interpolated between randomized poses"
         ;;
+    down_to_horizontal)
+        CSV_NAME="special/arms_down_to_forward_horizontal_20s_50hz.csv"
+        DESCRIPTION="5 s arms-down hold, 6 s minimum-jerk lift, 9 s forward-horizontal hold"
+        ;;
     representative_pose)
         if [[ ! "${ITEM}" =~ ^[1-6]$ ]]; then
             echo "Error: MODE=representative_pose requires ITEM=1..6" >&2
@@ -146,6 +151,7 @@ case "${MODE}" in
         echo "Error: unknown MODE=${MODE}" >&2
         echo "Valid modes: all, representative_poses, synthesized_poses, randomized_poses," >&2
         echo "             representative_trajectories, synthesized_trajectories, randomized_trajectories," >&2
+        echo "             down_to_horizontal," >&2
         echo "             representative_pose, synthesized_pose, randomized_pose," >&2
         echo "             representative_trajectory, synthesized_trajectory, randomized_trajectory" >&2
         exit 1

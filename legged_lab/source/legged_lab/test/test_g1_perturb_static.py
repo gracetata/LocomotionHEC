@@ -82,6 +82,23 @@ STAND_VIS_EVAL_SCRIPT_FILE = (
 STAND_VIS_BUILDER_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "tools" / "build_armhack_stand_visualization_suite.py"
 )
+STAND_MUJOCO_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "val_mujoco_g1_armhack_stand.sh"
+)
+MUJOCO_RUNNER_FILE = (
+    PROJECT_ROOT.parent
+    / "unitree_sim2sim2real"
+    / "deploy"
+    / "deploy_mujoco"
+    / "deploy_mujoco_g1_amp.py"
+)
+MUJOCO_ARMHACK_FILE = (
+    PROJECT_ROOT.parent
+    / "unitree_sim2sim2real"
+    / "deploy"
+    / "deploy_mujoco"
+    / "armhack_stand.py"
+)
 STAND_VIS_MANIFEST = (
     PROJECT_ROOT
     / "Reference Data"
@@ -138,6 +155,9 @@ def test_g1_perturb_files_exist():
         STAND_RANDOM_POSE_BANK,
         STAND_VIS_EVAL_SCRIPT_FILE,
         STAND_VIS_BUILDER_FILE,
+        STAND_MUJOCO_SCRIPT_FILE,
+        MUJOCO_RUNNER_FILE,
+        MUJOCO_ARMHACK_FILE,
         STAND_VIS_MANIFEST,
         PLAY_SCRIPT_FILE,
         WALK_TRAIN_SCRIPT_FILE,
@@ -344,6 +364,26 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
     assert len(visualization_manifest["synthesized_trajectories"]) == 3
     assert len(visualization_manifest["randomized_poses"]) == 8
     assert len(visualization_manifest["randomized_trajectories"]) == 6
+    assert len(visualization_manifest["special_tests"]) == 1
+    special_test = visualization_manifest["special_tests"][0]
+    assert special_test["test_id"] == "down_to_horizontal"
+    assert special_test["data_scope"] == "arm_only_14_dof"
+    assert special_test["included_in_default_all_sequence"] is False
+    assert special_test["start_pose"]["source_time_s"] == 404.8975850000279
+    assert special_test["start_pose"]["outside_training_reachable_static_start_interval"] is True
+    assert special_test["end_pose"]["left_source_time_s"] == 72.23892800009344
+    assert special_test["end_pose"]["right_source_time_s"] == 323.4626790001057
+    assert special_test["actual_transition_duration_s"] == 6.0
+    assert len(special_test["start_pose"]["positions_rad"]) == 14
+    assert len(special_test["end_pose"]["positions_rad"]) == 14
+    special_file = visualization_manifest["files"]["down_to_horizontal"]
+    assert special_file["path"] == "special/arms_down_to_forward_horizontal_20s_50hz.csv"
+    assert special_file["duration_s"] == 20.0
+    assert [stage["label"] for stage in special_file["timeline"]] == [
+        "arms_down_hold",
+        "arms_down_to_forward_horizontal",
+        "arms_forward_horizontal_hold",
+    ]
     assert visualization_manifest["schema_version"] == 5
     assert visualization_manifest["random_pose_bank"]["seed"] == 20260715
     assert visualization_manifest["random_pose_bank"]["bank_size"] == 512
@@ -449,6 +489,9 @@ def test_train_scripts_have_isolated_working_defaults():
     vis_script_text = _read_text(VIS_SCRIPT_FILE)
     stand_vis_eval_text = _read_text(STAND_VIS_EVAL_SCRIPT_FILE)
     stand_vis_builder_text = _read_text(STAND_VIS_BUILDER_FILE)
+    stand_mujoco_script_text = _read_text(STAND_MUJOCO_SCRIPT_FILE)
+    mujoco_runner_text = _read_text(MUJOCO_RUNNER_FILE)
+    mujoco_armhack_text = _read_text(MUJOCO_ARMHACK_FILE)
     play_script_text = _read_text(PLAY_SCRIPT_FILE)
 
     assert "CONDA_ENV_NAME=${CONDA_ENV_NAME:-env_isaaclab}" in train_script_text
@@ -488,7 +531,7 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "POSE_NAME=${POSE_NAME:-pos2_down}" in walk_train_script_text
     assert "RSI_ENABLE=${RSI_ENABLE:-False}" in walk_train_script_text
     assert "76a4516588b855351eb3eb8c2da26e291603876c1a4a1b9c7bacd77a53807b5a" in walk_train_script_text
-    assert "agent.load_policy_only=\"${LOAD_POLICY_ONLY}\"" in walk_train_script_text
+    assert "agent.load_policy_only=${LOAD_POLICY_ONLY}" in walk_train_script_text
     assert "BASELINE_KL_ENABLE=True" in walk_train_script_text
     assert "ArmHack Checkpoints/StandPerturb" not in walk_train_script_text
     assert "g1_stand_perturb" not in walk_train_script_text
@@ -518,18 +561,40 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "runtime_random_sampling" in stand_vis_builder_text
     assert "np.random.default_rng(args.seed)" in stand_vis_builder_text
     assert '"data_scope": "arm_only_14_dof"' in stand_vis_builder_text
+    assert "2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715" in stand_mujoco_script_text
+    assert "Test Reports/StandArmOnlyMuJoCo" in stand_mujoco_script_text
+    assert "ROBOT_ASSET=s3_g1_29dof" in stand_mujoco_script_text
+    assert "CMD_INIT='[0.0, 0.0, 0.0]'" in stand_mujoco_script_text
+    assert "G1_AMP_ARMHACK_STAND_ENABLE=True" in stand_mujoco_script_text
+    assert "ArmHackStandReplay" in mujoco_runner_text
+    assert "armhack_stand.compose_action" in mujoco_runner_text
+    assert "armhack_stand.record_control_sample" in mujoco_runner_text
+    assert "armhack_stand.finalize" in mujoco_runner_text
+    assert "PAYLOAD_BODY_NAMES = (\"left_wrist_yaw_link\", \"right_wrist_yaw_link\")" in mujoco_armhack_text
+    assert "composed[self.arm_policy_indices]" in mujoco_armhack_text
+    assert 'manifest.get("schema_version", -1)' in mujoco_armhack_text
+    assert "torso_world_6d" in mujoco_armhack_text
     assert '"contains_full_body_state": False' in stand_vis_builder_text
     assert '"trajectory_speed_scale": args.trajectory_speed_scale' in stand_vis_builder_text
     assert '"schema_version": 5' in stand_vis_builder_text
     assert '"training_sampling_contract"' in stand_vis_builder_text
     assert '"detailed_timeline": all_detailed_timeline' in stand_vis_builder_text
-    assert "REMOVED_ARMS_DOWN_SOURCE_TIME_S = 404.897585" in stand_vis_builder_text
+    assert "SPECIAL_ARMS_DOWN_SOURCE_TIME_S = 404.897585" in stand_vis_builder_text
+    assert "SPECIAL_HORIZONTAL_LEFT_SOURCE_TIME_S = 72.238928" in stand_vis_builder_text
+    assert "SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S = 323.462679" in stand_vis_builder_text
+    assert "_build_down_to_horizontal_test" in stand_vis_builder_text
     assert "maximum_static_pose_source_time_s" in stand_vis_builder_text
     assert "randomized_poses" in stand_vis_eval_text
     assert "randomized_trajectories" in stand_vis_eval_text
+    assert "MODE=down_to_horizontal" in stand_vis_eval_text
+    assert "arms_down_to_forward_horizontal_20s_50hz.csv" in stand_vis_eval_text
     assert 'TASK=LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0' in stand_vis_eval_text
     assert "PAYLOAD_KG=${PAYLOAD_KG:-0.0}" in stand_vis_eval_text
     assert '--armhack_stand_payload_kg "${PAYLOAD_KG}"' in stand_vis_eval_text
+    assert "down_to_horizontal" in play_script_text
+    assert "arms_down_to_forward_horizontal" in play_script_text
+    assert "down_to_horizontal" in stand_mujoco_script_text
+    assert "down_to_horizontal" in mujoco_armhack_text
     assert '"--armhack_stand_manifest"' in play_script_text
     assert '"--armhack_stand_payload_kg"' in play_script_text
     assert "body_pos_w" in play_script_text

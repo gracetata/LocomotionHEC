@@ -211,6 +211,62 @@ bash scripts/train_g1_armhack_stand_randomized_payload.sh
 
 详细参数、checkpoint 身份和两阶段真实测试记录见 `armhack_train.md`。
 
+### Stand 的 MuJoCo sim2sim 验证
+
+2026-07-16 已把第二阶段新 `model_2999.pt` 导出为 `96→29` TorchScript/ONNX，并接入项目现有 S3 G1 MuJoCo runner。这里不能只运行通用 locomotion actor：Stand 在环境侧强制覆盖 14 个双臂 action，而且下一帧 observation 中的 `last_action` 必须是覆盖后的完整 29 维 action。专用入口 `scripts/val_mujoco_g1_armhack_stand.sh` 复现了这个控制边界，同时固定零速度命令、从 CSV 第一帧初始化双臂、按时间插值姿态/轨迹，并支持左右腕末端固定附加质量。
+
+完整 schema v5 数据集在 MuJoCo 中播放到 `208.082 s`，把 `t=208.08 s` 最后一帧也执行一次，共记录 10,405 个 50 Hz 控制样本。SHA 前缀 `877e929d516c` 的当前新模型已完成两次全量测试：
+
+| 每侧腕端负载 | 完整播放 | health / 摔倒 | torso 水平位移 RMS / 最大值 | torso RPY 位移范数 RMS / 最大值 | 双臂跟踪 MAE / RMS |
+|---:|---|---|---:|---:|---:|
+| 0 kg | 是 | `True` / 无 | 0.01067 / 0.02523 m | 0.06132 / 0.10162 rad | 0.05655 / 0.07024 rad |
+| 1 kg | 是 | `True` / 无 | 0.03511 / 0.04849 m | 0.12540 / 0.14589 rad | 0.07345 / 0.09001 rad |
+
+两组都通过“完整播放且 health 全程有效”的最低 sim2sim 判据，但 1 kg 条件下的位姿波动和跟踪误差明显增大。MuJoCo 与 IsaacLab 的刚体、接触和执行器模型不同，报告必须分开保存和解读，不能把两边数值合并。
+
+新终端的完整 MuJoCo 无头测试命令为：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate gmr
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+export STAND_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/model_2999.pt"
+
+CHECKPOINT="$STAND_CKPT" MODE=all PAYLOAD_KG=0 \
+USE_GLFW=False REAL_TIME=False \
+bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+MuJoCo GUI 可视化命令为：
+
+```bash
+CHECKPOINT="$STAND_CKPT" MODE=all PAYLOAD_KG=0 \
+USE_GLFW=True REAL_TIME=True \
+bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+完整的 0/1 kg 命令、逐项 5 秒轨迹命令、导出目录、报告路径和代码边界见 `armhack_train.md` 第 1.1.9 节。
+
+### 双臂下垂到向前放平专项测试
+
+2026-07-17 新增了一个不并入默认 `MODE=all` 的边界稳定性测试：机器人先以双臂自然下垂姿态保持 5 s，再用 6 s 五次 minimum-jerk 轨迹把双臂抬到向前水平姿态，最后保持 9 s。CSV 只包含 14 个双臂关节；腰、腿和根节点没有被写入。起点来自原始数据 `404.897585 s`，终点把实测左臂 `72.238928 s` 与右臂 `323.462679 s` 的完整 7-DoF 姿态组合起来。MuJoCo 正向运动学复核显示终点左右腕相对同侧肩的竖直偏差分别为 `-0.00119 m` 和 `+0.00396 m`，因此这里的“放平”具体指**双臂向前、手腕约与肩同高**。
+
+该下垂起点超出静态随机姿态课程可采样的 `0–384.667792 s` 区间，所以它仍不属于默认训练分布，也仍从 schema v5 的代表姿态和完整验收序列中排除；这里只在 `MODE=down_to_horizontal` 中作为显式边界压力测试复用。专项 CSV 为：
+
+```text
+Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/
+special/arms_down_to_forward_horizontal_20s_50hz.csv
+```
+
+当前第二阶段 `model_2999.pt` 的无负载真实结果为：
+
+| 模拟器 | 完整执行 | 摔倒/reset | torso 水平位移 RMS / 最大值 | torso pitch 位移 RMS / 最大值 |
+|---|---|---|---:|---:|
+| IsaacLab | 20 s / 1000 step | `0` | 0.02135 / 0.03903 m | 0.10102 / 0.15291 rad |
+| MuJoCo | 20 s / 1001 sample | 无，`healthy=True` | 0.02657 / 0.04724 m | 0.07880 / 0.10860 rad |
+
+两边都通过“完整站立且不触发终止”的最低条件，但放平保持段出现了持续前倾：IsaacLab 的 pitch 位移 RMS 约 `5.79°`、最大约 `8.76°`。因此不能只写成“稳定通过”；更准确的结论是**没有摔倒，但躯干姿态精度未达到 3° RMS 建议线**。完整的新终端命令、GUI/视频方式、报告和 6D 阶段曲线见 `armhack_train.md` 第 1.1.7.1 节。
+
 ## 两个任务的共享数据、环境与归档约定
 
 附件以下内容作为历史任务与训练记录保留。当前可运行实现以本节和 `armhack_train.md` 为准。
@@ -229,6 +285,7 @@ legged_lab/Reference Data/ArmHack/
 │       ├── poses/{representative,synthesized,randomized}/
 │       ├── trajectories/{representative,synthesized,randomized}/
 │       ├── sequences/
+│       ├── special/arms_down_to_forward_horizontal_20s_50hz.csv
 │       └── manifest.json
 └── WalkPerturbFinetune/
     ├── g1_arm_pose_set.json
@@ -236,7 +293,7 @@ legged_lab/Reference Data/ArmHack/
 ```
 
 - Stand 原始数据来自 `/home/user/Workspace/whole_body_joints_20260708_143133.csv`。转换脚本按用户给定的 SDK `q0..q28` 顺序提取 `q15..q28`，生成只包含 `time_s + 14 个具名手臂关节` 的规范训练 CSV。下肢数据不会作为脚本目标施加。
-- Stand 训练姿态库和测试数据都严格限制为 14 个双臂关节。schema v5 测试集保留原代表/合成样本，又固定选出 8 个新随机姿态和 6 条新姿态插值轨迹；完整回放为 208.08 s / 10,404 step / 59 阶段。原 `404.897585 s` 双臂下垂姿态仍已删除，不会生成或修改腰腿目标。
+- Stand 训练姿态库和测试数据都严格限制为 14 个双臂关节。schema v5 默认测试集保留原代表/合成样本，又固定选出 8 个新随机姿态和 6 条新姿态插值轨迹；`MODE=all` 完整回放为 208.08 s / 10,404 step / 59 阶段。原 `404.897585 s` 双臂下垂姿态仍从默认代表姿态、合成姿态和 `all` 序列中排除，但新增的 `special/arms_down_to_forward_horizontal_20s_50hz.csv` 会显式复用它，专门测试下垂保持、6 s 平滑抬臂和向前放平保持；两类 CSV 都不会生成或修改腰腿目标。
 - Walk 的三组双臂姿态保存在 JSON 中，单位为弧度，按左/右各 7 个关节记录；加载时校验单位、顺序、数量、名称唯一性和数值有限性，再转换成环境使用的左右交错 14 维顺序。
 - Walk 的速度分布来自 HEC-5090 上 331,010 行 Nav2 成功轨迹，保存为 `nav2_cmd_vel_raw_success.csv`；该 83 MiB 外部数据已忽略 Git，但训练路径保持仓库相对。
 - 所有训练路径均相对于 `legged_lab` 项目目录解析，不再包含 `/home/hecggdz/...` 等机器绝对路径。
@@ -269,6 +326,8 @@ legged_lab/ArmHack Checkpoints/
 │   ├── BaselineModel9996/model_9996.pt
 │   ├── <run_name>/Test Reports/StandArmOnly/*.md
 │   ├── <run_name>/Test Reports/StandArmOnly/*__torso_world_6d.png
+│   ├── <run_name>/Test Reports/StandArmOnlyMuJoCo/*.{md,json,csv,png}
+│   ├── <run_name>/MuJoCo Export/StandArmOnly/{policy.pt,policy.onnx,policy.deploy.json}
 │   └── <run_name>/model_*.pt
 └── WalkPerturbFinetune/
     ├── BaselineLocomotionModel9996/model_9996.pt
@@ -289,9 +348,13 @@ cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
 
 环境已验证为 Python `/home/user/anaconda3/envs/env_isaaclab/bin/python`、IsaacLab `0.54.2`、`rsl-rl-lib 3.2.0`、PyTorch `2.7.0+cu128`，CUDA 和 RTX 4090 可用。
 
+MuJoCo sim2sim 使用独立的 `/home/user/anaconda3/envs/gmr`，已验证 MuJoCo `3.8.0`、PyTorch `2.11.0+cu130` 和 PyYAML `6.0.3`。专用脚本会显式调用 `env_isaaclab` 完成 checkpoint 导出，再调用 `gmr` 执行 rollout，所以不要求在同一个 Python 环境中同时安装 IsaacLab 和 MuJoCo。
+
 Stand 第一阶段已从 `BaselineModel9996/model_9996.pt` 完成 `4096 env × 3000 iteration` 正式训练，旧最终模型是 `2026-07-14_20-34-20_armhack_stand_curriculum_1x_from_model9996_full_20260714/model_2999.pt`，SHA 前缀为 `2c87cc2cc370`。第二阶段也已完成 `4096 env × 3000 iteration` 正式训练，新最终模型位于 `2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/model_2999.pt`，SHA 前缀为 `877e929d516c`。测试、可视化和性能报告默认使用后者；完整结果与命令见 `armhack_train.md`。
 
 新模型已用 schema v5 固定双臂数据集分别完成每侧 0 kg 和每侧 1 kg 的 208.08 s / 10,404-step 全量测试，两次均无 termination/reset。无负载时 torso 水平位移 RMS 为 `0.01281 m`、pitch 位移 RMS 为 `3.42°`；每侧 1 kg 时分别为 `0.02498 m` 和 `5.71°`。因此当前模型能够在两种条件下完成整套动作而不摔倒，水平漂移仍低于 `0.10 m` 建议线，但末端负载下的躯干 pitch 稳定性没有达到 `3° RMS` 建议目标。总报告保存在新 checkpoint 同级的 `Test Reports/StandArmOnly/model_2999_877e929d516c__schema_v5_test_summary.md`。
+
+同一 checkpoint 的 MuJoCo sim2sim 也已在 0/1 kg 两种条件下完整执行，各 10,405 个记录样本、`healthy=True` 且无摔倒；独立报告位于 `Test Reports/StandArmOnlyMuJoCo/`。MuJoCo 结果不能替代上面的 IsaacLab 报告，两者用于检查跨模拟器行为是否保持基本稳定。
 
 ## 附件历史原文
 

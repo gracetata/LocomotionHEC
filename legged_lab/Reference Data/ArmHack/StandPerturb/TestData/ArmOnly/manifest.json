@@ -76,7 +76,7 @@
     {
       "label": "former_representative_pose_02_arms_down",
       "source_time_s": 404.897585,
-      "reason": "explicitly removed from the Stand pose test set; this source time is also outside the training-reachable static-start interval"
+      "reason": "excluded from the default representative/all suite because this source time is outside the training-reachable static-start interval; intentionally reused only by the dedicated down_to_horizontal boundary stress test"
     }
   ],
   "representative_poses": [
@@ -445,6 +445,67 @@
       "velocity_limited": true,
       "data_scope": "arm_only_14_dof",
       "path": "trajectories/randomized/randomized_arm_trajectory_06_seed20260715_minjerk_50hz.csv"
+    }
+  ],
+  "special_tests": [
+    {
+      "test_id": "down_to_horizontal",
+      "data_scope": "arm_only_14_dof",
+      "profile": "5 s arms-down hold, 6 s velocity-safe minimum-jerk lift, 9 s forward-horizontal hold",
+      "duration_s": 20.0,
+      "start_pose": {
+        "label": "arms_down",
+        "source_row": 20120,
+        "source_time_s": 404.8975850000279,
+        "outside_training_reachable_static_start_interval": true,
+        "positions_rad": [
+          0.243184,
+          0.321956,
+          -0.107067,
+          0.736311,
+          0.066393,
+          0.049699,
+          0.006591,
+          0.252424,
+          -0.314957,
+          0.113467,
+          0.698776,
+          -0.067903,
+          0.050154,
+          -0.001546
+        ]
+      },
+      "end_pose": {
+        "label": "arms_forward_horizontal",
+        "construction": "left-seven and right-seven measured arm samples combined without full-body data",
+        "left_source_row": 3590,
+        "left_source_time_s": 72.23892800009344,
+        "right_source_row": 16074,
+        "right_source_time_s": 323.4626790001057,
+        "positions_rad": [
+          -0.583009,
+          0.908344,
+          -0.328727,
+          -0.355931,
+          0.699831,
+          0.576777,
+          -0.910286,
+          -0.560059,
+          -0.944992,
+          0.304627,
+          -0.411347,
+          -0.678523,
+          0.587395,
+          0.907865
+        ]
+      },
+      "interpolation": "quintic minimum jerk",
+      "nominal_transition_duration_s": 6.0,
+      "actual_transition_duration_s": 6.0,
+      "velocity_limited": true,
+      "runtime_random_sampling": false,
+      "included_in_default_all_sequence": false,
+      "path": "special/arms_down_to_forward_horizontal_20s_50hz.csv"
     }
   ],
   "files": {
@@ -1013,6 +1074,30 @@
         }
       ]
     },
+    "down_to_horizontal": {
+      "path": "special/arms_down_to_forward_horizontal_20s_50hz.csv",
+      "duration_s": 20.0,
+      "timeline": [
+        {
+          "kind": "static_hold",
+          "label": "arms_down_hold",
+          "start_s": 0.0,
+          "end_s": 5.0
+        },
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_down_to_forward_horizontal",
+          "start_s": 5.0,
+          "end_s": 11.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_forward_horizontal_hold",
+          "start_s": 11.0,
+          "end_s": 20.0
+        }
+      ]
+    },
     "all": {
       "path": "sequences/all_arm_only_evaluation_sequence_seed20260714_50hz.csv",
       "duration_s": 208.08,
@@ -1530,6 +1615,7 @@
     "sequences/representative_trajectories_arm_only_sequence_50hz.csv": "e1bfac30dfc7b0df0ec4180f88ff943e0663e119bbc5576c88507a55372bdf63",
     "sequences/synthesized_poses_arm_only_sequence_50hz.csv": "3da6c6231cf4529e1599c879ccb7794f8eff3f1655f4f34864d068641d701d61",
     "sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv": "cee874d05d1267574d44d87db07d21a38af878acda51a0e50788838bd9b6195d",
+    "special/arms_down_to_forward_horizontal_20s_50hz.csv": "3a326017247d0335fd8e6b46ea17d1a1ca14838f2e507c398d611011a7d39546",
     "trajectories/randomized/randomized_arm_trajectory_01_seed20260715_minjerk_50hz.csv": "92812860e8c4924664b2d18c204c7a3c39c903fb35925ff7d538f1413dc64088",
     "trajectories/randomized/randomized_arm_trajectory_02_seed20260715_minjerk_50hz.csv": "5181b0d8ab5b081b0d910995ec0417bbe54fb1aae94b6c75befa964198d83082",
     "trajectories/randomized/randomized_arm_trajectory_03_seed20260715_minjerk_50hz.csv": "fbc65cd59748937f74f1a1470b4ed7dceaa6149d823cc0530394cc53955fb952",

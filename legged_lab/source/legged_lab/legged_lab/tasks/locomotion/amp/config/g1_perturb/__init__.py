@@ -70,3 +70,29 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkPerturbFinetuneRslRlOnPolicyRunnerAmpCfg",
     },
 )
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-WalkRobustFinetune-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_walk_robust_env_cfg:G1WalkRobustFinetuneEnvCfg",
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-WalkRobustFinetune-Play-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_walk_robust_env_cfg:G1WalkRobustFinetuneEnvCfg_PLAY"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
