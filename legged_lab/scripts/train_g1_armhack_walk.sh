@@ -52,6 +52,8 @@ AMP_GRAD_PENALTY_SCALE=${AMP_GRAD_PENALTY_SCALE:-20.0}
 
 RESUME_RUN=${RESUME_RUN:-}
 RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-}
+DISABLE_ACTUATOR_DR=False
+DISABLE_LINK_MASS_DR=False
 
 die() {
     echo "Error: $*" >&2
@@ -123,8 +125,35 @@ case "${PHASE}" in
         RANDOMIZATION_STRENGTH=0
         DISABLE_PUSH=True
         ;;
-    domain)
-        PHASE_ITERATIONS=1000
+    domain_base)
+        PHASE_ITERATIONS=500
+        STYLE_REWARD_SCALE=5.0
+        TASK_STYLE_LERP=0.60
+        PAYLOAD_MAX_KG=1.0
+        MODE_PROBABILITY=0.30
+        NAV2_FAMILY="*"
+        NAV2_COMMAND_SCALE="[1.0,1.0,1.0]"
+        MODE_COMMAND_SCALE="[1.0,1.0,1.0]"
+        RANDOMIZATION_STRENGTH=1
+        DISABLE_PUSH=True
+        DISABLE_ACTUATOR_DR=True
+        DISABLE_LINK_MASS_DR=True
+        ;;
+    domain_actuator)
+        PHASE_ITERATIONS=500
+        STYLE_REWARD_SCALE=5.0
+        TASK_STYLE_LERP=0.60
+        PAYLOAD_MAX_KG=1.0
+        MODE_PROBABILITY=0.30
+        NAV2_FAMILY="*"
+        NAV2_COMMAND_SCALE="[1.0,1.0,1.0]"
+        MODE_COMMAND_SCALE="[1.0,1.0,1.0]"
+        RANDOMIZATION_STRENGTH=1
+        DISABLE_PUSH=True
+        DISABLE_LINK_MASS_DR=True
+        ;;
+    domain_link)
+        PHASE_ITERATIONS=250
         STYLE_REWARD_SCALE=5.0
         TASK_STYLE_LERP=0.60
         PAYLOAD_MAX_KG=1.0
@@ -136,7 +165,7 @@ case "${PHASE}" in
         DISABLE_PUSH=True
         ;;
     robust)
-        PHASE_ITERATIONS=500
+        PHASE_ITERATIONS=250
         STYLE_REWARD_SCALE=5.0
         TASK_STYLE_LERP=0.60
         PAYLOAD_MAX_KG=1.0
@@ -148,10 +177,14 @@ case "${PHASE}" in
         DISABLE_PUSH=False
         ;;
     *)
-        die "PHASE must be amp_warmup, amp_target, payload_half, payload_full, command, domain, or robust"
+        die "PHASE must be amp_warmup, amp_target, payload_half, payload_full, command, domain_base, domain_actuator, domain_link, or robust"
         ;;
 esac
 MAX_ITERATIONS=${MAX_ITERATIONS_OVERRIDE:-${PHASE_ITERATIONS}}
+RESET_AMP_ON_LOAD=False
+if [[ "${MODE}" == "resume" && "${PHASE}" == "amp_warmup" ]]; then
+    RESET_AMP_ON_LOAD=True
+fi
 
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "IsaacLab Python is not executable: ${ISAACLAB_PYTHON}"
 [[ -f "${BASE_ONNX}" ]] || die "Walk locomotion ONNX not found: ${BASE_ONNX}"
@@ -177,7 +210,7 @@ fi
 
 for arg in "$@"; do
     case "${arg}" in
-        --task|--task=*|--resume|--resume=*|--load_run|--load_run=*|--checkpoint|--checkpoint=*|env.scene.robot*|env.upper_body_perturbation.pose_name=*|env.commands.base_velocity.*|env.events.randomize_*_end_effector_payload*|agent.experiment_name=*|agent.load_policy_only=*|agent.reset_iteration_on_policy_only_load=*|agent.checkpoint_output_dir=*|agent.algorithm.learning_rate=*|agent.algorithm.desired_kl=*|agent.algorithm.entropy_coef=*|agent.algorithm.amp_cfg.*|agent.algorithm.baseline_kl_cfg.*)
+        --task|--task=*|--resume|--resume=*|--load_run|--load_run=*|--checkpoint|--checkpoint=*|env.scene.robot*|env.upper_body_perturbation.pose_name=*|env.commands.base_velocity.*|env.events.randomize_*_end_effector_payload*|env.events.physics_material*|env.events.add_base_mass*|env.events.randomize_rigid_body_com*|env.events.scale_link_mass*|env.events.scale_actuator_gains*|env.events.scale_joint_parameters*|env.events.push_robot*|agent.experiment_name=*|agent.load_policy_only=*|agent.reset_iteration_on_policy_only_load=*|agent.reset_amp_on_load=*|agent.checkpoint_output_dir=*|agent.algorithm.learning_rate=*|agent.algorithm.desired_kl=*|agent.algorithm.entropy_coef=*|agent.algorithm.amp_cfg.*|agent.algorithm.baseline_kl_cfg.*)
             die "Protected Walk training setting cannot be overridden: ${arg}"
             ;;
     esac
@@ -311,8 +344,10 @@ echo "Payload           : independent left/right U(0, ${PAYLOAD_MAX_KG} kg)"
 echo "Commands          : Nav2 family=${NAV2_FAMILY}, mode_probability=${MODE_PROBABILITY}"
 echo "Command scales    : Nav2=${NAV2_COMMAND_SCALE}, mode=${MODE_COMMAND_SCALE}"
 echo "Physical DR / push: ${RANDOMIZATION_STRENGTH} / $([[ "${DISABLE_PUSH}" == "True" ]] && echo off || echo on)"
+echo "Actuator/link DR  : $([[ "${DISABLE_ACTUATOR_DR}" == "True" ]] && echo off || echo on) / $([[ "${DISABLE_LINK_MASS_DR}" == "True" ]] && echo off || echo on)"
 echo "Optimizer         : lr=${LEARNING_RATE}, desired_kl=${DESIRED_KL}, entropy=${ENTROPY_COEF}"
 echo "Baseline KL       : ${BASELINE_KL_SCALE}"
+echo "Reset AMP on load : ${RESET_AMP_ON_LOAD}"
 echo "Run name          : ${RUN_NAME}"
 echo "=================================================="
 
@@ -328,9 +363,17 @@ PHASE_HYDRA_ARGS=(
     "agent.algorithm.desired_kl=${DESIRED_KL}"
     "agent.load_policy_only=${LOAD_POLICY_ONLY}"
     "agent.reset_iteration_on_policy_only_load=${RESET_ITERATION}"
+    "agent.reset_amp_on_load=${RESET_AMP_ON_LOAD}"
 )
 if [[ "${DISABLE_PUSH}" == "True" && "${RANDOMIZATION_STRENGTH}" != "0" ]]; then
     PHASE_HYDRA_ARGS+=("env.events.push_robot=null")
+fi
+if [[ "${DISABLE_ACTUATOR_DR}" == "True" && "${RANDOMIZATION_STRENGTH}" != "0" ]]; then
+    PHASE_HYDRA_ARGS+=("env.events.scale_actuator_gains=null")
+    PHASE_HYDRA_ARGS+=("env.events.scale_joint_parameters=null")
+fi
+if [[ "${DISABLE_LINK_MASS_DR}" == "True" && "${RANDOMIZATION_STRENGTH}" != "0" ]]; then
+    PHASE_HYDRA_ARGS+=("env.events.scale_link_mass=null")
 fi
 
 TASK="${TASK}" \

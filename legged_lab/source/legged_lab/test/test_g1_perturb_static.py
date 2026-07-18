@@ -26,6 +26,15 @@ STAND_RANDOMIZED_CFG_FILE = (
     / "g1_perturb"
     / "g1_stand_randomized_payload_env_cfg.py"
 )
+STAND_ROBUST_CFG_FILE = (
+    PACKAGE_ROOT
+    / "tasks"
+    / "locomotion"
+    / "amp"
+    / "config"
+    / "g1_perturb"
+    / "g1_stand_robust_env_cfg.py"
+)
 WALK_CFG_FILE = (
     PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "config" / "g1_perturb" / "g1_walk_perturb_env_cfg.py"
 )
@@ -61,6 +70,9 @@ STAND_TRAIN_SCRIPT_FILE = (
 )
 STAND_RANDOMIZED_TRAIN_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_randomized_payload.sh"
+)
+STAND_ROBUST_TRAIN_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_robust.sh"
 )
 STAND_RANDOM_DATA_BUILDER_FILE = (
     Path(__file__).resolve().parents[3]
@@ -138,6 +150,7 @@ def test_g1_perturb_files_exist():
         TASK_INIT_FILE,
         STAND_CFG_FILE,
         STAND_RANDOMIZED_CFG_FILE,
+        STAND_ROBUST_CFG_FILE,
         WALK_CFG_FILE,
         AGENT_CFG_FILE,
         REFERENCE_DATA_MODULE,
@@ -151,6 +164,7 @@ def test_g1_perturb_files_exist():
         TRAIN_SCRIPT_FILE,
         STAND_TRAIN_SCRIPT_FILE,
         STAND_RANDOMIZED_TRAIN_SCRIPT_FILE,
+        STAND_ROBUST_TRAIN_SCRIPT_FILE,
         STAND_RANDOM_DATA_BUILDER_FILE,
         STAND_RANDOM_POSE_BANK,
         STAND_VIS_EVAL_SCRIPT_FILE,
@@ -218,6 +232,7 @@ def test_g1_perturb_task_registration_present():
     assert "LeggedLab-Isaac-AMP-G1-StandPerturb-Play-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0" in task_init_text
+    assert "LeggedLab-Isaac-AMP-G1-StandRobust-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0" in task_init_text
     assert "LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-Play-v0" in task_init_text
     assert 'entry_point="legged_lab.envs:G1PerturbAmpEnv"' in task_init_text
@@ -484,6 +499,8 @@ def test_train_scripts_have_isolated_working_defaults():
     stand_train_script_text = _read_text(STAND_TRAIN_SCRIPT_FILE)
     stand_randomized_train_script_text = _read_text(STAND_RANDOMIZED_TRAIN_SCRIPT_FILE)
     stand_randomized_cfg_text = _read_text(STAND_RANDOMIZED_CFG_FILE)
+    stand_robust_train_script_text = _read_text(STAND_ROBUST_TRAIN_SCRIPT_FILE)
+    stand_robust_cfg_text = _read_text(STAND_ROBUST_CFG_FILE)
     stand_random_data_builder_text = _read_text(STAND_RANDOM_DATA_BUILDER_FILE)
     walk_train_script_text = _read_text(WALK_TRAIN_SCRIPT_FILE)
     vis_script_text = _read_text(VIS_SCRIPT_FILE)
@@ -517,6 +534,27 @@ def test_train_scripts_have_isolated_working_defaults():
     assert 'body_names=["left_wrist_yaw_link", "right_wrist_yaw_link"]' in stand_randomized_cfg_text
     assert '"mass_distribution_params": (0.0, 1.0)' in stand_randomized_cfg_text
     assert 'perturbation.source = "random_pose_trajectory"' in stand_randomized_cfg_text
+    assert 'TASK="LeggedLab-Isaac-AMP-G1-StandRobust-v0"' in stand_robust_train_script_text
+    assert "877e929d516cffe9131cc235477ceef4b226ec69e41c0f1c23e48816cfa28821" in stand_robust_train_script_text
+    assert "TERMINATION_PENALTY_MAG=${TERMINATION_PENALTY_MAG:-500.0}" in stand_robust_train_script_text
+    assert "EXTERNAL_FORCE_MAX_N=${EXTERNAL_FORCE_MAX_N:-20.0}" in stand_robust_train_script_text
+    assert "EXTERNAL_TORQUE_MAX_NM=${EXTERNAL_TORQUE_MAX_NM:-3.0}" in stand_robust_train_script_text
+    assert "RANDOMIZATION_STRENGTH=1" in stand_robust_train_script_text
+    assert "agent.load_policy_only=True" in stand_robust_train_script_text
+    assert "class G1StandRobustEnvCfg(G1StandRandomizedPayloadEnvCfg):" in stand_robust_cfg_text
+    assert "perturbation.random_curriculum_motion_scale = 1.0" in stand_robust_cfg_text
+    assert "self.sim.physx.enable_external_forces_every_iteration = True" in stand_robust_cfg_text
+    assert "self.rewards.termination_penalty = RewTerm(func=mdp.is_terminated, weight=-500.0)" in stand_robust_cfg_text
+    assert "self.events.random_torso_external_wrench = EventTerm(" in stand_robust_cfg_text
+    assert 'body_names="torso_link"' in stand_robust_cfg_text
+    assert '"force_range": (-20.0, 20.0)' in stand_robust_cfg_text
+    assert '"torque_range": (-3.0, 3.0)' in stand_robust_cfg_text
+    assert '"stiffness_distribution_params": (0.90, 1.10)' in stand_robust_cfg_text
+    assert '"damping_distribution_params": (0.90, 1.10)' in stand_robust_cfg_text
+    assert '"friction_distribution_params": (0.80, 1.20)' in stand_robust_cfg_text
+    assert '"armature_distribution_params": (0.90, 1.10)' in stand_robust_cfg_text
+    assert "g1_walk" not in stand_robust_cfg_text
+    assert "Walk" not in stand_robust_train_script_text
     assert "2-to-4-parent Dirichlet convex combinations" in stand_random_data_builder_text
     assert "MIN_SAFE_VELOCITY_RAD_S = 0.20" in stand_random_data_builder_text
     assert 'TASK="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0"' in walk_train_script_text

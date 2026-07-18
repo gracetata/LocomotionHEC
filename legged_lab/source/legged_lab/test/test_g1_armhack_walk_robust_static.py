@@ -18,6 +18,7 @@ AGENT_CFG = PERTURB_CFG_DIR / "agents" / "rsl_rl_ppo_cfg.py"
 TRAIN_SCRIPT = PROJECT_DIR / "scripts" / "train_g1_armhack_walk.sh"
 VIS_SCRIPT = PROJECT_DIR / "scripts" / "vis_g1_armhack_walk.sh"
 TEST_SCRIPT = PROJECT_DIR / "scripts" / "test_g1_armhack_walk.sh"
+AMP_RUNNER = PROJECT_DIR.parent / "rsl_rl" / "rsl_rl" / "runners" / "amp_runner.py"
 STAND_CFG = PERTURB_CFG_DIR / "g1_stand_perturb_env_cfg.py"
 STAND_RANDOM_CFG = PERTURB_CFG_DIR / "g1_stand_randomized_payload_env_cfg.py"
 MODE_CONFIG = (
@@ -45,6 +46,8 @@ def test_new_walk_python_files_parse_and_are_walk_only():
     assert "g1_stand" not in robust_text
     assert "G1WalkRobustFinetuneEnvCfg_PLAY" in robust_text
     assert "self.observations" not in robust_text
+    assert "target_dof_names = G1_LOCOMOTION_JOINT_NAMES" in robust_text
+    assert "strict_dof_names = True" in robust_text
 
     # Stand imports only the legacy common Walk helper, never the robust task.
     assert "g1_walk_robust" not in _text(STAND_CFG)
@@ -108,6 +111,7 @@ def test_training_curriculum_and_launchers_are_explicit():
     train_text = _text(TRAIN_SCRIPT)
     vis_text = _text(VIS_SCRIPT)
     test_text = _text(TEST_SCRIPT)
+    amp_runner_text = _text(AMP_RUNNER)
 
     for phase in (
         "amp_warmup",
@@ -115,7 +119,9 @@ def test_training_curriculum_and_launchers_are_explicit():
         "payload_half",
         "payload_full",
         "command",
-        "domain",
+        "domain_base",
+        "domain_actuator",
+        "domain_link",
         "robust",
     ):
         assert f"    {phase})" in train_text
@@ -124,7 +130,12 @@ def test_training_curriculum_and_launchers_are_explicit():
     assert "MODE_PROBABILITY=0.30" in train_text
     assert "RANDOMIZATION_STRENGTH=1" in train_text
     assert 'PHASE_HYDRA_ARGS+=("env.events.push_robot=null")' in train_text
+    assert 'PHASE_HYDRA_ARGS+=("env.events.scale_actuator_gains=null")' in train_text
+    assert 'PHASE_HYDRA_ARGS+=("env.events.scale_joint_parameters=null")' in train_text
+    assert 'PHASE_HYDRA_ARGS+=("env.events.scale_link_mass=null")' in train_text
     assert "MODE=init is restricted to PHASE=amp_warmup" in train_text
+    assert 'RESET_AMP_ON_LOAD=True' in train_text
+    assert 'agent.reset_amp_on_load=${RESET_AMP_ON_LOAD}' in train_text
     assert 'agent.load_policy_only=${LOAD_POLICY_ONLY}' in train_text
     assert "BASELINE_KL_ENABLE=True" in train_text
 
@@ -140,3 +151,6 @@ def test_training_curriculum_and_launchers_are_explicit():
     assert "Reached max_steps=${MAX_STEPS}" in test_text
     assert "[METRIC\\] IsaacSim play task tracking:" in test_text
     assert "Test Reports" in test_text
+    assert 'reset_amp_on_load = bool(self.cfg.get("reset_amp_on_load", False))' in amp_runner_text
+    assert "fresh_amp_state = copy.deepcopy" in amp_runner_text
+    assert "Reset AMP discriminator, normalizer, and optimizer" in amp_runner_text

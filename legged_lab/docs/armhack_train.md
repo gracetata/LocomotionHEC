@@ -2,11 +2,12 @@
 
 ## 1. 当前状态
 
-截至 2026-07-16，Stand 已完成数据整理、奖励修复、无跳变初始化、两阶段正式训练、确定性双臂测试集、IsaacLab 报告和 MuJoCo sim2sim 验证。`scripts/train_g1_armhack_stand.sh` 已从 S3 G1 `model_9996.pt` 完成 `4096 env × 3000 iteration` 的第一阶段训练；`scripts/train_g1_armhack_stand_randomized_payload.sh` 又从第一阶段 `model_2999.pt` 完成 `4096 env × 3000 iteration` 的第二阶段训练，加入范围内随机姿态、minimum-jerk 插值轨迹和腕部末端附加质量。当前默认测试模型是第二阶段的新 `model_2999.pt`。
+截至 2026-07-18，Stand 已完成数据整理、奖励修复、无跳变初始化、两阶段正式训练、确定性双臂测试集、IsaacLab 报告和 MuJoCo sim2sim 验证。`scripts/train_g1_armhack_stand.sh` 已从 S3 G1 `model_9996.pt` 完成 `4096 env × 3000 iteration` 的第一阶段训练；`scripts/train_g1_armhack_stand_randomized_payload.sh` 又从第一阶段 `model_2999.pt` 完成 `4096 env × 3000 iteration` 的第二阶段训练，加入范围内随机姿态、minimum-jerk 插值轨迹和腕部末端附加质量。针对真机容易失稳的问题，第三阶段 `scripts/train_g1_armhack_stand_robust.sh` 已加入更大的摔倒惩罚、torso 外力和关节参数随机化，并完成最终配置 smoke；正式第三阶段尚未开始，所以当前默认测试模型仍是第二阶段的新 `model_2999.pt`。
 
 ```text
 LeggedLab-Isaac-AMP-G1-StandPerturb-v0
 LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0
+LeggedLab-Isaac-AMP-G1-StandRobust-v0
 LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 ```
 
@@ -23,6 +24,7 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 - 当前最新 Stand 正式 run 为 `2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715`，新 `model_2999.pt` 的 SHA-256 为 `877e929d516cffe9131cc235477ceef4b226ec69e41c0f1c23e48816cfa28821`，大小 `14,825,781 bytes`、内部 iteration `2999`；训练末次统计为 episode length `1000/1000`、timeout `99.95%`、base-height termination `0`、bad-orientation termination `0.05%`、torso roll/pitch 误差 `0.0168/0.0346 rad`；
 - 新姿态库共 512 个 14-DoF 双臂姿态（64 个实测覆盖锚点 + 448 个 2–4 父姿态凸组合），所有关节均位于原训练数据范围内；
 - 第二阶段入口除早期 `16 env × 1 iteration` smoke 外，已完成正式 `4096 env × 3000 iteration` 训练；最终 `random_motion_scale=1.0`、`curriculum_stage=2`、姿态库大小 `512`、平均过渡时长 `4.4112 s`；
+- 第三阶段最终配置已完成 `8 env × 1 iteration` smoke：torso wrench 在短测试中按 `0.04–0.08 s` 实际重采样，actuator gain、joint parameter、腕端 payload 三类 startup event 均生效，Reward Manager 确认为 `termination_penalty=-500`，共 192 step、完成 PPO 更新并保存 `model_0.pt`；正式训练使用默认 `2–5 s` 外力间隔，细节见第 17 节；
 - 本机历史 Stand 课程使用 `model_7999.pt` 起步、最终速度 `0.25x`；它只作为历史对照，不再作为当前 Stand 默认模型；
 - schema v5 确定性测试集在旧样本上新增 8 个固定随机覆盖姿态和 6 条固定 minimum-jerk 轨迹；完整序列为 208.08 s / 10,404 step / 59 阶段。新正式模型已完成无负载全量测试，`termination/reset=0`；每侧 1 kg 全量测试结果见第 1.1.6 节；
 - 同一模型已导出为 `96→29` TorchScript/ONNX，并在 S3 G1 MuJoCo XML 中完成 schema v5 全量 sim2sim：0 kg 和每侧 1 kg 均为 10,405 个记录样本、完整播放、`healthy=True` 且无摔倒；命令、实现边界和结果见第 1.1.9 节；
@@ -36,7 +38,7 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 - 上述训练与回放均没有 traceback、`FileNotFoundError`、Isaac/Python 版本错误或 Nav2 数据缺失错误；
 - 训练不再依赖 `/home/hecggdz/...` 等机器绝对路径。
 
-这里的 smoke `model_0.pt` 只证明任务注册、数据加载、Isaac Sim、rollout、PPO 更新和保存执行链可运行，不代表一轮更新已经学会新任务。训练链的起点仍是第一阶段模型；测试和可视化应显式指向第二阶段最新正式 run 的 `model_2999.pt`。可视化脚本默认值已同步到新模型，但显式传入 `CHECKPOINT="$STAND_CKPT"` 更利于审计。
+这里的 smoke `model_0.pt` 只证明任务注册、数据加载、Isaac Sim、rollout、PPO 更新和保存执行链可运行，不代表一轮更新已经学会新任务。第三阶段正式模型生成前，测试和可视化仍应显式指向第二阶段最新正式 run 的 `model_2999.pt`。可视化脚本默认值已同步到该模型，但显式传入 `CHECKPOINT="$STAND_CKPT"` 更利于审计。
 
 ## 1.1 Stand 训练、测试与可视化快速入口
 
@@ -2308,3 +2310,569 @@ Walk checkpoint + 三姿态均衡混合
 以上是修复前的审计结论。当前代码已经按 15.0 实施；新的训练与测试状态以第 1、6.3、8.4
 和 8.5 节为准。即使 smoke 完成，也只证明训练链和 checkpoint 加载正确，不能替代逐姿态
 20 s 完成率与速度跟踪验收。
+
+## 16. Walk P0/P1 Robust 训练、测试与可视化（2026-07-18）
+
+本节是当前 Walk P0/P1 实现的权威入口。第 15 节保留旧实现的审计过程；从现在起，正式续训使用
+`LeggedLab-Isaac-AMP-G1-WalkRobustFinetune-v0`，不再把旧的
+`LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0` 当作 P0/P1 训练任务。
+
+本轮只新增或修改 Walk 专用代码、Walk runner 注册、Walk 脚本和本节文字。Stand 的环境类、训练脚本、
+测试脚本、`armhack.md` 中的 Stand 任务说明以及现有 Stand checkpoint 均不参与该执行链。
+
+### 16.1 已实现的 P0/P1 项目
+
+| 优先级 | 已实现内容 | 当前代码位置与约束 |
+|---|---|---|
+| P0 | 恢复 AMP 奖励 | `G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg` 默认 `style=1.0`、`task/style lerp=0.85`；训练脚本按阶段升到 `style=5.0` |
+| P0 | AMP 排除双臂 | 继续复用已测试的 15DoF 腿腰 discriminator joint mask；demo joint `pos/vel` 同样只取腿腰，双臂不会进入 discriminator |
+| P0 | 修复 AMP demo 关节顺序 | ACCAD pickle 的非交错 DoF 顺序按名字严格重排成 `G1_LOCOMOTION_JOINT_NAMES` 后再选 15DoF；缺名直接失败，不再用错误 raw index |
+| P0 | 双腕末端负载 | 左、右 `wrist_yaw_link` 使用两个独立 startup event，各自采样 `U(0, max_payload)`；`operation=add` 且 `recompute_inertia=True` |
+| P0 | Nav2 + mode 混合命令 | 新增 `HybridNav2ModeVelocityCommand`；每个 4 s 窗口选择 Nav2 连续数据或一个命名 mode，策略仍只看到当前 `[vx, vy, wz]` |
+| P1 | 分批恢复物理 randomization | `domain_base` 只加摩擦和 torso mass/CoM；`domain_actuator` 再加 gain/armature；`domain_link` 最后加 link-mass scale；三阶段均关闭 push |
+| P1 | push 最后加入 | 只有 `robust` 阶段启用 interval push，避免强扰动掩盖 AMP、payload 或 command 问题 |
+| P1 | 延长到约 10000 iteration | 以用户已有 WALK_3000 为起点，再续训 `1000+1000+500+1000+2000+500+500+250+250=7000` iteration |
+
+策略输入维度仍为 96，输出仍为 29。没有新增 payload 数值、command source、mode id、未来 Nav2
+窗口或未来双臂信息。双臂 14 维 action 仍由 `G1WalkPerturbAmpEnv` 在物理 step 前替换为本 episode
+固定姿态；AMP 和腿腰正则不对这些不可控的双臂 action 计分。
+
+### 16.2 新 Walk 执行链
+
+```text
+scripts/train_g1_armhack_walk.sh
+  -> LeggedLab-Isaac-AMP-G1-WalkRobustFinetune-v0
+  -> G1WalkRobustFinetuneEnvCfg
+       -> G1WalkPerturbFinetuneEnvCfg（原 Nav2 reward + 腿腰 mask）
+       -> HybridNav2ModeVelocityCommand
+       -> 左/右 wrist_yaw_link 独立附加质量事件
+  -> G1WalkPerturbAmpEnv（固定双臂覆盖）
+  -> G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg
+  -> lower-body/waist AMP + task reward + frozen model9996 baseline KL
+```
+
+主要文件如下：
+
+- `source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_walk_robust_env_cfg.py`：
+  Walk-only 环境、混合命令、左右腕 payload 和确定性 Play 配置；
+- `source/legged_lab/legged_lab/tasks/locomotion/amp/mdp/commands/hybrid_nav2_mode_velocity_command.py`：
+  Nav2/mode 窗口选择、命令平滑、加速度限制和 source/mode 覆盖率 metrics；
+- `source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/agents/rsl_rl_ppo_cfg.py`：
+  Walk Robust AMP runner；
+- `../rsl_rl/rsl_rl/runners/amp_runner.py`：仅在 Walk 第一阶段明确请求时，保留 policy/PPO 状态但重置旧 AMP discriminator、normalizer 和 optimizer；默认值为关闭，Stand 不触发；
+- `scripts/train_g1_armhack_walk.sh`：锁定 P0/P1 课程和 checkpoint 身份；
+- `scripts/vis_g1_armhack_walk.sh`：单条件 GUI/headless/video 回放；
+- `scripts/test_g1_armhack_walk.sh`：固定 smoke/core/full 测试矩阵和 Markdown 汇总；
+- `source/legged_lab/test/test_g1_armhack_walk_robust_static.py`：Walk/Stand 隔离、配置、数据和脚本回归。
+
+### 16.3 混合 command 的准确含义
+
+八个 mode 名称以实际 `task_sampling_config.json` 为准：
+
+```text
+stand
+forward_slow
+forward_normal
+backward
+lateral_left
+lateral_right
+turn_left
+turn_right
+```
+
+每次重采样先建立合法的 Nav2 连续窗口，再按 `mode_probability` 决定该环境是否改用 mode target。
+Nav2 和 mode 都经过相同的一阶平滑与线速度/yaw 加速度限制；reset 后从 0 平滑进入目标，不产生 command
+阶跃。命令 term 记录 `source_nav2_ratio`、`source_mode_ratio` 和八个 `mode_*_ratio`，用于确认实际采样
+覆盖，避免只改配置却没有改变真实训练分布。
+
+训练阶段的 source 比例如下：
+
+| 阶段 | Nav2 family | Nav2 / mode | Nav2 scale | mode scale |
+|---|---|---:|---|---|
+| `amp_warmup`、`amp_target`、`payload_half`、`payload_full` | `complex_turn` | 100% / 0% | `[0.85,0.75,0.75]` | 不采样 |
+| `command` | 全 family | 80% / 20% | `[1,1,1]` | `[0.75,0.75,0.75]` |
+| `domain_base`、`domain_actuator`、`domain_link`、`robust` | 全 family | 70% / 30% | `[1,1,1]` | `[1,1,1]` |
+
+### 16.4 必须使用的环境
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+which python
+python -c 'import isaaclab, torch; print(torch.cuda.is_available())'
+```
+
+预期 Python 为 `/home/user/anaconda3/envs/env_isaaclab/bin/python`。不要用系统 Python，也不要在
+Stand 正式训练进程仍运行时启动 Walk；专用脚本检测到任一 ArmHack Stand 训练进程会直接退出。
+
+### 16.5 九阶段正式续训命令
+
+正式训练应从用户已有 WALK_3000 的真实 `model_2999.pt` 做 full-state resume。必须先确认日志 checkpoint
+与导出 checkpoint 都存在且 SHA-256 相同：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+WALK_3000_RUN='<实际的3000-iteration-Walk-run目录名>'
+sha256sum \
+  "logs/rsl_rl/g1_walk_perturb/$WALK_3000_RUN/model_2999.pt" \
+  "ArmHack Checkpoints/WalkPerturbFinetune/$WALK_3000_RUN/model_2999.pt"
+```
+
+若两行不同，不能续训。脚本能够把旧 `g1_walk_perturb` 日志只读链接到新的
+`g1_walk_robust` load namespace；不会修改旧 run。
+
+旧 WALK_3000 在 `style=0` 时仍会更新 discriminator，而当时 ACCAD pickle 的 DoF 被 raw index 消费；
+该顺序与 policy 的交错 G1 顺序不同。新的 `amp_warmup` 会完整恢复 actor、critic、PPO optimizer 和
+iteration，但只在这一次把 AMP discriminator、其 observation normalizer 和 discriminator optimizer
+重新初始化。后续八个阶段都完整恢复已经修正后的 AMP 状态，不再次重置。
+
+第一阶段命令：
+
+```bash
+MODE=resume \
+PHASE=amp_warmup \
+RESUME_RUN="$WALK_3000_RUN" \
+RESUME_CHECKPOINT=model_2999.pt \
+POSE_NAME=random \
+RUN_NAME=armhack_walk_p0_amp_warmup_from_walk3000 \
+QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+```
+
+之后每一阶段都把 `PREV_RUN` 和 `PREV_CKPT` 替换成上一阶段真实输出；不要猜 checkpoint 编号：
+
+```bash
+PREV_RUN='<上一阶段实际run目录名>'
+PREV_CKPT=$(find "logs/rsl_rl/g1_walk_robust/$PREV_RUN" \
+  -maxdepth 1 -type f -name 'model_*.pt' -printf '%f\n' | sort -V | tail -1)
+echo "$PREV_RUN / $PREV_CKPT"
+```
+
+按顺序执行：
+
+```bash
+# +1000：提高 lower-body AMP 占比
+MODE=resume PHASE=amp_target RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p0_amp_target QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +500：左右腕分别采样 U(0, 0.5 kg)
+MODE=resume PHASE=payload_half RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p0_payload_half QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +1000：左右腕分别采样 U(0, 1.0 kg)
+MODE=resume PHASE=payload_full RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p0_payload_full QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +2000：全 Nav2 family + 20% 中低速 mode
+MODE=resume PHASE=command RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p0_command_expand QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +500：只恢复 friction、torso mass 和 torso CoM；actuator/link/push 仍关闭
+MODE=resume PHASE=domain_base RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p1_domain_base QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +500：再恢复 actuator stiffness/damping 和 joint armature；link/push 仍关闭
+MODE=resume PHASE=domain_actuator RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p1_domain_actuator QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +250：再恢复左右 link-mass scale；只剩 push 关闭
+MODE=resume PHASE=domain_link RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p1_domain_link QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+
+# +250：最后启用 interval push
+MODE=resume PHASE=robust RESUME_RUN="$PREV_RUN" RESUME_CHECKPOINT="$PREV_CKPT" \
+POSE_NAME=random RUN_NAME=armhack_walk_p1_robust_push QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+```
+
+每条命令结束后都要重新设置 `PREV_RUN/PREV_CKPT`。`MAX_ITERATIONS` 表示本阶段追加的 iteration；只有
+诊断时可以显式缩短。除 `amp_warmup` 外，`MODE=init` 会被拒绝，防止把后期强随机化误用于从
+model9996 重新初始化。正式训练不得设置 `ALLOW_PHASE_INIT=True`。
+
+如果用户报告的 WALK_3000 尚未同步到本机，只允许先验证从 model9996 初始化的代码链：
+
+```bash
+MODE=init PHASE=amp_warmup POSE_NAME=pos2_down \
+RUN_NAME=armhack_walk_amp_warmup_from_model9996 \
+QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk.sh
+```
+
+该命令是新的训练起点，不等价于续训已有 WALK_3000。
+
+### 16.6 checkpoint 与日志位置
+
+```text
+训练日志和完整状态：
+logs/rsl_rl/g1_walk_robust/<timestamp>_<RUN_NAME>/
+
+独立导出副本：
+ArmHack Checkpoints/WalkPerturbFinetune/<timestamp>_<RUN_NAME>/model_*.pt
+```
+
+`MODE=resume` 会同时检查两个位置的 checkpoint 是否存在且 SHA-256 一致。通常它恢复 actor、critic、
+PPO optimizer、AMP discriminator/normalizer 和 iteration；唯一例外是 `amp_warmup` 的一次性 AMP
+重置，上节已经说明原因。不能用 policy-only load 伪装成阶段续训。
+
+### 16.7 单条件测试和 GUI 可视化
+
+先设置待测 checkpoint：
+
+```bash
+WALK_CKPT='/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkPerturbFinetune/<run>/model_<iteration>.pt'
+```
+
+20 s Nav2 headless 测试，固定 `pos2_down`、左右各 1 kg：
+
+```bash
+CHECKPOINT="$WALK_CKPT" \
+POSE_NAME=pos2_down \
+LEFT_PAYLOAD_KG=1.0 RIGHT_PAYLOAD_KG=1.0 \
+COMMAND_SOURCE=nav2 \
+HEADLESS=True REAL_TIME=False FOLLOW_CAMERA=False MAX_STEPS=1000 \
+bash scripts/vis_g1_armhack_walk.sh
+```
+
+固定侧步 mode 的 GUI 可视化：
+
+```bash
+CHECKPOINT="$WALK_CKPT" \
+POSE_NAME=pos1_back \
+LEFT_PAYLOAD_KG=0.0 RIGHT_PAYLOAD_KG=1.0 \
+COMMAND_SOURCE=mode MODE_NAME=lateral_left \
+HEADLESS=False REAL_TIME=True FOLLOW_CAMERA=True MAX_STEPS=1000 \
+bash scripts/vis_g1_armhack_walk.sh
+```
+
+按训练后期的 70% Nav2 / 30% mode 分布可视化：
+
+```bash
+CHECKPOINT="$WALK_CKPT" \
+POSE_NAME=random \
+LEFT_PAYLOAD_KG=0.5 RIGHT_PAYLOAD_KG=0.5 \
+COMMAND_SOURCE=hybrid MODE_PROBABILITY=0.30 \
+HEADLESS=False REAL_TIME=True FOLLOW_CAMERA=True MAX_STEPS=1000 \
+bash scripts/vis_g1_armhack_walk.sh
+```
+
+录制同一条件的视频：
+
+```bash
+CHECKPOINT="$WALK_CKPT" \
+POSE_NAME=pos3_front \
+LEFT_PAYLOAD_KG=1.0 RIGHT_PAYLOAD_KG=1.0 \
+COMMAND_SOURCE=mode MODE_NAME=turn_right \
+HEADLESS=True REAL_TIME=False FOLLOW_CAMERA=True \
+MAX_STEPS=1000 VIDEO=True VIDEO_LENGTH=1000 \
+bash scripts/vis_g1_armhack_walk.sh
+```
+
+### 16.8 固定测试矩阵
+
+最短真实 smoke 运行 20 个 control step，并要求进程正常退出、到达 `max_steps` 且输出 tracking metrics：
+
+```bash
+CHECKPOINT="$WALK_CKPT" SUITE=smoke MAX_STEPS=20 \
+bash scripts/test_g1_armhack_walk.sh
+```
+
+正式阶段验收应使用 20 s 窗口：
+
+```bash
+# 24 项：3 pose × 2 对称 payload × (Nav2 + 3 个代表 mode)
+CHECKPOINT="$WALK_CKPT" SUITE=core MAX_STEPS=1000 \
+bash scripts/test_g1_armhack_walk.sh
+
+# 135 项：3 pose × 5 payload（含 0/1、1/0 不对称）× (Nav2 + 8 mode)
+CHECKPOINT="$WALK_CKPT" SUITE=full MAX_STEPS=1000 \
+bash scripts/test_g1_armhack_walk.sh
+```
+
+每个条件的原始日志和总表写入：
+
+```text
+ArmHack Checkpoints/WalkPerturbFinetune/Test Reports/
+  <checkpoint名>_<SHA前12位>/<时间>_<suite>/
+    summary.md
+    <pose>__payload_L*_R*kg__<command>.log
+```
+
+测试脚本把以下任一情况判为失败：子进程非 0、Python traceback、Hydra job error、segmentation
+fault、未到达指定 `max_steps`，或没有输出 `[METRIC] IsaacSim play task tracking:`。这些检查证明任务能
+构造、checkpoint 能加载、环境能 step 并生成指标；20-step smoke 不能证明训练已经收敛。是否达到
+ArmHack Walk 目标，仍必须比较 20 s completion、`vx/vy/wz` 跟踪、torso 稳定、足滑、AMP/style、
+不同 pose/payload/mode 的 worst case。
+
+### 16.9 本轮真实 smoke 记录
+
+2026-07-18 在 `env_isaaclab`、RTX 4090 上完成以下真实验证：
+
+1. `robust` 最强配置用 4 env 跑 1 iteration 成功。事件表同时出现基础六类物理 DR、左右两个
+   wrist payload event 和 interval push；policy/critic/discriminator shape 分别为 `96`、`297`、
+   `4×42`，其中 live/demo joint 项均为 `4×15`。AMP discriminator loss、style 路径和 baseline-KL
+   均实际参加 update；诊断 checkpoint 为：
+
+   ```text
+   ArmHack Checkpoints/WalkPerturbFinetune/
+   2026-07-18_14-01-18_armhack_walk_p0p1_robust_doforderfix_smoke_20260718/model_0.pt
+   SHA-256: 73d6148ff0eff2aeaa326c34049781474a06a29f3318dbeaff07f7e643ef126d
+   ```
+
+2. 对该 checkpoint 执行 `MODE=resume PHASE=amp_warmup` 的 1-iteration 测试成功。日志明确打印：
+
+   ```text
+   Reset AMP discriminator, normalizer, and optimizer after full-state policy resume.
+   ```
+
+   证明一次性 AMP reset 分支实际执行，而不是只存在于配置字符串中。
+
+3. `domain_base`、`domain_actuator`、`domain_link` 各用 2 env 跑 1 iteration，均正常保存 checkpoint。
+   三份 Event Manager 表分别确认：
+
+   ```text
+   domain_base     : material + torso mass/CoM + wrist payload
+   domain_actuator : 上述 + actuator gains + joint armature
+   domain_link     : 上述 + link mass scale
+   robust          : 上述 + interval push
+   ```
+
+4. 专用测试脚本的两个 20-step 条件均为 PASS：
+
+   ```text
+   Test Reports/model_0_73d6148ff0ef/20260718_140221_smoke/
+     pos2_down + left/right 0/0 kg + Nav2
+
+   Test Reports/model_0_73d6148ff0ef/20260718_140241_smoke/
+     pos3_front + left/right 0/1 kg + lateral_left mode
+   ```
+
+   两项都正常到达 `max_steps=20` 并输出 task tracking 与 torso Important Metrics。
+
+5. `pos1_back + 左右各 0.5 kg + 70/30 hybrid` 的 5-step 渲染与视频编码成功，视频为：
+
+   ```text
+   ArmHack Checkpoints/WalkPerturbFinetune/
+   2026-07-18_14-01-18_armhack_walk_p0p1_robust_doforderfix_smoke_20260718/
+   videos/play/rl-video-step-0.mp4
+   ```
+
+6. Bash 语法、Python compile、静态 Walk/Stand 边界回归和原有 perturbation 回归合计
+   `15 passed`，`git diff --check` 通过。真实运行没有 Python traceback、Hydra override、shape、
+   checkpoint load/save 或 CUDA 执行错误。Isaac Sim 4.5 仍打印其既有的 USD/MaterialX/IOMMU 等
+   非阻断 warning；这些 warning 没有导致测试失败，也不是本轮 Walk 配置错误。
+
+上述 `model_0.pt` 只用于证明代码链，不是训练结果。正式 WALK_3000→约 WALK_10000 仍应严格按
+第 16.5 节执行，并用 `core/full` 的 20 s 矩阵判断收敛与鲁棒性。
+
+## 17. Stand 真机鲁棒性第三阶段训练（2026-07-18）
+
+本节只描述 Stand。新增代码没有修改 Walk 环境类、Walk command、Walk 训练/测试/可视化脚本或
+Walk checkpoint。共享任务注册文件只增加一个 Stand task id，原有 Walk 注册项保持不变。
+
+### 17.1 为什么需要第三阶段
+
+第二阶段 Stand 已经学过 512 个范围内随机双臂姿态、`1.0x` minimum-jerk 姿态插值和左右腕末端
+各自 `U(0,1 kg)` 的负载，但其专用训练脚本设置了 `RANDOMIZATION_STRENGTH=0`。因此当时实际关闭了
+actuator gain、joint parameter 和其他通用物理随机化，`push_robot` 也在 Stand 配置中显式关闭；
+非 timeout 摔倒惩罚仍为 `-200`。这可以解释为什么仿真固定协议下能够站立，但真机上的关节增益、
+摩擦、惯量误差和未建模外力容易把策略推离训练分布。
+
+第三阶段不是重写原任务，也不是从头训练。它从下面这个已经核验的第二阶段模型做 policy-only 初始化：
+
+```text
+ArmHack Checkpoints/StandPerturb/
+2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/
+model_2999.pt
+
+SHA-256: 877e929d516cffe9131cc235477ceef4b226ec69e41c0f1c23e48816cfa28821
+size: 14825781 bytes
+```
+
+### 17.2 新任务和代码边界
+
+执行链为：
+
+```text
+scripts/train_g1_armhack_stand_robust.sh
+  -> LeggedLab-Isaac-AMP-G1-StandRobust-v0
+  -> G1StandRobustEnvCfg
+       -> G1StandRandomizedPayloadEnvCfg
+       -> G1StandPerturbEnvCfg
+  -> G1PerturbAmpEnv
+  -> G1StandPerturbRslRlOnPolicyRunnerAmpCfg
+```
+
+本轮新增文件：
+
+- `source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_stand_robust_env_cfg.py`：
+  Stand-only reward、外力和关节 domain randomization；
+- `scripts/train_g1_armhack_stand_robust.sh`：锁定输入 checkpoint、参数范围和正式训练默认值。
+
+任务注册只在 `config/g1_perturb/__init__.py` 中新增
+`LeggedLab-Isaac-AMP-G1-StandRobust-v0`。runner 继续复用 Stand 的
+`g1_stand_perturb` 日志目录和 `ArmHack Checkpoints/StandPerturb` 导出目录，不会写入 Walk 目录。
+
+### 17.3 真实训练分布
+
+| 项目 | 默认分布 | 采样时机与解释 |
+|---|---|---|
+| 双臂姿态 | 512 个 14-DoF 姿态库 | 每个环境 reset 时独立采样起点/终点 |
+| 双臂轨迹 | `1.0x`，过渡 `2–6 s` | 从第 0 iteration 开始全速 minimum-jerk；不再重复静态/低速课程 |
+| 左腕负载 | `U(0,1 kg)` | startup 独立采样，质量加到 `left_wrist_yaw_link` 并重算惯量 |
+| 右腕负载 | `U(0,1 kg)` | 与左侧独立采样 |
+| torso 外力 | x/y/z 每轴独立 `U(-20,20) N` | 每环境独立 interval event，默认每 `2–5 s` 重采样 |
+| torso 外力矩 | x/y/z 每轴独立 `U(-3,3) Nm` | 与外力同时写入 `torso_link` |
+| actuator stiffness | 标称值 × `U(0.90,1.10)` | startup，每环境、每关节独立 |
+| actuator damping | 标称值 × `U(0.90,1.10)` | startup，每环境、每关节独立 |
+| joint friction | 标称值 × `U(0.80,1.20)` | startup，每环境、每关节独立 |
+| joint armature | 标称值 × `U(0.90,1.10)` | startup，每环境、每关节独立 |
+| 非 timeout 摔倒惩罚 | `-500` | 原值 `-200`；只在 `base_height`/`bad_orientation` 等非 timeout 终止帧触发 |
+
+`random_torso_external_wrench` 不是速度 teleport：它调用
+`mdp.apply_external_force_torque` 写入物理引擎。reset 模式下的零 wrench 事件会先清掉上一个 episode
+的外力，之后 interval event 在双臂持续运动时重新采样。S3 G1 asset 已设置 8 次 position iteration、
+4 次 velocity iteration；新 Stand task 额外设置
+`sim.physx.enable_external_forces_every_iteration=True`，保证持续 wrench 在每次 solver iteration 施加。
+
+为了让第三阶段的效果能够归因，以下宽泛随机化仍显式关闭：地面 material、base mass、base/torso CoM、
+全身 link-mass scale 和 `push_by_setting_velocity`。腕端 payload 是唯一额外 link mass。后续如果需要加入
+地面摩擦或机身 CoM，应另设阶段并逐项验收，不能在当前命令中无记录地全部打开。
+
+策略接口没有变化：actor 输入仍为 96 维、输出仍为 29 维；双臂 14 维实际 action 继续由环境覆盖。
+未来姿态、轨迹 phase、payload、外力和关节随机参数都没有进入 policy observation。
+
+### 17.4 正式训练命令
+
+每个新终端完整执行：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+which python
+python scripts/tools/check_armhack_reference_data.py --stand-only
+
+QUIET_TERMINAL=False \
+RUN_NAME=armhack_stand_robust_wrench_joint_dr_from_model2999_full_20260718 \
+bash scripts/train_g1_armhack_stand_robust.sh
+```
+
+默认是 `4096 env × 3000 iteration`，学习率 `5e-5`、entropy `0.002`、desired KL `0.01`，并用输入
+`model_2999.pt` 建立 `0.001` 权重的 frozen baseline KL，降低强外力初期发生策略灾难性漂移的风险。
+训练过程直接显示在终端；若需要写日志，可以显式设置：
+
+```bash
+QUIET_TERMINAL=True \
+TRAIN_LOG_FILE="$PWD/logs/monitoring/armhack_stand_robust_full_20260718.log" \
+RUN_NAME=armhack_stand_robust_wrench_joint_dr_from_model2999_full_20260718 \
+bash scripts/train_g1_armhack_stand_robust.sh
+```
+
+TensorBoard：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+tensorboard --logdir logs/rsl_rl/g1_stand_perturb --port 6006 --bind_all
+```
+
+正式 checkpoint 输出到：
+
+```text
+logs/rsl_rl/g1_stand_perturb/<timestamp>_<RUN_NAME>/model_*.pt
+ArmHack Checkpoints/StandPerturb/<timestamp>_<RUN_NAME>/model_*.pt
+```
+
+脚本允许通过同名环境变量收窄或扩大参数，但带有硬边界检查。真机问题没有定量标定前，不建议直接把
+外力或关节参数范围扩大到默认值两倍；应先完成默认 3000 iteration，并用相同 deterministic Stand
+测试集对比第三阶段前后的 termination、torso 6D 和足滑。
+
+### 17.5 Smoke 命令与真实结果
+
+用于开发检查的短命令为：
+
+```bash
+NUM_ENVS=8 \
+MAX_ITERATIONS=1 \
+RUN_NAME=armhack_stand_robust_wrench_joint_dr_smoke_v2_20260718 \
+QUIET_TERMINAL=True \
+TRAIN_LOG_FILE="$PWD/logs/monitoring/armhack_stand_robust_wrench_joint_dr_smoke_v2_20260718.log" \
+FORCE_INTERVAL_MIN_S=0.04 \
+FORCE_INTERVAL_MAX_S=0.08 \
+bash scripts/train_g1_armhack_stand_robust.sh
+```
+
+这里只把外力 interval 缩短为 `0.04–0.08 s`，目的是让 24 control-step smoke 中 interval event
+真正多次触发；正式训练必须恢复脚本默认的 `2–5 s`。2026-07-18 的最终 smoke 结果：
+
+- 正确加载 SHA 前缀 `877e929d516c` 的第二阶段 `model_2999.pt`；
+- Event Manager 的 startup 项为 `scale_actuator_gains`、`scale_joint_parameters`、
+  `randomize_end_effector_payload`；interval 项为 `random_torso_external_wrench`；
+- 保存的 `params/env.yaml` 明确为 `enable_external_forces_every_iteration: true`；
+- Reward Manager 显示 `termination_penalty=-500.0`；
+- policy/critic/action shape 保持 `96/297/29`；
+- `ArmHack/random_motion_scale=1.0`、姿态库 `512`、课程阶段 `2`；
+- 8 个环境共收集 192 step，完成 `Learning iteration 0/1`、PPO update、TensorBoard event 和 checkpoint 保存；
+- 进程 exit code 为 0，没有 Python traceback、Hydra override、CUDA、Isaac 或 checkpoint 错误。
+
+证据位置：
+
+```text
+logs/monitoring/armhack_stand_robust_wrench_joint_dr_smoke_v2_20260718.log
+
+logs/rsl_rl/g1_stand_perturb/
+2026-07-18_14-37-16_armhack_stand_robust_wrench_joint_dr_smoke_v2_20260718/
+  params/env.yaml
+  params/agent.yaml
+  events.out.tfevents.*
+  model_0.pt
+
+ArmHack Checkpoints/StandPerturb/
+2026-07-18_14-37-16_armhack_stand_robust_wrench_joint_dr_smoke_v2_20260718/model_0.pt
+SHA-256: 64c3d4ed8ef9471f0190cfe94874985fa4041309a3434cf749e0f010da675a51
+```
+
+日志目录和独立 checkpoint 副本的 `model_0.pt` SHA-256 完全一致。该 smoke 只证明最终代码链能够运行；
+因为 24 step 内没有完整 20 s episode，episode reward/termination 汇总为 0 不能证明“不摔倒”，
+`model_0.pt` 也不能替代正式训练结果。
+
+### 17.6 正式训练后的测试
+
+第三阶段 checkpoint 的网络接口与第二阶段相同，因此正式训练结束后继续使用既有确定性 Stand 入口，
+不需要也不应该修改 Walk 测试代码。新终端先指定实际最终模型：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+ROBUST_RUN='<第三阶段实际run目录名>'
+ROBUST_CKPT="$PWD/ArmHack Checkpoints/StandPerturb/$ROBUST_RUN/model_2999.pt"
+test -f "$ROBUST_CKPT" || { echo "checkpoint 不存在: $ROBUST_CKPT"; exit 1; }
+
+# 默认 schema v5 全量无负载测试
+CHECKPOINT="$ROBUST_CKPT" MODE=all PAYLOAD_KG=0 \
+HEADLESS=True REAL_TIME=False MAX_STEPS=10404 \
+bash scripts/vis_g1_armhack_stand_eval.sh
+
+# 下垂到向前放平专项测试
+CHECKPOINT="$ROBUST_CKPT" MODE=down_to_horizontal PAYLOAD_KG=0 \
+HEADLESS=True REAL_TIME=False MAX_STEPS=1000 \
+bash scripts/vis_g1_armhack_stand_eval.sh
+```
+
+至少还要补跑 `MODE=all PAYLOAD_KG=1.0`。最终判断必须把新模型与 SHA 前缀 `877e929d516c` 的输入模型
+放在同一 schema、同一 payload 和同一 step 数下比较；重点看 termination/reset、torso 世界系 6D、
+pitch RMS/最大值、水平漂移和逐关节波动。第三阶段正式训练尚未在本节启动，因此目前不能宣称真机稳定性
+已经改善。

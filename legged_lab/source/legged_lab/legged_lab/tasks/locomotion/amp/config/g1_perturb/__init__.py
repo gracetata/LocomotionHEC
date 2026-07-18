@@ -52,6 +52,18 @@ gym.register(
 )
 
 gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandRobust-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_stand_robust_env_cfg:G1StandRobustEnvCfg",
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
     id="LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0",
     entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
     disable_env_checker=True,

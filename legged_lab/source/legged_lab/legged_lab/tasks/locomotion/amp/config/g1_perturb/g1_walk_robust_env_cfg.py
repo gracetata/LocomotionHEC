@@ -9,6 +9,7 @@ from isaaclab.utils import configclass
 import legged_lab.tasks.locomotion.amp.mdp as mdp
 from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import (
     G1_COMMAND_BALANCED_TASK_SAMPLING_CONFIG_PATH,
+    G1_LOCOMOTION_JOINT_NAMES,
 )
 
 from .g1_walk_perturb_env_cfg import (
@@ -28,6 +29,13 @@ class G1WalkRobustFinetuneEnvCfg(G1WalkPerturbFinetuneEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # ACCAD pickles declare a non-interleaved DoF order, whereas policy and
+        # discriminator observations use G1_LOCOMOTION_JOINT_NAMES.  Strict
+        # name-based reordering is mandatory before selecting the 15 leg/waist
+        # demo indices; raw-index masking would silently include arm joints.
+        self.motion_data.motion_dataset.target_dof_names = G1_LOCOMOTION_JOINT_NAMES
+        self.motion_data.motion_dataset.strict_dof_names = True
 
         # Start conservatively on the verified Nav2 complex-turn distribution.
         # Later phases alter only the explicit scale/filter/source fields below.

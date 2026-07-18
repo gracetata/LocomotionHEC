@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import shutil
 import statistics
@@ -199,6 +200,13 @@ class AMPRunner(OnPolicyRunner):
     def load(self, path: str, load_optimizer: bool = True, map_location: str | None = None) -> dict:
         loaded_dict = torch.load(path, weights_only=False, map_location=map_location)
         load_policy_only = bool(self.cfg.get("load_policy_only", False))
+        reset_amp_on_load = bool(self.cfg.get("reset_amp_on_load", False)) and not load_policy_only
+        if reset_amp_on_load:
+            # Keep actor, critic, PPO optimizer and iteration from a full-state
+            # Walk resume, but do not reuse a discriminator trained before the
+            # demo DoF name-order fix. State includes the observation normalizer.
+            fresh_amp_state = copy.deepcopy(self.alg.amp_discriminator.state_dict())
+            fresh_disc_optimizer_state = copy.deepcopy(self.alg.disc_optimizer.state_dict())
 
         self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
         if load_policy_only:
@@ -224,6 +232,10 @@ class AMPRunner(OnPolicyRunner):
                 self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
             # AMP discriminator optimizer
             self.alg.disc_optimizer.load_state_dict(loaded_dict["amp_discriminator_optimizer_state_dict"])
+        if reset_amp_on_load:
+            self.alg.amp_discriminator.load_state_dict(fresh_amp_state)
+            self.alg.disc_optimizer.load_state_dict(fresh_disc_optimizer_state)
+            print("Reset AMP discriminator, normalizer, and optimizer after full-state policy resume.")
         # Load current learning iteration
         self.current_learning_iteration = int(loaded_dict.get("iter", 0))
         return loaded_dict.get("infos", {})

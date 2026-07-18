@@ -1,6 +1,6 @@
 # ArmHack 任务说明
 
-> 本文分为 Walk 动态任务、Stand 静态任务和附件历史原文三部分。当前实现以第一、二部分和 `armhack_train.md` 为准；历史记录中的旧参数仅用于追溯。
+> 本文分为 Walk 动态任务、Stand 静态任务和附件历史原文三部分。当前实现以第一、二部分和 `armhack_train.md` 为准；Stand 第三阶段真机鲁棒训练入口已完成 smoke，但尚未完成正式训练。历史记录中的旧参数仅用于追溯。
 
 ## 第一部分：Walk 动态任务
 
@@ -210,6 +210,37 @@ bash scripts/train_g1_armhack_stand_randomized_payload.sh
 ```
 
 详细参数、checkpoint 身份和两阶段真实测试记录见 `armhack_train.md`。
+
+### Stand 第三阶段：真机鲁棒性续训
+
+真机测试暴露出第二阶段策略在未建模外力和关节参数偏差下容易失稳。2026-07-18 新增了 Stand-only 第三阶段任务 `LeggedLab-Isaac-AMP-G1-StandRobust-v0`，从第二阶段 SHA-256 为 `877e929d516c...` 的 `model_2999.pt` 做 policy-only 续训。该任务继续使用 512 个双臂姿态和全速 `1.0x` minimum-jerk 插值，不重新经历静态/低速课程；policy 仍只观察当前 96 维机器人状态，不观察未来双臂目标、外力、负载或随机关节参数。
+
+第三阶段相对第二阶段的变化为：
+
+| 项目 | 第二阶段 | 第三阶段默认值 |
+|---|---:|---:|
+| 非 timeout 摔倒惩罚 | `-200` | `-500` |
+| torso 外力 | 无 | 每个轴独立 `U(-20,20) N` |
+| torso 外力矩 | 无 | 每个轴独立 `U(-3,3) Nm` |
+| 外力重采样 | 无 | 每环境独立 `2–5 s` |
+| 关节 stiffness/damping | 固定 | 29 关节分别为标称值的 `U(0.90,1.10)` |
+| 关节 friction | 固定 | 29 关节分别为标称值的 `U(0.80,1.20)` |
+| 关节 armature | 固定 | 29 关节分别为标称值的 `U(0.90,1.10)` |
+| 左右腕末端附加质量 | 每侧独立 `U(0,1 kg)` | 保持不变 |
+
+外力通过 IsaacLab 的 `apply_external_force_torque` 真实写入 `torso_link`，episode reset 时先清零，随后在双臂持续切换姿态期间周期重采样；S3 原有 4 次 velocity solver iteration，并在本任务中开启每个 solver iteration 重施外力。为了让问题可归因，本阶段没有同时打开地面摩擦、base mass/CoM、全身 link mass 或 velocity teleport push 等更宽泛的随机化。
+
+新训练入口为：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+bash scripts/train_g1_armhack_stand_robust.sh
+```
+
+默认执行 `4096 env × 3000 iteration`，使用 `5e-5` 学习率和 `0.001` 的冻结输入策略 KL。2026-07-18 已完成最终配置的 `8 env × 1 iteration` 真实 smoke：startup event 表包含 actuator gain、joint parameter 和左右腕 payload 三项随机化，interval event 包含 torso wrench，奖励表确认摔倒惩罚为 `-500`；共收集 192 step、完成 PPO 更新并保存 `model_0.pt`。smoke 只证明配置、外力、随机化、checkpoint 加载、PPO 和保存链可运行，不代表鲁棒策略已经训练完成。完整命令、可调参数和证据路径见 `armhack_train.md` 第 17 节。
 
 ### Stand 的 MuJoCo sim2sim 验证
 
