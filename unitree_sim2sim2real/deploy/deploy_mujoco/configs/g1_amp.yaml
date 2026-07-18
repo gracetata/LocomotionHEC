@@ -39,6 +39,14 @@ armhack_stand_checkpoint_path: ""
 armhack_stand_report_path: ""
 armhack_stand_test_id: all
 armhack_stand_payload_kg: 0.0
+# Optional ArmHack Walk adapter.  The dedicated launcher supplies absolute
+# tracked data paths and keeps this disabled for generic locomotion/Stand runs.
+armhack_walk_enable: false
+armhack_walk_pose_path: ""
+armhack_walk_contract_path: ""
+armhack_walk_pose_name: pos2_down
+armhack_walk_fixed_command: [0.35, 0.0, 0.0]
+armhack_walk_start_active: true
 torso_trace_enable: true
 torso_trace_path: ""
 torso_trace_local_point: [0.0, 0.0, 0.18]

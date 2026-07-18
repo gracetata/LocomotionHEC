@@ -19,6 +19,8 @@
 
 双臂当前实际关节位置和速度仍属于本体反馈，policy 可以观察；但双臂 action 已被环境接管，策略不能改变它们。第一阶段应对一个明确命名的姿态单独训练和验收，三姿态随机混训只能作为后续鲁棒性扩展，不能替代逐姿态测试。
 
+起点 `model_3999.pt` 已另行固定导出为可随项目 clone 的 ONNX/TorchScript，并实现等价的 S3 G1 MuJoCo 与真机入口。部署默认固定 `pos2_down`，速度 `[0.35,0,0]` 位于 Nav2 CSV 原始范围内；真机以零速度启动，按空格在固定速度与 `[0,0,0]` 间平滑切换。ONNX 本身不包含双臂覆盖，必须使用专用 launcher 保持组合动作和 `last_action` 语义。命令、SHA、安装步骤和吊架安全顺序见 `armhack_train.md` 第 18 节及 `armhack_walk_real_deployment.md`。
+
 ### S3 locomotion ONNX 起点与训练 checkpoint
 
 所谓“在 Nav2 基础上只改变双臂姿态”，必须同时锁定以下变量：

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "task": "armhack_walk_fixed_arm_fixed_velocity",
+  "robot_asset": "s3_g1_29dof",
+  "control_frequency_hz": 50,
+  "source_nav2_csv": "nav2_cmd_vel_raw_success.csv",
+  "source_nav2_csv_sha256": "76a4516588b855351eb3eb8c2da26e291603876c1a4a1b9c7bacd77a53807b5a",
+  "source_nav2_rows": 331010,
+  "raw_command_component_bounds": {
+    "min": [-0.2, -0.3, -0.5187280216217041],
+    "max": [0.6, 0.3, 0.6]
+  },
+  "recommended_fixed_command": [0.35, 0.0, 0.0],
+  "default_pose_name": "pos2_down",
+  "command_switch": {
+    "initial_state": "zero",
+    "key": "SPACE",
+    "states": [
+      [0.0, 0.0, 0.0],
+      [0.35, 0.0, 0.0]
+    ],
+    "max_linear_acceleration_m_s2": 0.5,
+    "max_yaw_acceleration_rad_s2": 0.8
+  },
+  "notes": [
+    "The bounds are component-wise extrema of the raw Nav2 CSV and are used as a hard deployment envelope.",
+    "The real-robot launcher starts at zero command and SPACE toggles only between zero and the configured fixed command.",
+    "The 14 arm joints are fixed outside the actor; the next observation stores the composed 29-D executed action."
+  ]
+}

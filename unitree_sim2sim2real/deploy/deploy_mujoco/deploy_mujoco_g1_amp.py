@@ -41,6 +41,7 @@ import torch
 import yaml  # type: ignore[reportMissingImports]
 
 from armhack_stand import ArmHackStandReplay
+from armhack_walk import ArmHackWalkAdapter
 
 
 UNITREE_ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -277,6 +278,26 @@ def load_config(config_path: str) -> dict:
     )
     config["armhack_stand_payload_kg"] = _env_float(
         "G1_AMP_ARMHACK_STAND_PAYLOAD_KG", float(config.get("armhack_stand_payload_kg", 0.0))
+    )
+    config["armhack_walk_enable"] = _env_bool(
+        "G1_AMP_ARMHACK_WALK_ENABLE", bool(config.get("armhack_walk_enable", False))
+    )
+    config["armhack_walk_pose_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_WALK_POSE_PATH", config.get("armhack_walk_pose_path", ""))
+    )
+    config["armhack_walk_contract_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_WALK_CONTRACT_PATH", config.get("armhack_walk_contract_path", ""))
+    )
+    config["armhack_walk_pose_name"] = os.environ.get(
+        "G1_AMP_ARMHACK_WALK_POSE_NAME", config.get("armhack_walk_pose_name", "pos2_down")
+    )
+    config["armhack_walk_fixed_command"] = _env_yaml_vector(
+        "G1_AMP_ARMHACK_WALK_FIXED_COMMAND",
+        list(config.get("armhack_walk_fixed_command", [0.35, 0.0, 0.0])),
+        3,
+    )
+    config["armhack_walk_start_active"] = _env_bool(
+        "G1_AMP_ARMHACK_WALK_START_ACTIVE", bool(config.get("armhack_walk_start_active", True))
     )
     command_ranges = dict(config.get("command_ranges", {}))
     command_ranges["lin_vel_x"] = _env_yaml_list(
@@ -1698,16 +1719,32 @@ def run_mujoco(config: dict) -> None:
         if bool(config.get("armhack_stand_enable", False))
         else None
     )
+    armhack_walk = (
+        ArmHackWalkAdapter(config, policy_joint_names, default_angles)
+        if bool(config.get("armhack_walk_enable", False))
+        else None
+    )
+    if armhack_stand is not None and armhack_walk is not None:
+        raise ValueError("ArmHack Stand and Walk adapters cannot be enabled together.")
     if armhack_stand is not None:
         if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
             raise ValueError("ArmHack Stand MuJoCo replay requires fixed independent zero commands.")
         if not np.allclose(np.asarray(config["cmd_init"], dtype=np.float32), 0.0, atol=1.0e-8):
             raise ValueError("ArmHack Stand MuJoCo replay requires cmd_init=[0, 0, 0].")
+    if armhack_walk is not None:
+        if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
+            raise ValueError("ArmHack Walk MuJoCo requires fixed independent commands.")
+        if not bool(config.get("command_ramp", False)):
+            raise ValueError("ArmHack Walk MuJoCo requires command_ramp=True for zero/fixed transitions.")
     rng = np.random.default_rng(int(config.get("command_seed", 1)))
     command_mode = str(config.get("command_mode", "independent")).lower()
     joystick = JoystickCommandReader(config) if command_mode == "joystick" else None
     nav2_replay = Nav2CommandReplay(config, rng) if command_mode == "nav2" else None
-    target_command = np.asarray(config["cmd_init"], dtype=np.float32)
+    target_command = (
+        armhack_walk.current_target_command()
+        if armhack_walk is not None
+        else np.asarray(config["cmd_init"], dtype=np.float32)
+    )
     nav2_segment_info = None
     if joystick is not None:
         target_command = joystick.read_command()
@@ -1745,6 +1782,13 @@ def run_mujoco(config: dict) -> None:
     if armhack_stand is not None:
         armhack_stand.initialize_model_and_state(mujoco, model, data, qpos_addresses, torso_body_id)
     else:
+        if armhack_walk is not None:
+            armhack_walk.initialize_state(data, qpos_addresses)
+            # IsaacLab writes the selected arm pose and its composed raw action
+            # before the first policy observation.  Match that reset contract so
+            # obs[67:96] never claims zero arms while MuJoCo already holds the
+            # fixed pose.
+            action = armhack_walk.compose_action(action)
         mujoco.mj_forward(model, data)
     rollout_metrics = init_rollout_metrics(data, torso_body_id, config)
     current_segment_id = 0
@@ -1778,6 +1822,8 @@ def run_mujoco(config: dict) -> None:
             next_action = policy(torch.from_numpy(obs).unsqueeze(0)).detach().cpu().numpy().squeeze().astype(np.float32)
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
+        elif armhack_walk is not None:
+            next_action = armhack_walk.compose_action(next_action)
         return next_action
 
     def simulate_loop(viewer=None) -> None:
@@ -1790,7 +1836,9 @@ def run_mujoco(config: dict) -> None:
                 if viewer is not None and not viewer.is_running():
                     break
                 step_start = time.time()
-                if joystick is not None:
+                if armhack_walk is not None:
+                    target_command = armhack_walk.current_target_command()
+                elif joystick is not None:
                     target_command = joystick.read_command()
                 elif nav2_replay is not None:
                     target_command, nav2_segment_info = nav2_replay.update(float(model.opt.timestep), sim_time)
@@ -1877,6 +1925,8 @@ def run_mujoco(config: dict) -> None:
             print(f"[REPORT] ArmHack Stand MuJoCo report: {armhack_stand.report_path}")
             print(f"[REPORT] ArmHack Stand MuJoCo torso plot: {armhack_stand.plot_path}")
             print(f"[REPORT] ArmHack Stand MuJoCo trace: {armhack_stand.trace_path}")
+        if armhack_walk is not None:
+            report["armhack_walk"] = armhack_walk.summary()
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:
@@ -1888,7 +1938,8 @@ def run_mujoco(config: dict) -> None:
     if bool(config.get("use_glfw", True)):
         from mujoco import viewer as mujoco_viewer
 
-        with mujoco_viewer.launch_passive(model, data) as active_viewer:
+        key_callback = armhack_walk.key_callback if armhack_walk is not None else None
+        with mujoco_viewer.launch_passive(model, data, key_callback=key_callback) as active_viewer:
             update_follow_camera(active_viewer, data, torso_body_id, config)
             simulate_loop(active_viewer)
     else:

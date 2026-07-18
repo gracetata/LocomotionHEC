@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "task": "ArmHack Walk fixed-arm velocity tracking",
+  "source_checkpoint": "ArmHack Checkpoints/WalkPerturbFinetune/2026-07-18_imported_walk_model3999_454c9bc0b5e3/model_3999.pt",
+  "source_checkpoint_iteration": 3999,
+  "source_checkpoint_sha256": "454c9bc0b5e38b2a9800c6faaa9e8ba6995f7d99bd3844155929a10a4fb8e2ff",
+  "onnx": "walk_model3999.onnx",
+  "onnx_sha256": "6d9b48cbbc0b35584f637f99f198a49a35e1eed16f303679cd75cb4fa03b0272",
+  "torchscript": "walk_model3999.pt",
+  "torchscript_sha256": "70e163e47e94fe5f3c96f890e95d1413db130df0458fc1cf5d2b0eb2aa6eb598",
+  "metadata": "walk_model3999.deploy.json",
+  "metadata_sha256": "b094a9066de0efd6fc098968dbd2f306196dab09da21b38a4125a8eb3efaecaf",
+  "interface": {
+    "input": "obs float32 [1,96]",
+    "output": "actions float32 [1,29]",
+    "control_frequency_hz": 50,
+    "action_scale": 0.25
+  },
+  "default_pose_name": "pos2_down",
+  "default_fixed_command": [0.35, 0.0, 0.0],
+  "warning": "The ONNX contains only the actor. Use deploy_real_g1_armhack_walk.sh so fixed-arm composition and last_action semantics are preserved."
+}

@@ -29,6 +29,7 @@ LeggedLab-Isaac-AMP-G1-WalkPerturbFinetune-v0
 - schema v5 确定性测试集在旧样本上新增 8 个固定随机覆盖姿态和 6 条固定 minimum-jerk 轨迹；完整序列为 208.08 s / 10,404 step / 59 阶段。新正式模型已完成无负载全量测试，`termination/reset=0`；每侧 1 kg 全量测试结果见第 1.1.6 节；
 - 同一模型已导出为 `96→29` TorchScript/ONNX，并在 S3 G1 MuJoCo XML 中完成 schema v5 全量 sim2sim：0 kg 和每侧 1 kg 均为 10,405 个记录样本、完整播放、`healthy=True` 且无摔倒；命令、实现边界和结果见第 1.1.9 节；
 - 当前正式 Stand actor 另已固定导出为 `deployment/armhack_stand/stand.onnx`，并生成零速度部署元数据；96 维输入、29 维输出、Unitree motor 映射、双臂抓取动作覆盖和手指/夹爪独立控制边界见 `docs/armhack_stand_real_deployment.md`；
+- Walk 训练输入 `model_3999.pt` 已独立导出为 `deployment/armhack_walk/model_3999/walk_model3999.onnx` 和 TorchScript，并新增等价固定臂 MuJoCo、真机离线自检与吊架入口；默认速度 `[0.35,0,0]` 位于 Nav2 CSV 原始范围内，真机以零速度启动并用空格切换。完整命令和安全边界见第 18 节与 `docs/armhack_walk_real_deployment.md`；
 - 历史 `0.25x` 正式训练最终点为 mean episode length `1000/1000`、timeout `99.98%`、base-height termination `0`、bad-orientation termination `0.02%`，torso roll/pitch 误差 `0.0074/0.0130 rad`；
 - 旧 Walk smoke 使用了来源错误的 Stand `model_7999`，只作为路径问题的诊断记录，不能再作为有效 Walk 起点测试；
 - 正确 Walk 起点已锁定为 `checkpoint/model_9996/locomotion.onnx`；原始 `model_9996.pt` 的 8 个 actor 张量与 ONNX 逐元素完全一致；
@@ -2876,3 +2877,91 @@ bash scripts/vis_g1_armhack_stand_eval.sh
 放在同一 schema、同一 payload 和同一 step 数下比较；重点看 termination/reset、torso 世界系 6D、
 pitch RMS/最大值、水平漂移和逐关节波动。第三阶段正式训练尚未在本节启动，因此目前不能宣称真机稳定性
 已经改善。
+
+## 18. Walk 起点 `model_3999` 的 MuJoCo 与真机部署（2026-07-18）
+
+本节只描述 Walk 起点模型的部署，不改变第 16 节正在执行的九阶段训练，也不修改 Stand 环境、脚本、
+模型或文档。完整的新电脑安装、网络和吊架步骤见 `docs/armhack_walk_real_deployment.md`。
+
+### 18.1 发布模型与执行边界
+
+起点 checkpoint 为：
+
+```text
+ArmHack Checkpoints/WalkPerturbFinetune/
+2026-07-18_imported_walk_model3999_454c9bc0b5e3/model_3999.pt
+SHA-256: 454c9bc0b5e38b2a9800c6faaa9e8ba6995f7d99bd3844155929a10a4fb8e2ff
+```
+
+随项目 clone 的部署包为：
+
+```text
+deployment/armhack_walk/model_3999/walk_model3999.onnx
+SHA-256: 6d9b48cbbc0b35584f637f99f198a49a35e1eed16f303679cd75cb4fa03b0272
+
+deployment/armhack_walk/model_3999/walk_model3999.pt
+SHA-256: 70e163e47e94fe5f3c96f890e95d1413db130df0458fc1cf5d2b0eb2aa6eb598
+```
+
+二者均为 `obs[1,96] -> actions[1,29]` actor。固定双臂不在网络内部：MuJoCo 和真机入口都按名称覆盖
+14 个手臂 action，并把安全过滤后真正执行的组合 29 维 action 写入下一帧 `last_action`。
+
+### 18.2 Nav2 速度范围
+
+原始 `nav2_cmd_vel_raw_success.csv` 共 331,010 行，SHA-256 为
+`76a4516588b855351eb3eb8c2da26e291603876c1a4a1b9c7bacd77a53807b5a`。逐分量范围为：
+
+```text
+vx [-0.2, 0.6] m/s
+vy [-0.3, 0.3] m/s
+wz [-0.5187280216, 0.6] rad/s
+```
+
+小型 tracked 契约 `Reference Data/ArmHack/WalkPerturbFinetune/real_deployment_contract.json` 固化了上述范围，
+所以新 clone 的真机电脑不需要 87 MB 原 CSV也能拒绝越界固定速度。默认值为 `[0.35,0,0]`。
+
+### 18.3 MuJoCo headless 与 GUI 命令
+
+在 `legged_lab` 中执行 20 秒测试：
+
+```bash
+USE_GLFW=False REAL_TIME=False SIMULATION_DURATION=20 \
+POSE_NAME=pos2_down FIXED_COMMAND='[0.35,0.0,0.0]' START_ACTIVE=True \
+bash scripts/val_mujoco_g1_armhack_walk.sh
+```
+
+GUI 可视化：
+
+```bash
+USE_GLFW=True REAL_TIME=True SIMULATION_DURATION=120 \
+POSE_NAME=pos2_down FIXED_COMMAND='[0.35,0.0,0.0]' START_ACTIVE=False \
+bash scripts/val_mujoco_g1_armhack_walk.sh
+```
+
+GUI 中 `SPACE` 在 `[0,0,0]` 和固定速度之间切换，命令通过加速度限幅平滑变化。2026-07-18 已实际完成
+`pos2_down + [0.35,0,0]` 的 20 秒 headless 运行：`healthy=True`、`fallen=False`、线速度跟踪 MAE
+`0.0501 m/s`、最大绝对 roll/pitch `0.040/0.097 rad`，无 Python/MuJoCo/模型接口错误。
+
+### 18.4 真机离线自检与吊架命令
+
+在仓库根目录执行离线自检；该命令不初始化 DDS：
+
+```bash
+UNITREE_PYTHON=/path/to/armhack-real/bin/python \
+DRY_RUN=True NET=enp3s0 \
+bash scripts/deploy_real_g1_armhack_walk.sh
+```
+
+吊架首次 30 秒测试：
+
+```bash
+UNITREE_PYTHON=/path/to/armhack-real/bin/python \
+CONFIRM_REAL_ROBOT=I_UNDERSTAND NET=enp3s0 \
+POSE_NAME=pos2_down FIXED_COMMAND='[0.35,0.0,0.0]' RUN_DURATION=30 \
+bash scripts/deploy_real_g1_armhack_walk.sh
+```
+
+程序保持当前姿态并释放高层 motion mode；第一次 `ENTER` 授权 5 秒平滑对齐双臂，第二次 `ENTER`
+才以零速度启动 policy。policy 运行后 `SPACE` 只在配置固定速度和零速度间切换；`q`、`Ctrl-C` 或
+遥控器 `Select` 退出并发送低层阻尼。启动脚本锁定 ONNX、姿态 JSON 和部署契约 SHA，并在 DDS 前完成
+17 组 ONNX 输入、自定义速度范围和组合 action 自检。MuJoCo 与 dry-run 通过不等于真机安全认证。
