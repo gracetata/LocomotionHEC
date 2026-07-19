@@ -1036,6 +1036,208 @@ def double_support(
     return torch.all(in_contact, dim=1).float()
 
 
+def _strict_zero_command_mask(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    epsilon: float,
+) -> torch.Tensor:
+    """Select only an actual three-axis zero command, without a low-speed deadband."""
+    command = env.command_manager.get_command(command_name)
+    return torch.linalg.vector_norm(command, dim=1) <= float(epsilon)
+
+
+def strict_zero_command_body_motion_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    epsilon: float = 1.0e-6,
+    lin_scale: float = 0.08,
+    yaw_scale: float = 0.12,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize planar drift and yaw motion only when all command components are zero."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    lin_motion = torch.sum(torch.square(asset.data.root_lin_vel_b[:, :2]), dim=1)
+    yaw_motion = torch.square(asset.data.root_ang_vel_b[:, 2])
+    normalized = lin_motion / max(float(lin_scale) ** 2, 1.0e-8)
+    normalized += yaw_motion / max(float(yaw_scale) ** 2, 1.0e-8)
+    return normalized * _strict_zero_command_mask(env, command_name, epsilon).float()
+
+
+def strict_zero_command_feet_motion_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    epsilon: float = 1.0e-6,
+    velocity_scale: float = 0.12,
+) -> torch.Tensor:
+    """Penalize either foot moving after the policy receives an exact stop command."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    foot_velocity = asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :]
+    motion = torch.sum(torch.square(foot_velocity), dim=(1, 2))
+    motion /= max(float(velocity_scale) ** 2, 1.0e-8)
+    return motion * _strict_zero_command_mask(env, command_name, epsilon).float()
+
+
+def strict_zero_command_joint_vel_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    epsilon: float = 1.0e-6,
+    velocity_scale: float = 1.0,
+) -> torch.Tensor:
+    """Suppress lower-body limit cycles at exact zero without constraining nonzero micro-speeds."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    joint_motion = torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
+    joint_motion /= max(float(velocity_scale) ** 2, 1.0e-8)
+    return joint_motion * _strict_zero_command_mask(env, command_name, epsilon).float()
+
+
+def strict_zero_command_double_support(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    epsilon: float = 1.0e-6,
+) -> torch.Tensor:
+    """Reward both feet supporting the robot for an exact stop command."""
+    return double_support(env, sensor_cfg) * _strict_zero_command_mask(
+        env, command_name, epsilon
+    ).float()
+
+
+def nonzero_command_single_stance(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    epsilon: float = 1.0e-6,
+    min_mode_time: float = 0.02,
+) -> torch.Tensor:
+    """Reward a real stepping phase for every nonzero command, including pure yaw and micro-speed."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    in_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0.0
+    mode_time = torch.where(
+        in_contact,
+        contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids],
+        contact_sensor.data.current_air_time[:, sensor_cfg.body_ids],
+    )
+    single_stance = torch.sum(in_contact.int(), dim=1) == 1
+    stable_mode = torch.min(mode_time, dim=1).values >= float(min_mode_time)
+    command = env.command_manager.get_command(command_name)
+    active = torch.linalg.vector_norm(command, dim=1) > float(epsilon)
+    return single_stance.float() * stable_mode.float() * active.float() * _upright_scale(env)
+
+
+def command_response_shortfall_l1(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    epsilon: float = 1.0e-6,
+    min_speed_fraction: float = 0.50,
+    lin_scale: float = 0.12,
+    yaw_scale: float = 0.25,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize lean-without-motion solutions for translation and pure in-place turning."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    command_xy = command[:, :2]
+    command_speed = torch.linalg.vector_norm(command_xy, dim=1)
+    command_direction = command_xy / torch.clamp(command_speed.unsqueeze(1), min=1.0e-8)
+    projected_speed = torch.sum(asset.data.root_lin_vel_b[:, :2] * command_direction, dim=1)
+    lin_shortfall = torch.clamp(
+        float(min_speed_fraction) * command_speed - projected_speed, min=0.0
+    )
+    lin_shortfall *= (command_speed > float(epsilon)).float()
+
+    desired_yaw = torch.abs(command[:, 2]) * float(min_speed_fraction)
+    signed_yaw_response = torch.sign(command[:, 2]) * asset.data.root_ang_vel_b[:, 2]
+    yaw_shortfall = torch.clamp(desired_yaw - signed_yaw_response, min=0.0)
+    yaw_shortfall *= (torch.abs(command[:, 2]) > float(epsilon)).float()
+    return (
+        lin_shortfall / max(float(lin_scale), 1.0e-6)
+        + yaw_shortfall / max(float(yaw_scale), 1.0e-6)
+    ) * _upright_scale(env)
+
+
+def rapid_footstep_l1(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    epsilon: float = 1.0e-6,
+    min_air_time: float = 0.16,
+) -> torch.Tensor:
+    """Penalize touchdown after an implausibly short swing to reduce excessive cadence."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
+    last_air_time = contact_sensor.data.last_air_time[:, sensor_cfg.body_ids]
+    shortfall = torch.clamp(float(min_air_time) - last_air_time, min=0.0)
+    command = env.command_manager.get_command(command_name)
+    active = torch.linalg.vector_norm(command, dim=1) > float(epsilon)
+    return (
+        torch.sum(shortfall * first_contact.float(), dim=1)
+        / max(float(min_air_time), 1.0e-6)
+        * active.float()
+    )
+
+
+def oriented_footprint_proximity_l2(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    center_offset_x: float = 0.035,
+    half_length: float = 0.090,
+    half_width: float = 0.035,
+    min_clearance: float = 0.025,
+    std: float = 0.020,
+    max_penalty: float = 25.0,
+) -> torch.Tensor:
+    """Penalize close/overlapping oriented sole rectangles using a 2-D SAT clearance.
+
+    S3 G1 contact points span approximately x=[-0.05, 0.12] and
+    y=[-0.03, 0.03] around each ankle-roll link.  The four projected corners
+    therefore reflect sole length, width and yaw instead of using ankle-center
+    distance, which misses toe/heel and crossing-foot intersections.
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    if len(asset_cfg.body_ids) != 2:
+        raise ValueError("oriented_footprint_proximity_l2 expects exactly two foot bodies.")
+
+    local_corners = torch.tensor(
+        [
+            [center_offset_x - half_length, -half_width, 0.0],
+            [center_offset_x + half_length, -half_width, 0.0],
+            [center_offset_x + half_length, half_width, 0.0],
+            [center_offset_x - half_length, half_width, 0.0],
+        ],
+        dtype=asset.data.body_pos_w.dtype,
+        device=asset.data.body_pos_w.device,
+    )
+    foot_pos = asset.data.body_pos_w[:, asset_cfg.body_ids, :]
+    foot_quat = asset.data.body_quat_w[:, asset_cfg.body_ids, :]
+    num_envs = foot_pos.shape[0]
+    quaternions = foot_quat.unsqueeze(2).expand(-1, -1, 4, -1).reshape(-1, 4)
+    corner_vectors = local_corners.view(1, 1, 4, 3).expand(num_envs, 2, -1, -1)
+    world_corners = math_utils.quat_apply(quaternions, corner_vectors.reshape(-1, 3))
+    world_corners = world_corners.view(num_envs, 2, 4, 3) + foot_pos.unsqueeze(2)
+    corners_xy = world_corners[..., :2]
+
+    # Four candidate separating axes: length/width axes from both feet.
+    length_axes = corners_xy[:, :, 1, :] - corners_xy[:, :, 0, :]
+    width_axes = corners_xy[:, :, 3, :] - corners_xy[:, :, 0, :]
+    axes = torch.stack(
+        [length_axes[:, 0], width_axes[:, 0], length_axes[:, 1], width_axes[:, 1]],
+        dim=1,
+    )
+    axes = axes / torch.clamp(torch.linalg.vector_norm(axes, dim=2, keepdim=True), min=1.0e-8)
+    left_projection = torch.sum(corners_xy[:, 0].unsqueeze(1) * axes.unsqueeze(2), dim=3)
+    right_projection = torch.sum(corners_xy[:, 1].unsqueeze(1) * axes.unsqueeze(2), dim=3)
+    left_min, left_max = torch.min(left_projection, dim=2).values, torch.max(left_projection, dim=2).values
+    right_min, right_max = torch.min(right_projection, dim=2).values, torch.max(right_projection, dim=2).values
+    axis_separation = torch.maximum(right_min - left_max, left_min - right_max)
+    signed_clearance = torch.max(axis_separation, dim=1).values
+    violation = torch.clamp(float(min_clearance) - signed_clearance, min=0.0)
+    return torch.clamp(
+        torch.square(violation / max(float(std), 1.0e-6)), max=float(max_penalty)
+    )
+
+
 def feet_swing_clearance_band_l2(
     env: ManagerBasedRLEnv,
     command_name: str,

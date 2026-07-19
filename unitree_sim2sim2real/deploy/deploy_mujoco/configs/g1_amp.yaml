@@ -47,6 +47,21 @@ armhack_walk_contract_path: ""
 armhack_walk_pose_name: pos2_down
 armhack_walk_fixed_command: [0.35, 0.0, 0.0]
 armhack_walk_start_active: true
+# Optional full-body Stand recovery perturbation.  It randomizes state and
+# applies wrenches only; unlike ArmHack it never overwrites policy actions.
+extreme_stand_recovery_enable: false
+extreme_stand_recovery_seed: 20260719
+extreme_stand_recovery_leg_noise_rad: 0.20
+extreme_stand_recovery_waist_noise_rad: 0.25
+extreme_stand_recovery_arm_noise_rad: 0.45
+extreme_stand_recovery_joint_velocity_noise_rad_s: 0.75
+extreme_stand_recovery_root_roll_pitch_noise_rad: 0.18
+extreme_stand_recovery_root_linear_velocity_noise_m_s: 0.30
+extreme_stand_recovery_root_angular_velocity_noise_rad_s: 0.50
+extreme_stand_recovery_force_max_n: 35.0
+extreme_stand_recovery_torque_max_nm: 5.0
+extreme_stand_recovery_wrench_interval_s: 2.5
+extreme_stand_recovery_wrench_duration_s: 0.25
 torso_trace_enable: true
 torso_trace_path: ""
 torso_trace_local_point: [0.0, 0.0, 0.18]

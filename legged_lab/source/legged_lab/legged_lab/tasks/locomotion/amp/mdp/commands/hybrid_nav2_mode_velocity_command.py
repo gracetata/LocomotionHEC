@@ -170,9 +170,15 @@ class HybridNav2ModeVelocityCommand(Nav2RecordedVelocityCommand):
         standing = self.is_standing_env[mode_env_ids]
         target[standing] = 0.0
         self.target_vel_command_b[mode_env_ids] = target
-        self.vel_command_b[mode_env_ids] = self._slew_limited_mode_command(
-            previous_mode_command, target
-        )
+        updated = self._slew_limited_mode_command(previous_mode_command, target)
+        # A zero target is a semantic stop command, not merely the low end of a
+        # continuous speed interval.  Behavior-refinement tasks opt into an
+        # immediate policy-facing zero so the policy cannot hide behind the
+        # command slew limiter after a stop request.  Existing Walk tasks keep
+        # their historical smoothed behavior because the default is False.
+        if self.cfg.hard_zero_stand:
+            updated[standing] = 0.0
+        self.vel_command_b[mode_env_ids] = updated
 
     def _update_metrics(self):
         super()._update_metrics()
@@ -202,6 +208,9 @@ class HybridNav2ModeVelocityCommandCfg(Nav2RecordedVelocityCommandCfg):
 
     forced_mode: str = ""
     """Optional evaluation-only mode name; non-empty forces all environments to it."""
+
+    hard_zero_stand: bool = False
+    """Immediately expose exactly zero for a sampled stand mode instead of slewing to it."""
 
     mode_command_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     """Element-wise curriculum scale for mode-balanced commands."""

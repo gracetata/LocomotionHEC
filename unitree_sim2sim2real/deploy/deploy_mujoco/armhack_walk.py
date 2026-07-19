@@ -5,6 +5,7 @@ IsaacLab Walk contract by fixing the 14 arm targets outside the actor and by
 returning the composed 29-D raw action for both PD control and the next
 observation's ``last_action`` block.  A GLFW SPACE callback can toggle the
 command between zero and one deployment-contract-validated fixed velocity.
+Headless behavior tests may instead select a validated time-segment schedule.
 """
 
 from __future__ import annotations
@@ -86,6 +87,49 @@ def validate_fixed_command(command: np.ndarray, contract: dict[str, Any]) -> Non
         )
 
 
+def load_command_schedule(
+    path: Path, scenario_name: str, contract: dict[str, Any]
+) -> dict[str, Any]:
+    """Load one finite, positive-duration command schedule from the test corpus."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if int(payload.get("schema_version", -1)) != 1:
+        raise ValueError("Walk behavior schedule must use schema_version=1.")
+    scenarios = payload.get("scenarios", {})
+    if scenario_name not in scenarios:
+        raise ValueError(
+            f"Unknown Walk behavior scenario '{scenario_name}'; available={sorted(scenarios)}"
+        )
+    scenario = dict(scenarios[scenario_name])
+    raw_segments = scenario.get("segments", [])
+    if not raw_segments:
+        raise ValueError(f"Walk behavior scenario '{scenario_name}' has no segments.")
+    segments: list[dict[str, Any]] = []
+    start_time = 0.0
+    for index, raw_segment in enumerate(raw_segments):
+        duration_s = float(raw_segment.get("duration_s", 0.0))
+        command = np.asarray(raw_segment.get("command", []), dtype=np.float32)
+        if not np.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError(f"Scenario '{scenario_name}' segment {index} duration must be positive.")
+        validate_fixed_command(command, contract)
+        segments.append(
+            {
+                "index": index,
+                "name": str(raw_segment.get("name", f"segment_{index}")),
+                "start_time": start_time,
+                "end_time": start_time + duration_s,
+                "duration_s": duration_s,
+                "command": command,
+            }
+        )
+        start_time += duration_s
+    return {
+        "name": scenario_name,
+        "description": str(scenario.get("description", "")),
+        "segments": segments,
+        "duration_s": start_time,
+    }
+
+
 class ArmHackWalkAdapter:
     """Fix one arm pose and optionally toggle zero/fixed command with SPACE."""
 
@@ -102,6 +146,18 @@ class ArmHackWalkAdapter:
         self.fixed_command = np.asarray(config["armhack_walk_fixed_command"], dtype=np.float32)
         validate_fixed_command(self.fixed_command, self.contract)
         self.command_active = bool(config.get("armhack_walk_start_active", True))
+        schedule_path_text = str(config.get("armhack_walk_schedule_path", "")).strip()
+        self.schedule_path = Path(schedule_path_text).expanduser().resolve() if schedule_path_text else None
+        self.scenario_name = str(config.get("armhack_walk_scenario_name", "")).strip()
+        self.schedule = None
+        if self.schedule_path is not None:
+            if not self.schedule_path.is_file():
+                raise FileNotFoundError(f"Walk behavior schedule JSON does not exist: {self.schedule_path}")
+            if not self.scenario_name:
+                raise ValueError("armhack_walk_scenario_name is required with a schedule path.")
+            self.schedule = load_command_schedule(
+                self.schedule_path, self.scenario_name, self.contract
+            )
         missing = sorted(set(ARM_JOINT_NAMES).difference(policy_joint_names))
         if missing:
             raise ValueError(f"Walk arm joints are absent from policy_joint_names: {missing}")
@@ -111,8 +167,12 @@ class ArmHackWalkAdapter:
             raise ValueError("ArmHack Walk requires 29 default joint angles.")
         print(
             "[ArmHack Walk] fixed arm/command adapter: "
-            f"pose={self.pose_name} command={self.current_target_command().tolist()} "
-            "(GLFW SPACE toggles zero/fixed)"
+            f"pose={self.pose_name} command={self.current_target_command(0.0).tolist()} "
+            + (
+                f"schedule={self.scenario_name} duration={self.schedule['duration_s']:.3f}s"
+                if self.schedule is not None
+                else "(GLFW SPACE toggles zero/fixed)"
+            )
         )
 
     def initialize_state(self, data: Any, qpos_addresses: dict[str, int]) -> None:
@@ -129,11 +189,30 @@ class ArmHackWalkAdapter:
         ) / 0.25
         return executed
 
-    def current_target_command(self) -> np.ndarray:
+    @property
+    def has_schedule(self) -> bool:
+        return self.schedule is not None
+
+    def current_schedule_segment(self, sim_time: float) -> dict[str, Any] | None:
+        if self.schedule is None:
+            return None
+        clamped_time = max(float(sim_time), 0.0)
+        for segment in self.schedule["segments"]:
+            if clamped_time < float(segment["end_time"]):
+                return segment
+        return self.schedule["segments"][-1]
+
+    def current_target_command(self, sim_time: float = 0.0) -> np.ndarray:
+        segment = self.current_schedule_segment(sim_time)
+        if segment is not None:
+            return np.asarray(segment["command"], dtype=np.float32).copy()
         return self.fixed_command.copy() if self.command_active else np.zeros(3, dtype=np.float32)
 
     def key_callback(self, keycode: int) -> None:
         if int(keycode) != 32:
+            return
+        if self.schedule is not None:
+            print("[ArmHack Walk command] SPACE ignored while a test schedule is active.", flush=True)
             return
         self.command_active = not self.command_active
         state = "FIXED" if self.command_active else "ZERO"
@@ -144,7 +223,16 @@ class ArmHackWalkAdapter:
             "pose_name": self.pose_name,
             "arm_target_rad": [float(value) for value in self.arm_target],
             "fixed_command": [float(value) for value in self.fixed_command],
-            "final_command_state": "fixed" if self.command_active else "zero",
+            "final_command_state": (
+                f"schedule:{self.scenario_name}"
+                if self.schedule is not None
+                else ("fixed" if self.command_active else "zero")
+            ),
+            "scenario_name": self.scenario_name,
+            "schedule_path": str(self.schedule_path) if self.schedule_path is not None else "",
+            "schedule_duration_s": (
+                float(self.schedule["duration_s"]) if self.schedule is not None else 0.0
+            ),
             "pose_path": str(self.pose_path),
             "contract_path": str(self.contract_path),
             "source_nav2_csv_sha256": self.contract["source_nav2_csv_sha256"],

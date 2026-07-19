@@ -2965,3 +2965,198 @@ bash scripts/deploy_real_g1_armhack_walk.sh
 才以零速度启动 policy。policy 运行后 `SPACE` 只在配置固定速度和零速度间切换；`q`、`Ctrl-C` 或
 遥控器 `Select` 退出并发送低层阻尼。启动脚本锁定 ONNX、姿态 JSON 和部署契约 SHA，并在 DDS 前完成
 17 组 ONNX 输入、自定义速度范围和组合 action 自检。MuJoCo 与 dry-run 通过不等于真机安全认证。
+
+## 19. Walk 行为修正续训：零速、微速、原地转向、足底间距与步频（2026-07-19）
+
+本节只新增 Walk 续训和测试链，不修改 Stand 环境、奖励、脚本、checkpoint 或第 17 节说明。续训起点是九阶段
+Walk 已完成模型，而不是早期 `model_3999`：
+
+```text
+/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/checkpoint/walk/model_10990.pt
+iteration: 10990
+SHA-256: 1af3b722e1d07f8d7a40e32265cf67e46cfd2c74c50f6556cb369d2ea1e22c00
+actor: 96 -> 29
+critic: 297 -> 1
+```
+
+脚本按完整训练状态继续加载 optimizer、AMP discriminator、AMP normalizer 和 iteration；不是只复制 actor 参数。
+新 checkpoint 写入 `logs/rsl_rl/g1_walk_behavior` 和 `ArmHack Checkpoints/WalkBehaviorFinetune`。正式训练全部完成并
+通过测试后，再把最终模型复制到项目根目录 `checkpoint/walk`，不要在训练中覆盖当前已验证起点。
+
+### 19.1 旧训练为什么会出现这三个问题
+
+旧 `feet_air_time` 只在 `norm([vx,vy]) > 0.1` 时生效，因此微速和平移为零的纯 yaw 命令没有迈步激励；旧 turn
+分布还允许较大的 `vx/vy`，没有构造真正的原地转向。`stand` 权重较低，并且速度命令经过 slew limiter 后才逐渐到
+零，AMP discriminator 又只见过行走风格，所以零速下可能继续维持步态极限环。旧奖励也没有足底形状约束，仅靠速度
+跟踪和接触项无法直接阻止侧移/斜移时脚掌相交。
+
+本次保持 policy 观测仍为 `[vx, vy, wz]`，不加入 mode id，也不提供未来速度或未来双臂动作。改动位置为：
+
+```text
+训练环境：source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/
+          g1_walk_behavior_env_cfg.py
+速度分布：source/legged_lab/legged_lab/data/MotionData/g1_29dof/amp/
+          armhack_walk_behavior_50hz/task_sampling_config.json
+奖励函数：source/legged_lab/legged_lab/tasks/locomotion/amp/mdp/rewards.py
+速度命令：source/legged_lab/legged_lab/tasks/locomotion/amp/mdp/commands/
+          hybrid_nav2_mode_velocity_command.py
+续训脚本：scripts/train_g1_armhack_walk_behavior.sh
+```
+
+14 类显式采样包含：严格零速、前/后/左/右/斜向微速、左右原地转向、左右侧移、左右前斜移和正常前向。
+微速下界为 `0.03 m/s`，与严格零速之间没有训练死区；原地转向严格设置 `vx=vy=0`。`hard_zero_stand=True`
+使 stand 被采样后，policy 当前帧看到的命令直接为精确 `[0,0,0]`，不再等待速度斜坡归零。这里的“硬”指命令
+语义，不是把网络 action 偷换为默认姿态；是否真正停止仍由新奖励训练，并由 MuJoCo 的零速落脚频率和漂移验收。
+
+### 19.2 新增奖励
+
+| 奖励项 | 权重 | 生效条件与目的 |
+|---|---:|---|
+| `strict_zero_body_motion_l2` | -4.0 | 仅完整三轴命令范数 `<=1e-6`；惩罚根部平移和 yaw 运动 |
+| `strict_zero_feet_motion_l2` | -2.0 | 仅严格零速；惩罚两只脚的三维线速度 |
+| `strict_zero_joint_vel_l2` | -0.03 | 仅严格零速；惩罚 15 个腿/腰关节速度，压制极限环 |
+| `strict_zero_double_support` | +2.0 | 仅严格零速；奖励双脚同时稳定支撑 |
+| `nonzero_single_stance` | +1.2 | 任意三轴非零即生效，包括微速和纯 yaw；要求出现真实迈步相位 |
+| `command_response_shortfall_l1` | -2.0 | 惩罚指令方向速度或带符号 yaw 响应不足，阻止只倾斜不移动/不转身 |
+| `rapid_footstep_l1` | -1.0 | 落脚时若上一摆动小于 `0.16 s` 则惩罚，降低过高步频 |
+| `oriented_footprint_proximity_l2` | -8.0 | 足底安全间距小于 `0.025 m` 时严厉惩罚，最高单项惩罚截断为 25 |
+
+原来的 `feet_air_time` 在新任务中被关闭，避免其 `0.1 m/s` 平移门槛重新制造微速/纯 yaw 死区。
+
+足底间距不是两脚 link 中心距离。S3 G1 足底接触点近似覆盖 `x=[-0.05,0.12] m`、
+`y=[-0.03,0.03] m`，实现使用相对 ankle-roll link 前移 `0.035 m`、半长 `0.090 m`、半宽
+`0.035 m` 的两个带方向矩形；把四个角随每只脚当前姿态变换到世界系，再用二维分离轴定理计算带符号间距。
+正值表示分离，负值表示足底投影重叠，因此能识别脚尖、脚跟和交叉脚掌，不能被较远的 link 中心误导。
+
+### 19.3 三阶段续训命令
+
+进入唯一正确的 IsaacLab 环境：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate env_isaaclab
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+```
+
+第一阶段从 `model_10990` 完整状态继续 1500 iteration。此阶段关闭 AMP style reward 和物理 DR，先建立“零速
+停止、任何非零速度都迈步、纯 yaw 真正转身”：
+
+```bash
+MODE=base PHASE=stop_micro_turn \
+RUN_NAME=armhack_walk_behavior_stop_micro_turn_from_model10990_20260719 \
+QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk_behavior.sh
+```
+
+第二阶段继续 1500 iteration，集中学习侧移/斜移足底几何约束，并恢复基础随机化和部分 AMP：
+
+```bash
+MODE=resume PHASE=lateral_geometry \
+RESUME_RUN='<第一阶段实际 run 目录名>' \
+RESUME_CHECKPOINT='model_<第一阶段最终iteration>.pt' \
+RUN_NAME=armhack_walk_behavior_lateral_geometry_20260719 \
+QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk_behavior.sh
+```
+
+第三阶段继续 2000 iteration，恢复完整 wrist payload/物理 DR/push 和较强 AMP，确认行为不会在鲁棒训练中退化：
+
+```bash
+MODE=resume PHASE=robust \
+RESUME_RUN='<第二阶段实际 run 目录名>' \
+RESUME_CHECKPOINT='model_<第二阶段最终iteration>.pt' \
+RUN_NAME=armhack_walk_behavior_robust_20260719 \
+QUIET_TERMINAL=False \
+bash scripts/train_g1_armhack_walk_behavior.sh
+```
+
+三个阶段默认共继续 5000 iteration，比早期只训练 3000 iteration 更长。TensorBoard 命令：
+
+```bash
+tensorboard --logdir logs/rsl_rl/g1_walk_behavior --port 6006 --bind_all
+```
+
+开发 smoke 只验证配置实例化、完整状态加载、rollout、PPO update 和 checkpoint 写出，不验证策略行为：
+
+```bash
+NUM_ENVS=8 MAX_ITERATIONS=1 \
+MODE=base PHASE=stop_micro_turn \
+RUN_NAME=armhack_walk_behavior_smoke_20260719 \
+QUIET_TERMINAL=True \
+bash scripts/train_g1_armhack_walk_behavior.sh
+```
+
+### 19.4 新 MuJoCo 测试链
+
+新入口参考 HEC-5090 的 `val_mujoco_g1_armhack_walk.sh`，保留 checkpoint SHA 校验、actor 导出、
+ONNX/TorchScript 五组输入一致性检查和 `96 -> 29` 接口检查，并增加时序速度场景：
+
+```text
+Reference Data/ArmHack/WalkPerturbFinetune/behavior_test_scenarios.json
+scripts/val_mujoco_g1_armhack_walk_behavior.sh
+scripts/test_mujoco_g1_armhack_walk_behavior.sh
+scripts/analyze_armhack_walk_behavior_mujoco.py
+```
+
+单场景可视化“正常行走 3 s 后立即接收零速并保持 5 s”：
+
+```bash
+CHECKPOINT='/绝对路径/model_<最终iteration>.pt' \
+SCENARIO_NAME=walk_to_zero POSE_NAME=pos2_down \
+USE_GLFW=True REAL_TIME=True \
+bash scripts/val_mujoco_g1_armhack_walk_behavior.sh
+```
+
+`walk_to_zero` 切换点绕过 command ramp，下一仿真步直接把 policy 观测命令写为精确零；这专门测试策略能否退出
+既有步态极限环。运行 smoke（只要求程序无错误，不强制旧模型通过新行为阈值）：
+
+```bash
+SUITE=smoke ENFORCE_THRESHOLDS=False \
+CHECKPOINT="$PWD/../checkpoint/walk/model_10990.pt" \
+bash scripts/test_mujoco_g1_armhack_walk_behavior.sh
+```
+
+正式 checkpoint 的单姿态核心验收和三种双臂姿态全量验收：
+
+```bash
+SUITE=core ENFORCE_THRESHOLDS=True \
+CHECKPOINT='/绝对路径/model_<最终iteration>.pt' \
+bash scripts/test_mujoco_g1_armhack_walk_behavior.sh
+
+SUITE=full ENFORCE_THRESHOLDS=True \
+CHECKPOINT='/绝对路径/model_<最终iteration>.pt' \
+bash scripts/test_mujoco_g1_armhack_walk_behavior.sh
+```
+
+`core` 含 12 个场景：零速保持、行走转零速、三种微速、左右原地转向、左右侧移、左右前斜移和 `0.6 m/s`
+前向步频；`full` 对三种手臂固定姿态逐项运行，共 36 项。每个速度段在 settling 后独立统计：实际 `vx/vy/wz`、
+位移、左右脚 touchdown 数和步频、平均脚速、带方向足底最小间距/违规比例、躯干 roll/pitch 以及是否摔倒。
+
+默认行为门槛包括：零速平移 `<=0.035 m/s`、yaw `<=0.06 rad/s`、落脚频率 `<=0.5 Hz`、漂移
+`<=0.12 m`；微速指令方向速度至少 `0.015 m/s` 且必须发生迈步；纯 yaw 带符号响应至少
+`0.15 rad/s` 且 roll `<=0.25 rad`；侧移/斜移足底不得明显重叠，安全间距违规比例 `<=20%`；正常
+前向总 touchdown 频率为 `0.5–3.0 Hz`。这些是第一版可重复验收阈值，正式训练结束后必须用同一 suite 同时
+测试输入 `model_10990` 和新模型，不能只凭 GUI 观感宣布改进。
+
+### 19.5 代码 smoke 实测结果
+
+2026-07-19 已完成一次 8 环境、1 iteration 的真实 IsaacLab smoke，而不只是语法检查。运行正确加载
+`model_10990` 的完整状态，日志显示 `Learning iteration 10990/10991`、192 个 rollout step、PPO/AMP/baseline-KL
+update、TensorBoard event 和 checkpoint 保存均完成；Reward Manager 实际列出了本节 8 个新增奖励项，actor/critic
+接口保持 `96/297/29`。日志与独立输出 checkpoint 的 SHA-256 相同：
+
+```text
+logs/rsl_rl/g1_amp/train_armhack_walk_behavior_smoke_v2_20260719_20260719_131250.log
+logs/rsl_rl/g1_walk_behavior/
+2026-07-19_13-12-58_armhack_walk_behavior_smoke_v2_20260719/model_10990.pt
+
+ArmHack Checkpoints/WalkBehaviorFinetune/
+2026-07-19_13-12-58_armhack_walk_behavior_smoke_v2_20260719/model_10990.pt
+SHA-256: d493119851cba8a7ba60619bc4f51a0e7ec3816d177ff5b2c558ed6f5af5d3cc
+```
+
+MuJoCo `smoke_walk_to_zero` 也完成了 checkpoint 导出、五组 ONNX/TorchScript 一致性检查、2 s rollout、时序
+切换、足底矩形和 touchdown 指标计算及 JSON/Markdown 报告写出，进程无异常且机器人未摔倒。输入旧模型在零速段
+测得 touchdown 频率约 `4.54 Hz`，因此新行为检查明确判为 FAIL；smoke 使用
+`ENFORCE_THRESHOLDS=False`，所以只把它作为旧模型问题基线，不把旧模型误报为已修复。正式续训前，这正是预期
+结果；只有新模型以 `ENFORCE_THRESHOLDS=True` 通过 core/full 才能宣称行为问题已解决。

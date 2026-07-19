@@ -68,12 +68,20 @@ core.*
 /checkpoint/**/*.pt
 /checkpoint/**/*.pth
 /checkpoint/**/*.ckpt
+# 发布用 Walk checkpoint 需要随仓库提供；当前单文件约 15 MB，低于 GitHub 100 MB 上限。
+!/checkpoint/walk/
+!/checkpoint/walk/**
 /legged_lab/ArmHack Checkpoints/**/*.pt
 /legged_lab/ArmHack Checkpoints/**/*.pth
 /legged_lab/ArmHack Checkpoints/**/*.ckpt
 /legged_lab/ArmHack Checkpoints/**/Test Reports/
+/legged_lab/ArmHack Checkpoints/**/MuJoCo Test Reports/
 /legged_lab/ArmHack Checkpoints/**/MuJoCo Export/
 /legged_lab/ArmHack Checkpoints/**/Real Export/
+/legged_lab/ExtremeStandRecovery Checkpoints/**/*.pt
+/legged_lab/ExtremeStandRecovery Checkpoints/**/*.pth
+/legged_lab/ExtremeStandRecovery Checkpoints/**/*.ckpt
+/legged_lab/deployment/armhack_walk/behavior/
 
 # ArmHack 动态任务的外部 Nav2 速度分布（由 Reference Data/README 记录来源和校验和）
 /legged_lab/Reference Data/ArmHack/WalkPerturbFinetune/nav2_cmd_vel_raw_success.csv

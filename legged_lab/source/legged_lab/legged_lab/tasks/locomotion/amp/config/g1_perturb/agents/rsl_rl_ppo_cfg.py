@@ -66,3 +66,23 @@ class G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg(
             parent_post_init()
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 1.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85
+
+
+@configclass
+class G1WalkBehaviorFinetuneRslRlOnPolicyRunnerAmpCfg(
+    G1WalkRobustFinetuneRslRlOnPolicyRunnerAmpCfg
+):
+    """Walk-only continuation runner for stop/micro/turn/foot-placement behavior."""
+
+    experiment_name = "g1_walk_behavior"
+    checkpoint_output_dir = "ArmHack Checkpoints/WalkBehaviorFinetune"
+    load_policy_only = False
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        # The first curriculum phase must let strict stop terms dominate the
+        # walking-only discriminator.  The launcher raises style weight later.
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 0.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0

@@ -42,6 +42,7 @@ import yaml  # type: ignore[reportMissingImports]
 
 from armhack_stand import ArmHackStandReplay
 from armhack_walk import ArmHackWalkAdapter
+from extreme_stand_recovery import ExtremeStandRecoveryPerturbation
 
 
 UNITREE_ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -298,6 +299,76 @@ def load_config(config_path: str) -> dict:
     )
     config["armhack_walk_start_active"] = _env_bool(
         "G1_AMP_ARMHACK_WALK_START_ACTIVE", bool(config.get("armhack_walk_start_active", True))
+    )
+    config["armhack_walk_schedule_path"] = _resolve_path(
+        os.environ.get(
+            "G1_AMP_ARMHACK_WALK_SCHEDULE_PATH",
+            config.get("armhack_walk_schedule_path", ""),
+        )
+    )
+    config["armhack_walk_scenario_name"] = os.environ.get(
+        "G1_AMP_ARMHACK_WALK_SCENARIO_NAME",
+        config.get("armhack_walk_scenario_name", ""),
+    )
+    config["armhack_walk_hard_zero_command"] = _env_bool(
+        "G1_AMP_ARMHACK_WALK_HARD_ZERO_COMMAND",
+        bool(config.get("armhack_walk_hard_zero_command", False)),
+    )
+    config["armhack_walk_zero_epsilon"] = _env_float(
+        "G1_AMP_ARMHACK_WALK_ZERO_EPSILON",
+        float(config.get("armhack_walk_zero_epsilon", 1.0e-6)),
+    )
+    config["behavior_settle_time_s"] = _env_float(
+        "G1_AMP_BEHAVIOR_SETTLE_TIME_S", float(config.get("behavior_settle_time_s", 0.75))
+    )
+    config["extreme_stand_recovery_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_RECOVERY_ENABLE",
+        bool(config.get("extreme_stand_recovery_enable", False)),
+    )
+    config["extreme_stand_recovery_seed"] = _env_int(
+        "G1_AMP_EXTREME_STAND_RECOVERY_SEED",
+        int(config.get("extreme_stand_recovery_seed", 20260719)),
+    )
+    for key, env_name, default in (
+        ("extreme_stand_recovery_leg_noise_rad", "G1_AMP_EXTREME_STAND_LEG_NOISE_RAD", 0.20),
+        ("extreme_stand_recovery_waist_noise_rad", "G1_AMP_EXTREME_STAND_WAIST_NOISE_RAD", 0.25),
+        ("extreme_stand_recovery_arm_noise_rad", "G1_AMP_EXTREME_STAND_ARM_NOISE_RAD", 0.45),
+        (
+            "extreme_stand_recovery_joint_velocity_noise_rad_s",
+            "G1_AMP_EXTREME_STAND_JOINT_VEL_NOISE_RAD_S",
+            0.75,
+        ),
+        (
+            "extreme_stand_recovery_root_roll_pitch_noise_rad",
+            "G1_AMP_EXTREME_STAND_ROOT_RP_NOISE_RAD",
+            0.18,
+        ),
+        (
+            "extreme_stand_recovery_root_linear_velocity_noise_m_s",
+            "G1_AMP_EXTREME_STAND_ROOT_LIN_VEL_NOISE_M_S",
+            0.30,
+        ),
+        (
+            "extreme_stand_recovery_root_angular_velocity_noise_rad_s",
+            "G1_AMP_EXTREME_STAND_ROOT_ANG_VEL_NOISE_RAD_S",
+            0.50,
+        ),
+        ("extreme_stand_recovery_force_max_n", "G1_AMP_EXTREME_STAND_FORCE_MAX_N", 35.0),
+        ("extreme_stand_recovery_torque_max_nm", "G1_AMP_EXTREME_STAND_TORQUE_MAX_NM", 5.0),
+        (
+            "extreme_stand_recovery_wrench_interval_s",
+            "G1_AMP_EXTREME_STAND_WRENCH_INTERVAL_S",
+            2.5,
+        ),
+        (
+            "extreme_stand_recovery_wrench_duration_s",
+            "G1_AMP_EXTREME_STAND_WRENCH_DURATION_S",
+            0.25,
+        ),
+    ):
+        config[key] = _env_float(env_name, float(config.get(key, default)))
+    config["sole_min_clearance_m"] = _env_float(
+        "G1_AMP_SOLE_MIN_CLEARANCE_M", float(config.get("sole_min_clearance_m", 0.025))
     )
     command_ranges = dict(config.get("command_ranges", {}))
     command_ranges["lin_vel_x"] = _env_yaml_list(
@@ -737,7 +808,83 @@ def contact_force_with_floor(model: mujoco.MjModel, data: mujoco.MjData, floor_g
     return total_force, foot_contact_count
 
 
-def init_rollout_metrics(data: mujoco.MjData, torso_body_id: int, config: dict) -> dict:
+def foot_contact_states_with_floor(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    floor_geom_ids: set[int],
+    foot_body_ids: list[int] | set[int],
+) -> np.ndarray:
+    """Return one floor-contact flag per ordered foot body."""
+    ordered_ids = list(foot_body_ids)
+    index_by_body = {body_id: index for index, body_id in enumerate(ordered_ids)}
+    states = np.zeros(len(ordered_ids), dtype=bool)
+    for contact_id in range(data.ncon):
+        contact = data.contact[contact_id]
+        geom1, geom2 = int(contact.geom1), int(contact.geom2)
+        if geom1 in floor_geom_ids:
+            other_geom = geom2
+        elif geom2 in floor_geom_ids:
+            other_geom = geom1
+        else:
+            continue
+        other_body = int(model.geom_bodyid[other_geom])
+        if other_body in index_by_body:
+            states[index_by_body[other_body]] = True
+    return states
+
+
+def oriented_sole_signed_clearance(
+    data: mujoco.MjData,
+    foot_body_ids: list[int] | set[int],
+    center_offset_x: float = 0.035,
+    half_length: float = 0.090,
+    half_width: float = 0.035,
+) -> float:
+    """2-D SAT signed clearance between the two oriented S3 G1 sole rectangles."""
+    ordered_ids = list(foot_body_ids)
+    if len(ordered_ids) != 2:
+        raise ValueError("oriented sole clearance requires exactly two foot bodies")
+    local_corners = np.asarray(
+        [
+            [center_offset_x - half_length, -half_width, 0.0],
+            [center_offset_x + half_length, -half_width, 0.0],
+            [center_offset_x + half_length, half_width, 0.0],
+            [center_offset_x - half_length, half_width, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    footprints = []
+    for body_id in ordered_ids:
+        rotation = data.xmat[body_id].reshape(3, 3)
+        footprints.append((local_corners @ rotation.T + data.xpos[body_id])[:, :2])
+    left, right = footprints
+    raw_axes = [
+        left[1] - left[0],
+        left[3] - left[0],
+        right[1] - right[0],
+        right[3] - right[0],
+    ]
+    separations = []
+    for raw_axis in raw_axes:
+        axis = raw_axis / max(float(np.linalg.norm(raw_axis)), 1.0e-9)
+        left_projection = left @ axis
+        right_projection = right @ axis
+        separations.append(
+            max(
+                float(np.min(right_projection) - np.max(left_projection)),
+                float(np.min(left_projection) - np.max(right_projection)),
+            )
+        )
+    # Positive means separated; negative is overlap depth along the least-overlapping axis.
+    return float(max(separations))
+
+
+def init_rollout_metrics(
+    data: mujoco.MjData,
+    torso_body_id: int,
+    config: dict,
+    foot_body_ids: list[int] | set[int],
+) -> dict:
     torso_pos_w = data.xpos[torso_body_id].copy().astype(np.float32)
     torso_quat_w = data.xquat[torso_body_id].copy().astype(np.float32)
     _, _, initial_yaw = quat_to_roll_pitch_yaw(data.qpos[3:7].copy())
@@ -767,13 +914,22 @@ def init_rollout_metrics(data: mujoco.MjData, torso_body_id: int, config: dict) 
         "command_samples": [],
         "segment_ids": [],
         "command_segments": [],
+        "sample_times": [],
+        "torso_pos_xy": [],
+        "foot_signed_clearances_m": [],
+        "foot_planar_speeds_m_per_s": [],
+        "foot_touchdown_events": [],
         "foot_contact_steps": 0,
+        "foot_touchdown_count": 0,
         "fallen": False,
         "fall_time": None,
         "prev_torso_pos_w": torso_pos_w,
         "prev_torso_quat_w": torso_quat_w,
         "prev_torso_lin_vel_w": np.zeros(3, dtype=np.float32),
         "prev_torso_ang_vel_b": np.zeros(3, dtype=np.float32),
+        "prev_foot_pos_w": data.xpos[list(foot_body_ids)].copy().astype(np.float32),
+        "prev_foot_contact_states": np.zeros(len(list(foot_body_ids)), dtype=bool),
+        "simulation_dt": float(config.get("simulation_dt", 0.001)),
         "forward_path": 0.0,
         "lateral_path": 0.0,
         "torso_height_target_m": float(torso_pos_w[2]),
@@ -845,7 +1001,7 @@ def update_rollout_metrics(
     policy_joint_names: list[str],
     command: np.ndarray,
     floor_geom_ids: set[int],
-    foot_body_ids: set[int],
+    foot_body_ids: list[int] | set[int],
     torso_body_id: int,
     config: dict,
     sim_time: float,
@@ -891,6 +1047,8 @@ def update_rollout_metrics(
     metrics["yaw_rate"].append(float(torso_ang_vel_b[2]))
     metrics["command_samples"].append([float(command[0]), float(command[1]), float(command[2])])
     metrics["segment_ids"].append(int(segment_id))
+    metrics["sample_times"].append(float(sim_time))
+    metrics["torso_pos_xy"].append([float(torso_pos_w[0]), float(torso_pos_w[1])])
 
     if (
         not metrics["fallen"]
@@ -913,6 +1071,22 @@ def update_rollout_metrics(
     _, foot_contact_count = contact_force_with_floor(model, data, floor_geom_ids, foot_body_ids)
     if foot_contact_count > 0:
         metrics["foot_contact_steps"] += 1
+    ordered_foot_ids = list(foot_body_ids)
+    current_foot_pos_w = data.xpos[ordered_foot_ids].copy().astype(np.float32)
+    foot_planar_speed = np.linalg.norm(
+        (current_foot_pos_w[:, :2] - metrics["prev_foot_pos_w"][:, :2]) / dt,
+        axis=1,
+    )
+    contact_states = foot_contact_states_with_floor(
+        model, data, floor_geom_ids, ordered_foot_ids
+    )
+    touchdown_events = np.logical_and(contact_states, ~metrics["prev_foot_contact_states"])
+    touchdown_count = int(np.count_nonzero(touchdown_events))
+    signed_clearance = oriented_sole_signed_clearance(data, ordered_foot_ids)
+    metrics["foot_planar_speeds_m_per_s"].append(float(np.mean(foot_planar_speed)))
+    metrics["foot_touchdown_events"].append(touchdown_count)
+    metrics["foot_signed_clearances_m"].append(float(signed_clearance))
+    metrics["foot_touchdown_count"] += touchdown_count
     update_early_motion_metrics(
         metrics,
         config,
@@ -954,6 +1128,8 @@ def update_rollout_metrics(
     metrics["prev_torso_quat_w"] = torso_quat_w.copy()
     metrics["prev_torso_lin_vel_w"] = torso_lin_vel_w.copy()
     metrics["prev_torso_ang_vel_b"] = torso_ang_vel_b.copy()
+    metrics["prev_foot_pos_w"] = current_foot_pos_w
+    metrics["prev_foot_contact_states"] = contact_states
     metrics["prev_torso_trace_point_w"] = torso_trace_point_w.copy()
     metrics["step_count"] += 1
 
@@ -1016,7 +1192,7 @@ def summarize_early_motion(metrics: dict, config: dict) -> dict:
     }
 
 
-def summarize_command_segments(metrics: dict) -> list[dict]:
+def summarize_command_segments(metrics: dict, config: dict) -> list[dict]:
     segments: list[dict] = []
     segment_ids = np.asarray(metrics["segment_ids"], dtype=np.int32)
     lin_errors = np.asarray(metrics["lin_vel_xy_errors"], dtype=np.float32)
@@ -1025,24 +1201,65 @@ def summarize_command_segments(metrics: dict) -> list[dict]:
     lin_vel_y = np.asarray(metrics["lin_vel_y"], dtype=np.float32)
     yaw_rate = np.asarray(metrics["yaw_rate"], dtype=np.float32)
     command_samples = np.asarray(metrics["command_samples"], dtype=np.float32)
+    sample_times = np.asarray(metrics["sample_times"], dtype=np.float32)
+    torso_pos_xy = np.asarray(metrics["torso_pos_xy"], dtype=np.float32)
+    roll_abs = np.asarray(metrics["roll_abs"], dtype=np.float32)
+    pitch_abs = np.asarray(metrics["pitch_abs"], dtype=np.float32)
+    sole_clearance = np.asarray(metrics["foot_signed_clearances_m"], dtype=np.float32)
+    foot_speed = np.asarray(metrics["foot_planar_speeds_m_per_s"], dtype=np.float32)
+    touchdown_events = np.asarray(metrics["foot_touchdown_events"], dtype=np.int32)
+    settle_time = max(float(config.get("behavior_settle_time_s", 0.75)), 0.0)
+    minimum_clearance = float(config.get("sole_min_clearance_m", 0.025))
+    simulation_dt = max(float(metrics.get("simulation_dt", 0.001)), 1.0e-6)
     for segment in metrics["command_segments"]:
         mask = segment_ids == int(segment["id"])
         if not np.any(mask):
             continue
+        steady_mask = mask & (sample_times >= float(segment["start_time"]) + settle_time)
+        if not np.any(steady_mask):
+            steady_mask = mask
         lin_mae = float(np.mean(lin_errors[mask]))
         yaw_mae = float(np.mean(yaw_errors[mask]))
         tracking_score = 0.7 * _bounded_exp_score(lin_mae, 0.35) + 0.3 * _bounded_exp_score(yaw_mae, 0.50)
+        segment_positions = torso_pos_xy[steady_mask]
+        displacement = (
+            float(np.linalg.norm(segment_positions[-1] - segment_positions[0]))
+            if len(segment_positions) >= 2
+            else 0.0
+        )
+        steady_duration = max(float(np.count_nonzero(steady_mask)) * simulation_dt, simulation_dt)
+        steady_touchdowns = int(np.sum(touchdown_events[steady_mask]))
         item = {
                 "id": int(segment["id"]),
+                "name": str(segment.get("name", f"segment_{segment['id']}")),
                 "start_time": float(segment["start_time"]),
                 "command": [float(value) for value in segment["command"]],
                 "mean_command": [float(value) for value in np.mean(command_samples[mask], axis=0)],
                 "samples": int(np.count_nonzero(mask)),
+                "duration_s": float(np.count_nonzero(mask) * simulation_dt),
+                "steady_settle_time_s": settle_time,
+                "steady_samples": int(np.count_nonzero(steady_mask)),
                 "mean_lin_vel_x": float(np.mean(lin_vel_x[mask])),
                 "mean_lin_vel_y": float(np.mean(lin_vel_y[mask])),
                 "mean_yaw_rate": float(np.mean(yaw_rate[mask])),
+                "steady_mean_lin_vel_x": float(np.mean(lin_vel_x[steady_mask])),
+                "steady_mean_lin_vel_y": float(np.mean(lin_vel_y[steady_mask])),
+                "steady_mean_yaw_rate": float(np.mean(yaw_rate[steady_mask])),
                 "lin_vel_xy_mae": lin_mae,
                 "yaw_rate_mae": yaw_mae,
+                "steady_lin_vel_xy_mae": float(np.mean(lin_errors[steady_mask])),
+                "steady_yaw_rate_mae": float(np.mean(yaw_errors[steady_mask])),
+                "steady_planar_displacement_m": displacement,
+                "steady_mean_foot_planar_speed_m_per_s": float(np.mean(foot_speed[steady_mask])),
+                "steady_touchdown_count": steady_touchdowns,
+                "steady_step_frequency_hz": float(steady_touchdowns / steady_duration),
+                "steady_min_signed_sole_clearance_m": float(np.min(sole_clearance[steady_mask])),
+                "steady_sole_clearance_violation_fraction": float(
+                    np.count_nonzero(sole_clearance[steady_mask] < minimum_clearance)
+                    / max(np.count_nonzero(steady_mask), 1)
+                ),
+                "steady_max_abs_roll_rad": float(np.max(roll_abs[steady_mask])),
+                "steady_max_abs_pitch_rad": float(np.max(pitch_abs[steady_mask])),
                 "tracking_score": float(tracking_score),
             }
         if "nav2_metadata" in segment:
@@ -1125,6 +1342,16 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
         "max_abs_roll": _safe_max(metrics["roll_abs"]),
         "max_abs_pitch": _safe_max(metrics["pitch_abs"]),
         "foot_contact_duty": float(metrics["foot_contact_steps"] / max(len(metrics["root_heights"]), 1)),
+        "foot_touchdown_count": int(metrics["foot_touchdown_count"]),
+        "step_frequency_hz": float(metrics["foot_touchdown_count"] / max(float(sim_time), 1.0e-6)),
+        "min_signed_sole_clearance_m": _safe_min(metrics["foot_signed_clearances_m"]),
+        "sole_clearance_violation_fraction": float(
+            np.count_nonzero(
+                np.asarray(metrics["foot_signed_clearances_m"], dtype=np.float32)
+                < float(config.get("sole_min_clearance_m", 0.025))
+            )
+            / max(len(metrics["foot_signed_clearances_m"]), 1)
+        ),
         "healthy_min_root_height": float(config["healthy_min_root_height"]),
         "healthy_max_roll_pitch": float(config["healthy_max_roll_pitch"]),
     }
@@ -1157,7 +1384,7 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
     return {
         "sim_time": float(sim_time),
         "task_tracking": task_tracking,
-        "command_segments": summarize_command_segments(metrics),
+        "command_segments": summarize_command_segments(metrics, config),
         "early_motion": summarize_early_motion(metrics, config),
         "important_metrics": important_metrics,
         "health": health,
@@ -1724,8 +1951,15 @@ def run_mujoco(config: dict) -> None:
         if bool(config.get("armhack_walk_enable", False))
         else None
     )
+    extreme_stand_recovery = (
+        ExtremeStandRecoveryPerturbation(config, policy_joint_names)
+        if bool(config.get("extreme_stand_recovery_enable", False))
+        else None
+    )
     if armhack_stand is not None and armhack_walk is not None:
         raise ValueError("ArmHack Stand and Walk adapters cannot be enabled together.")
+    if extreme_stand_recovery is not None and (armhack_stand is not None or armhack_walk is not None):
+        raise ValueError("Extreme Stand recovery cannot be combined with an ArmHack action adapter.")
     if armhack_stand is not None:
         if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
             raise ValueError("ArmHack Stand MuJoCo replay requires fixed independent zero commands.")
@@ -1736,12 +1970,17 @@ def run_mujoco(config: dict) -> None:
             raise ValueError("ArmHack Walk MuJoCo requires fixed independent commands.")
         if not bool(config.get("command_ramp", False)):
             raise ValueError("ArmHack Walk MuJoCo requires command_ramp=True for zero/fixed transitions.")
+    if extreme_stand_recovery is not None:
+        if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
+            raise ValueError("Extreme Stand recovery MuJoCo test requires fixed independent zero commands.")
+        if not np.allclose(np.asarray(config["cmd_init"], dtype=np.float32), 0.0, atol=1.0e-8):
+            raise ValueError("Extreme Stand recovery MuJoCo test requires cmd_init=[0, 0, 0].")
     rng = np.random.default_rng(int(config.get("command_seed", 1)))
     command_mode = str(config.get("command_mode", "independent")).lower()
     joystick = JoystickCommandReader(config) if command_mode == "joystick" else None
     nav2_replay = Nav2CommandReplay(config, rng) if command_mode == "nav2" else None
     target_command = (
-        armhack_walk.current_target_command()
+        armhack_walk.current_target_command(0.0)
         if armhack_walk is not None
         else np.asarray(config["cmd_init"], dtype=np.float32)
     )
@@ -1772,6 +2011,16 @@ def run_mujoco(config: dict) -> None:
         raise RuntimeError("MuJoCo model has no floor/ground plane; set add_floor: true or provide a scene XML with a floor.")
     if not foot_body_ids:
         raise RuntimeError("MuJoCo model has no ankle_roll_link/foot_link bodies for contact metrics.")
+    foot_body_ids = sorted(
+        foot_body_ids,
+        key=lambda body_id: _name_from_id(model, mujoco.mjtObj.mjOBJ_BODY, body_id),
+    )
+    if len(foot_body_ids) != 2:
+        names = [
+            _name_from_id(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+            for body_id in foot_body_ids
+        ]
+        raise RuntimeError(f"ArmHack Walk behavior metrics require exactly two feet, got {names}")
     if torso_body_id < 0:
         raise RuntimeError(f"MuJoCo model has no torso body named '{config.get('torso_body_name', 'torso_link')}'.")
 
@@ -1779,6 +2028,10 @@ def run_mujoco(config: dict) -> None:
     data.qpos[3:7] = np.asarray(config["root_quat_init"], dtype=np.float32)
     for joint_name, default_angle in default_by_joint.items():
         data.qpos[qpos_addresses[joint_name]] = default_angle
+    if extreme_stand_recovery is not None:
+        extreme_stand_recovery.initialize_model_and_state(
+            model, data, qpos_addresses, qvel_addresses
+        )
     if armhack_stand is not None:
         armhack_stand.initialize_model_and_state(mujoco, model, data, qpos_addresses, torso_body_id)
     else:
@@ -1790,14 +2043,23 @@ def run_mujoco(config: dict) -> None:
             # fixed pose.
             action = armhack_walk.compose_action(action)
         mujoco.mj_forward(model, data)
-    rollout_metrics = init_rollout_metrics(data, torso_body_id, config)
+    rollout_metrics = init_rollout_metrics(data, torso_body_id, config, foot_body_ids)
     current_segment_id = 0
+    current_adapter_segment_index = (
+        int(armhack_walk.current_schedule_segment(0.0)["index"])
+        if armhack_walk is not None and armhack_walk.has_schedule
+        else -1
+    )
     next_command_time = max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
     initial_segment = {
         "id": current_segment_id,
         "start_time": 0.0,
         "command": [float(target_command[0]), float(target_command[1]), float(target_command[2])],
     }
+    if armhack_walk is not None and armhack_walk.has_schedule:
+        adapter_segment = armhack_walk.current_schedule_segment(0.0)
+        initial_segment["name"] = str(adapter_segment["name"])
+        initial_segment["scenario_name"] = armhack_walk.scenario_name
     if nav2_segment_info is not None:
         initial_segment.update(nav2_segment_info)
     rollout_metrics["command_segments"].append(initial_segment)
@@ -1827,7 +2089,7 @@ def run_mujoco(config: dict) -> None:
         return next_action
 
     def simulate_loop(viewer=None) -> None:
-        nonlocal action, command, target_command, current_segment_id, next_command_time
+        nonlocal action, command, target_command, current_segment_id, current_adapter_segment_index, next_command_time
         counter = 0
         sim_time = 0.0
         wall_start = time.time()
@@ -1837,7 +2099,35 @@ def run_mujoco(config: dict) -> None:
                     break
                 step_start = time.time()
                 if armhack_walk is not None:
-                    target_command = armhack_walk.current_target_command()
+                    previous_target_command = target_command.copy()
+                    target_command = armhack_walk.current_target_command(sim_time)
+                    adapter_segment = armhack_walk.current_schedule_segment(sim_time)
+                    if adapter_segment is not None:
+                        adapter_index = int(adapter_segment["index"])
+                        if adapter_index != current_adapter_segment_index:
+                            current_adapter_segment_index = adapter_index
+                            current_segment_id += 1
+                            rollout_metrics["command_segments"].append(
+                                {
+                                    "id": current_segment_id,
+                                    "name": str(adapter_segment["name"]),
+                                    "scenario_name": armhack_walk.scenario_name,
+                                    "start_time": float(sim_time),
+                                    "command": [float(value) for value in target_command],
+                                }
+                            )
+                    elif not np.allclose(
+                        target_command, previous_target_command, rtol=0.0, atol=1.0e-8
+                    ):
+                        current_segment_id += 1
+                        rollout_metrics["command_segments"].append(
+                            {
+                                "id": current_segment_id,
+                                "name": "manual_fixed" if np.linalg.norm(target_command) > 0.0 else "manual_zero",
+                                "start_time": float(sim_time),
+                                "command": [float(value) for value in target_command],
+                            }
+                        )
                 elif joystick is not None:
                     target_command = joystick.read_command()
                 elif nav2_replay is not None:
@@ -1858,7 +2148,17 @@ def run_mujoco(config: dict) -> None:
                         }
                     )
                     next_command_time += max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
-                command = smooth_command(command, target_command, float(model.opt.timestep), config)
+                hard_zero = (
+                    armhack_walk is not None
+                    and bool(config.get("armhack_walk_hard_zero_command", False))
+                    and float(np.linalg.norm(target_command))
+                    <= float(config.get("armhack_walk_zero_epsilon", 1.0e-6))
+                )
+                command = (
+                    np.zeros(3, dtype=np.float32)
+                    if hard_zero
+                    else smooth_command(command, target_command, float(model.opt.timestep), config)
+                )
                 control_step = counter % int(config["control_decimation"]) == 0
                 action = step_policy_if_needed(counter, sim_time)
                 target_policy = default_angles + action * float(config["action_scale"])
@@ -1873,6 +2173,8 @@ def run_mujoco(config: dict) -> None:
                     kp_by_joint,
                     kd_by_joint,
                 )
+                if extreme_stand_recovery is not None:
+                    extreme_stand_recovery.update_external_wrench(data, sim_time)
                 mujoco.mj_step(model, data)
                 counter += 1
                 sim_time += model.opt.timestep
@@ -1927,6 +2229,8 @@ def run_mujoco(config: dict) -> None:
             print(f"[REPORT] ArmHack Stand MuJoCo trace: {armhack_stand.trace_path}")
         if armhack_walk is not None:
             report["armhack_walk"] = armhack_walk.summary()
+        if extreme_stand_recovery is not None:
+            report["extreme_stand_recovery"] = extreme_stand_recovery.summary()
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:

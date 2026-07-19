@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "command_frame": "robot_base_local",
+  "units": {"linear": "m/s", "angular": "rad/s", "duration": "s"},
+  "scenarios": {
+    "smoke_walk_to_zero": {
+      "description": "Short runtime smoke; thresholds are not enforced.",
+      "segments": [
+        {"name": "walk", "duration_s": 0.8, "command": [0.35, 0.0, 0.0]},
+        {"name": "zero", "duration_s": 1.2, "command": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "zero_hold": {
+      "description": "Exact zero from reset; no gait limit cycle is allowed.",
+      "segments": [
+        {"name": "zero", "duration_s": 5.0, "command": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "walk_to_zero": {
+      "description": "Abrupt stop request after established forward walking.",
+      "segments": [
+        {"name": "walk", "duration_s": 3.0, "command": [0.35, 0.0, 0.0]},
+        {"name": "zero", "duration_s": 5.0, "command": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "micro_forward": {
+      "description": "Nonzero micro forward command must produce small steps, not a dead zone.",
+      "segments": [
+        {"name": "micro_forward", "duration_s": 6.0, "command": [0.06, 0.0, 0.0]}
+      ]
+    },
+    "micro_lateral": {
+      "description": "Nonzero micro lateral command must produce small side steps.",
+      "segments": [
+        {"name": "micro_lateral", "duration_s": 6.0, "command": [0.0, 0.06, 0.0]}
+      ]
+    },
+    "micro_diagonal": {
+      "description": "Low diagonal command exercises both nonzero axes below the old deadband.",
+      "segments": [
+        {"name": "micro_diagonal", "duration_s": 6.0, "command": [0.06, 0.06, 0.0]}
+      ]
+    },
+    "turn_in_place_left": {
+      "description": "Pure positive yaw must turn through stepping rather than torso sway.",
+      "segments": [
+        {"name": "turn_left", "duration_s": 6.0, "command": [0.0, 0.0, 0.6]}
+      ]
+    },
+    "turn_in_place_right": {
+      "description": "Pure negative yaw must turn through stepping rather than torso sway.",
+      "segments": [
+        {"name": "turn_right", "duration_s": 6.0, "command": [0.0, 0.0, -0.5]}
+      ]
+    },
+    "lateral_left": {
+      "description": "Left side-step with oriented-sole clearance measurement.",
+      "segments": [
+        {"name": "lateral_left", "duration_s": 6.0, "command": [0.0, 0.25, 0.0]}
+      ]
+    },
+    "lateral_right": {
+      "description": "Right side-step with oriented-sole clearance measurement.",
+      "segments": [
+        {"name": "lateral_right", "duration_s": 6.0, "command": [0.0, -0.25, 0.0]}
+      ]
+    },
+    "diagonal_front_left": {
+      "description": "Forward-left diagonal crossing-foot stress case.",
+      "segments": [
+        {"name": "diagonal_front_left", "duration_s": 6.0, "command": [0.25, 0.25, 0.0]}
+      ]
+    },
+    "diagonal_front_right": {
+      "description": "Forward-right diagonal crossing-foot stress case.",
+      "segments": [
+        {"name": "diagonal_front_right", "duration_s": 6.0, "command": [0.25, -0.25, 0.0]}
+      ]
+    },
+    "forward_cadence": {
+      "description": "Normal forward command used to bound excessive touchdown frequency.",
+      "segments": [
+        {"name": "forward_cadence", "duration_s": 6.0, "command": [0.6, 0.0, 0.0]}
+      ]
+    }
+  }
+}
