@@ -72,7 +72,10 @@ validate_nonnegative LIMB_TORQUE_MAX_NM "${LIMB_TORQUE_MAX_NM}" 10.0
 BASE_RUN_NAME="_extreme_stand_base_${ACTUAL_BASE_SHA256:0:12}"
 BASE_RUN_DIR="${LEGGED_LAB_DIR}/logs/rsl_rl/g1_extreme_stand_recovery/${BASE_RUN_NAME}"
 mkdir -p "${BASE_RUN_DIR}"
-PORTABLE_BASE_CHECKPOINT="${BASE_RUN_DIR}/model_2999.pt"
+BASE_CHECKPOINT_NAME=$(basename "${BASE_CHECKPOINT}")
+[[ "${BASE_CHECKPOINT_NAME}" =~ ^model_[A-Za-z0-9_-]+\.pt$ ]] || \
+    die "base checkpoint filename must match model_<id>.pt, got ${BASE_CHECKPOINT_NAME}"
+PORTABLE_BASE_CHECKPOINT="${BASE_RUN_DIR}/${BASE_CHECKPOINT_NAME}"
 PORTABLE_BASE_MARKER="${BASE_RUN_DIR}/source.sha256"
 if [[ ! -f "${PORTABLE_BASE_CHECKPOINT}" || ! -f "${PORTABLE_BASE_MARKER}" || \
       "$(<"${PORTABLE_BASE_MARKER}")" != "${ACTUAL_BASE_SHA256}" ]]; then
@@ -122,7 +125,7 @@ SEED="${SEED}" \
 RUN_NAME="${RUN_NAME}" \
 RESUME=True \
 LOAD_RUN="^${BASE_RUN_NAME}$" \
-CHECKPOINT="^model_2999.pt$" \
+CHECKPOINT="^${BASE_CHECKPOINT_NAME}$" \
 HEADLESS="${HEADLESS}" \
 QUIET_TERMINAL="${QUIET_TERMINAL}" \
 ROBOT_ASSET=s3_g1_29dof \

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Deploy ArmHack Walk with one fixed arm pose and SPACE-switched velocity.
+"""Deploy ArmHack Walk with fixed/Joystick velocity and switchable arm poses.
 
 The actor stays 96 -> 29.  Fourteen arm entries are replaced by one selected
 Walk pose after inference and the composed action is stored in the next
-observation.  Real mode starts with zero velocity; SPACE toggles only between
-zero and one fixed command validated against the tracked Nav2 CSV envelope.
+observation.  SPACE cycles the three arm poses with minimum-jerk interpolation;
+fixed mode uses V to switch between zero and its configured velocity.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import yaml
@@ -68,24 +68,41 @@ def _minimum_jerk(alpha: float) -> float:
     return value**3 * (10.0 + value * (-15.0 + 6.0 * value))
 
 
-def load_walk_pose(path: Path, pose_name: str, margin: float = 0.0) -> np.ndarray:
+def load_walk_pose_set(path: Path) -> tuple[tuple[str, ...], np.ndarray]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if int(payload.get("schema_version", -1)) != 1 or payload.get("units") != "rad":
         raise ValueError("Walk pose JSON must use schema_version=1 and radians.")
     expected_order = ["shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow", "wrist_roll", "wrist_pitch", "wrist_yaw"]
     if payload.get("joint_order_per_arm") != expected_order:
         raise ValueError("Walk pose JSON has an incompatible per-arm joint order.")
-    entries = [entry for entry in payload.get("poses", []) if entry.get("name") == pose_name]
-    if len(entries) != 1:
+    entries = payload.get("poses", [])
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("Walk pose JSON must contain at least one pose.")
+    pose_names: list[str] = []
+    pose_values: list[np.ndarray] = []
+    for entry in entries:
+        pose_name = str(entry.get("name", "")).strip()
+        if not pose_name or pose_name in pose_names:
+            raise ValueError(f"Walk pose names must be non-empty and unique; got {pose_name!r}.")
+        values = np.asarray(entry.get("left", []) + entry.get("right", []), dtype=np.float32)
+        if values.shape != (14,) or not np.all(np.isfinite(values)):
+            raise ValueError(f"Walk pose {pose_name} must contain 14 finite radians.")
+        for joint_name, value in zip(ARM_JOINT_NAMES, values):
+            lower, upper = JOINT_LIMITS_RAD[joint_name]
+            if not lower <= float(value) <= upper:
+                raise ValueError(
+                    f"Walk pose {pose_name}: {joint_name}={value:.6f} outside hardware range [{lower}, {upper}]."
+                )
+        pose_names.append(pose_name)
+        pose_values.append(values)
+    return tuple(pose_names), np.stack(pose_values)
+
+
+def load_walk_pose(path: Path, pose_name: str) -> np.ndarray:
+    pose_names, pose_values = load_walk_pose_set(path)
+    if pose_names.count(pose_name) != 1:
         raise ValueError(f"POSE_NAME must select exactly one Walk pose; got {pose_name}")
-    values = np.asarray(entries[0].get("left", []) + entries[0].get("right", []), dtype=np.float32)
-    if values.shape != (14,) or not np.all(np.isfinite(values)):
-        raise ValueError("Selected Walk pose must contain 14 finite radians.")
-    for name, value in zip(ARM_JOINT_NAMES, values):
-        lower, upper = JOINT_LIMITS_RAD[name]
-        if not lower + margin <= float(value) <= upper - margin:
-            raise ValueError(f"Walk pose {pose_name}: {name}={value:.6f} outside safe range.")
-    return values
+    return pose_values[pose_names.index(pose_name)].copy()
 
 
 def load_contract(path: Path) -> dict[str, Any]:
@@ -108,6 +125,22 @@ def validate_command(command: np.ndarray, contract: dict[str, Any]) -> None:
         raise ValueError(f"FIXED_COMMAND {command.tolist()} outside raw Nav2 range [{lower.tolist()}, {upper.tolist()}].")
 
 
+def validate_joystick_ranges(ranges: np.ndarray, contract: dict[str, Any]) -> None:
+    values = np.asarray(ranges, dtype=np.float32)
+    bounds = contract["raw_command_component_bounds"]
+    contract_lower = np.asarray(bounds["min"], dtype=np.float32)
+    contract_upper = np.asarray(bounds["max"], dtype=np.float32)
+    if values.shape != (3, 2) or not np.all(np.isfinite(values)):
+        raise ValueError("Joystick ranges must be three finite [min,max] pairs.")
+    if np.any(values[:, 0] > values[:, 1]):
+        raise ValueError("Each Joystick range must satisfy min <= max.")
+    if np.any(values[:, 0] < contract_lower) or np.any(values[:, 1] > contract_upper):
+        raise ValueError(
+            f"Joystick ranges {values.tolist()} exceed raw Nav2 bounds "
+            f"[{contract_lower.tolist()}, {contract_upper.tolist()}]."
+        )
+
+
 def _load_config_contract(path: Path) -> dict[str, Any]:
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
     policy_names = list(config["policy_joint_names"])
@@ -124,11 +157,26 @@ def _load_config_contract(path: Path) -> dict[str, Any]:
     return config
 
 
-def run_self_test(policy_path: Path, pose_path: Path, contract_path: Path, config_path: Path, pose_name: str, command: np.ndarray) -> None:
+def run_self_test(
+    policy_path: Path,
+    pose_path: Path,
+    contract_path: Path,
+    config_path: Path,
+    pose_name: str,
+    command_mode: str,
+    command: np.ndarray,
+    joystick_ranges: np.ndarray,
+) -> None:
     config = _load_config_contract(config_path)
     contract = load_contract(contract_path)
     validate_command(command, contract)
-    pose = load_walk_pose(pose_path, pose_name, margin=0.05)
+    validate_joystick_ranges(joystick_ranges, contract)
+    pose_names, pose_values = load_walk_pose_set(pose_path)
+    if pose_name not in pose_names:
+        raise ValueError(f"POSE_NAME {pose_name!r} not found; available={list(pose_names)}")
+    pose = pose_values[pose_names.index(pose_name)]
+    if command_mode not in {"fixed", "joystick"}:
+        raise ValueError("COMMAND_MODE must be fixed or joystick.")
     import onnxruntime as ort
 
     options = ort.SessionOptions()
@@ -153,9 +201,12 @@ def run_self_test(policy_path: Path, pose_path: Path, contract_path: Path, confi
         raise AssertionError("Walk arm action composition failed.")
     print("[SELF-TEST PASS] 未初始化 Unitree DDS，未发送机器人命令。")
     print(f"  actor   : obs[1,96] -> actions[1,29], zero + 16 random inputs finite")
-    print(f"  pose    : {pose_name}, arm policy indices={arm_indices.tolist()}")
-    print(f"  command : zero <-> {command.tolist()}, inside raw Nav2 CSV bounds")
-    print("  history : composed 29-D action reproduces the fixed 14-D arm target")
+    print(f"  poses   : {' -> '.join(pose_names)}; start={pose_name}; arm policy indices={arm_indices.tolist()}")
+    if command_mode == "fixed":
+        print(f"  command : V switches zero <-> {command.tolist()}, inside raw Nav2 CSV bounds")
+    else:
+        print(f"  command : Joystick ranges={joystick_ranges.tolist()}, inside raw Nav2 CSV bounds")
+    print("  history : composed 29-D action reproduces the selected 14-D arm target")
 
 
 def _quat_wxyz_to_roll_pitch(quat: np.ndarray) -> tuple[float, float]:
@@ -177,24 +228,36 @@ def run_real(net: str, config_name: str) -> None:
     config = amp.Config(str(config_path))
     if config.msg_type != "hg" or len(config.motor_indices) != 29:
         raise RuntimeError("ArmHack Walk real deployment only supports G1 29DoF HG LowCmd.")
-    if config.command_mode != "fixed" or not config.release_motion_mode:
-        raise RuntimeError("Walk deployment requires fixed command mode and ReleaseMode handoff.")
+    if config.command_mode not in {"fixed", "joystick"} or not config.release_motion_mode:
+        raise RuntimeError("Walk deployment requires fixed/joystick command mode and ReleaseMode handoff.")
 
     pose_path = Path(os.environ["G1_ARMHACK_WALK_POSE_PATH"]).expanduser().resolve()
     contract_path = Path(os.environ["G1_ARMHACK_WALK_CONTRACT_PATH"]).expanduser().resolve()
     pose_name = os.environ.get("G1_ARMHACK_WALK_POSE_NAME", "pos2_down")
-    margin = _env_float("G1_ARMHACK_WALK_JOINT_LIMIT_MARGIN_RAD", 0.05)
-    pose = load_walk_pose(pose_path, pose_name, margin)
+    pose_names, pose_values = load_walk_pose_set(pose_path)
+    if pose_name not in pose_names:
+        raise ValueError(f"POSE_NAME {pose_name!r} not found; available={list(pose_names)}")
+    initial_pose_index = pose_names.index(pose_name)
+    pose = pose_values[initial_pose_index]
     contract = load_contract(contract_path)
     fixed_command = np.asarray(config.cmd_init, dtype=np.float32)
     validate_command(fixed_command, contract)
+    joystick_ranges = np.asarray(
+        [
+            config.joystick_ranges["lin_vel_x"],
+            config.joystick_ranges["lin_vel_y"],
+            config.joystick_ranges["yaw_rate"],
+        ],
+        dtype=np.float32,
+    )
+    validate_joystick_ranges(joystick_ranges, contract)
     startup_move_s = _env_float("G1_ARMHACK_WALK_STARTUP_MOVE_S", 5.0)
+    arm_pose_switch_s = _env_float("G1_ARMHACK_WALK_ARM_POSE_SWITCH_S", 2.0)
     lowstate_timeout_s = _env_float("G1_ARMHACK_WALK_LOWSTATE_TIMEOUT_S", 0.20)
     max_tilt_rad = _env_float("G1_ARMHACK_WALK_MAX_TILT_RAD", 0.60)
-    max_target_speed = _env_float("G1_ARMHACK_WALK_MAX_TARGET_SPEED_RAD_S", 4.0)
     damping_exit_s = _env_float("G1_ARMHACK_WALK_DAMPING_EXIT_S", 1.0)
     joint_print_hz = _env_float("G1_ARMHACK_WALK_JOINT_PRINT_HZ", 1.0)
-    if startup_move_s < 3.0 or lowstate_timeout_s <= 0.0 or max_tilt_rad <= 0.0 or max_target_speed <= 0.0 or damping_exit_s <= 0.0:
+    if startup_move_s < 3.0 or arm_pose_switch_s <= 0.0 or lowstate_timeout_s <= 0.0 or max_tilt_rad <= 0.0 or damping_exit_s <= 0.0:
         raise ValueError("Invalid positive Walk safety/startup parameter.")
 
     class WalkController(amp.Controller):
@@ -202,12 +265,13 @@ def run_real(net: str, config_name: str) -> None:
             self.last_lowstate_time = time.monotonic()
             super().__init__(config)
             self.arm_indices = np.asarray([config.policy_joint_names.index(name) for name in ARM_JOINT_NAMES], dtype=np.int64)
-            self.lower = np.asarray([JOINT_LIMITS_RAD[name][0] + margin for name in config.policy_joint_names], dtype=np.float32)
-            self.upper = np.asarray([JOINT_LIMITS_RAD[name][1] - margin for name in config.policy_joint_names], dtype=np.float32)
-            self.hard_lower = np.asarray([JOINT_LIMITS_RAD[name][0] for name in config.policy_joint_names], dtype=np.float32)
-            self.hard_upper = np.asarray([JOINT_LIMITS_RAD[name][1] for name in config.policy_joint_names], dtype=np.float32)
-            self.previous_target: Optional[np.ndarray] = None
+            self.lower = np.asarray([JOINT_LIMITS_RAD[name][0] for name in config.policy_joint_names], dtype=np.float32)
+            self.upper = np.asarray([JOINT_LIMITS_RAD[name][1] for name in config.policy_joint_names], dtype=np.float32)
             self.command_active = False
+            self.arm_pose_index = initial_pose_index
+            self.arm_pose_start = pose.copy()
+            self.arm_pose_target = pose.copy()
+            self.arm_transition_started = time.monotonic() - arm_pose_switch_s
             self.next_joint_print_time = 0.0
 
         def low_state_hg_handler(self, msg: Any) -> None:
@@ -224,22 +288,34 @@ def run_real(net: str, config_name: str) -> None:
                 raise RuntimeError(f"LowState stale for {age:.3f}s (limit {lowstate_timeout_s:.3f}s).")
             if not np.all(np.isfinite(qj)) or not np.all(np.isfinite(quat)):
                 raise RuntimeError("LowState contains NaN/Inf.")
-            if np.any(qj < self.hard_lower - 0.02) or np.any(qj > self.hard_upper + 0.02):
-                bad = np.flatnonzero((qj < self.hard_lower - 0.02) | (qj > self.hard_upper + 0.02))
+            if np.any(qj < self.lower - 0.02) or np.any(qj > self.upper + 0.02):
+                bad = np.flatnonzero((qj < self.lower - 0.02) | (qj > self.upper + 0.02))
                 raise RuntimeError("Measured joint outside hardware range: " + ", ".join(config.policy_joint_names[i] for i in bad))
             roll, pitch = _quat_wxyz_to_roll_pitch(quat)
             if abs(roll) > max_tilt_rad or abs(pitch) > max_tilt_rad:
                 raise RuntimeError(f"Torso tilt exceeded: roll={roll:.3f}, pitch={pitch:.3f}, limit={max_tilt_rad:.3f}.")
 
-        def _safe_target(self, target: np.ndarray) -> np.ndarray:
+        def _bounded_target(self, target: np.ndarray) -> np.ndarray:
             if not np.all(np.isfinite(target)):
                 raise RuntimeError("Policy/arm target contains NaN/Inf.")
-            clipped = np.clip(target, self.lower, self.upper)
-            if self.previous_target is not None:
-                max_delta = max_target_speed * config.control_dt
-                clipped = self.previous_target + np.clip(clipped - self.previous_target, -max_delta, max_delta)
-            self.previous_target = clipped.copy()
-            return clipped
+            return np.clip(target, self.lower, self.upper)
+
+        def _arm_target_at(self, now: float) -> np.ndarray:
+            alpha = (now - self.arm_transition_started) / arm_pose_switch_s
+            blend = _minimum_jerk(alpha)
+            return self.arm_pose_start + (self.arm_pose_target - self.arm_pose_start) * blend
+
+        def _cycle_arm_pose(self, now: float) -> None:
+            current = self._arm_target_at(now)
+            self.arm_pose_index = (self.arm_pose_index + 1) % len(pose_names)
+            self.arm_pose_start = current.copy()
+            self.arm_pose_target = pose_values[self.arm_pose_index].copy()
+            self.arm_transition_started = now
+            print(
+                f"[ARM POSE] -> {pose_names[self.arm_pose_index]} "
+                f"(minimum-jerk {arm_pose_switch_s:.2f}s)",
+                flush=True,
+            )
 
         def hold_until_enter(self, target_policy: np.ndarray, prompt: str) -> None:
             target_motor = target_policy[config.policy_to_motor_order]
@@ -271,18 +347,24 @@ def run_real(net: str, config_name: str) -> None:
                     key = keys.read_key(config.control_dt)
                     if key.lower() == "q" or self.remote_controller.button[amp.KeyMap.select] == 1:
                         raise KeyboardInterrupt
-            self.previous_target = target_policy.copy()
 
         def run_frame(self, key: str) -> bool:
             if key.lower() == "q":
                 return False
+            now = time.monotonic()
             if key == " ":
+                self._cycle_arm_pose(now)
+            if key.lower() == "v" and config.command_mode == "fixed":
                 self.command_active = not self.command_active
                 state = "FIXED" if self.command_active else "ZERO"
-                print(f"[COMMAND SWITCH] {state}: {(fixed_command if self.command_active else np.zeros(3)).tolist()}", flush=True)
+                command = fixed_command if self.command_active else np.zeros(3, dtype=np.float32)
+                print(f"[COMMAND SWITCH] {state}: {command.tolist()}", flush=True)
             qj, dqj, quat, ang_vel = self._update_state_arrays()
             self._check_state(qj, quat)
-            target_command = fixed_command if self.command_active else np.zeros(3, dtype=np.float32)
+            if config.command_mode == "fixed":
+                target_command = fixed_command if self.command_active else np.zeros(3, dtype=np.float32)
+            else:
+                target_command = self._target_command_physical()
             self.command_physical = self._apply_command_ramp(target_command)
             self.obs[0:3] = ang_vel * config.ang_vel_scale
             self.obs[3:6] = amp.get_gravity_orientation(quat)
@@ -294,8 +376,9 @@ def run_real(net: str, config_name: str) -> None:
             if network_action.shape != (29,) or not np.all(np.isfinite(network_action)):
                 raise RuntimeError("Walk actor output is not finite shape (29,).")
             executed = network_action.copy()
-            executed[self.arm_indices] = (pose - config.default_angles[self.arm_indices]) / config.action_scale
-            target_policy = self._safe_target(config.default_angles + executed * config.action_scale)
+            arm_target = self._arm_target_at(now)
+            executed[self.arm_indices] = (arm_target - config.default_angles[self.arm_indices]) / config.action_scale
+            target_policy = self._bounded_target(config.default_angles + executed * config.action_scale)
             self.action_policy = (target_policy - config.default_angles) / config.action_scale
             self._write_motor_targets(
                 target_policy[config.policy_to_motor_order],
@@ -303,12 +386,11 @@ def run_real(net: str, config_name: str) -> None:
                 config.kds[config.policy_to_motor_order],
             )
             self.send_cmd(self.low_cmd)
-            now = time.monotonic()
             if joint_print_hz > 0.0 and now >= self.next_joint_print_time:
                 self.next_joint_print_time = now + 1.0 / joint_print_hz
                 print(
                     f"[Walk cmd] vx={self.command_physical[0]:+.3f} vy={self.command_physical[1]:+.3f} wz={self.command_physical[2]:+.3f}; "
-                    f"pose={pose_name}", flush=True
+                    f"pose={pose_names[self.arm_pose_index]}", flush=True
                 )
             time.sleep(config.control_dt)
             return True
@@ -325,7 +407,14 @@ def run_real(net: str, config_name: str) -> None:
     print(" ArmHack Walk Real Controller")
     print("============================================================")
     print(f"policy={config.policy_path}")
-    print(f"pose={pose_name}; command starts ZERO; SPACE toggles fixed={fixed_command.tolist()}")
+    print(f"pose={pose_name}; SPACE cycles {' -> '.join(pose_names)}")
+    if config.command_mode == "fixed":
+        print(f"command=fixed; starts ZERO; V toggles fixed={fixed_command.tolist()}")
+    else:
+        print(
+            f"command=joystick; device={config.joystick_device}; "
+            f"ranges={joystick_ranges.tolist()}"
+        )
     print("q/Ctrl-C/remote Select -> low-level damping")
     print("============================================================")
     controller = WalkController()
@@ -346,10 +435,15 @@ def run_real(net: str, config_name: str) -> None:
         controller.move_arms_to_startup(current_policy, startup_policy)
         controller.hold_until_enter(startup_policy, "固定双臂姿态已到达；确认双脚着地后准备以零速度启动 Walk policy。")
         controller.action_policy = (startup_policy - config.default_angles) / config.action_scale
-        controller.previous_target = startup_policy.copy()
+        controller.arm_pose_start = pose.copy()
+        controller.arm_pose_target = pose.copy()
+        controller.arm_transition_started = time.monotonic() - arm_pose_switch_s
         controller.command_physical.fill(0.0)
         start_time = time.monotonic()
-        print("[POLICY ON] 初始速度 [0,0,0]；SPACE 切换固定速度/零速度。")
+        if config.command_mode == "fixed":
+            print("[POLICY ON] 初始速度 [0,0,0]；V 切换固定速度/零速度；SPACE 切换双臂姿态。")
+        else:
+            print("[POLICY ON] Joystick 连续控制速度；SPACE 切换双臂姿态。")
         with amp.TerminalKeyReader() as keys:
             while True:
                 if not controller.run_frame(keys.read_key(0.0)):
@@ -382,7 +476,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--pose-name", default="pos2_down")
+    parser.add_argument("--command-mode", choices=("fixed", "joystick"), default="fixed")
     parser.add_argument("--fixed-command", nargs=3, type=float, default=[0.35, 0.0, 0.0])
+    parser.add_argument("--joystick-lin-x-range", nargs=2, type=float, default=[-0.2, 0.6])
+    parser.add_argument("--joystick-lin-y-range", nargs=2, type=float, default=[-0.3, 0.3])
+    parser.add_argument("--joystick-yaw-range", nargs=2, type=float, default=[-0.5187280216217041, 0.6])
     return parser.parse_args()
 
 
@@ -393,13 +491,17 @@ def main() -> None:
             raise SystemExit("--self-test requires --policy, --poses, --contract and --config.")
         run_self_test(
             args.policy.resolve(), args.poses.resolve(), args.contract.resolve(), args.config.resolve(),
-            args.pose_name, np.asarray(args.fixed_command, dtype=np.float32),
+            args.pose_name, args.command_mode, np.asarray(args.fixed_command, dtype=np.float32),
+            np.asarray(
+                [args.joystick_lin_x_range, args.joystick_lin_y_range, args.joystick_yaw_range],
+                dtype=np.float32,
+            ),
         )
         return
     if not args.net:
         raise SystemExit("Real mode requires the DDS network interface positional argument.")
     if not sys.stdin.isatty():
-        raise SystemExit("Real mode requires an interactive TTY for ENTER/SPACE/q controls.")
+        raise SystemExit("Real mode requires an interactive TTY for ENTER/SPACE/V/q controls.")
     run_real(args.net, args.config_name)
 
 

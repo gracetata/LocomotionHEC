@@ -85,6 +85,40 @@ def _norm_stats(values: np.ndarray) -> dict[str, float]:
     }
 
 
+def _minimum_jerk(alpha: float) -> float:
+    value = float(np.clip(alpha, 0.0, 1.0))
+    return value**3 * (10.0 + value * (-15.0 + 6.0 * value))
+
+
+class InteractiveArmSequencer:
+    """Interruptible SPACE pose cycle used after the shared startup CSV."""
+
+    def __init__(self, pose_ids: list[str], poses: np.ndarray, transition_s: float, start_time: float) -> None:
+        if len(pose_ids) < 2 or poses.shape != (len(pose_ids), len(ARM_JOINT_NAMES)):
+            raise ValueError("Interactive SPACE cycle requires at least two canonical 14-DoF poses.")
+        self.pose_ids = list(pose_ids)
+        self.poses = np.asarray(poses, dtype=np.float64)
+        self.transition_s = float(transition_s)
+        if self.transition_s < 2.0:
+            raise ValueError("Interactive SPACE transition must be at least 2.0 s.")
+        self.active_index = 0
+        self.start_time = float(start_time)
+        self.start_positions = self.poses[0].copy()
+        self.target_positions = self.poses[0].copy()
+
+    def sample(self, now: float) -> np.ndarray:
+        blend = _minimum_jerk((float(now) - self.start_time) / self.transition_s)
+        return self.start_positions + (self.target_positions - self.start_positions) * blend
+
+    def switch_next(self, now: float) -> str:
+        current = self.sample(now)
+        self.active_index = (self.active_index + 1) % len(self.poses)
+        self.start_positions = current.copy()
+        self.target_positions = self.poses[self.active_index].copy()
+        self.start_time = float(now)
+        return self.pose_ids[self.active_index]
+
+
 class ArmHackStandReplay:
     """Apply deterministic arm targets and write MuJoCo Stand evaluation artifacts."""
 
@@ -99,21 +133,32 @@ class ArmHackStandReplay:
         self.csv_path = Path(str(config["armhack_stand_csv_path"])).expanduser().resolve()
         self.manifest_path = Path(str(config["armhack_stand_manifest_path"])).expanduser().resolve()
         self.checkpoint_path = Path(str(config["armhack_stand_checkpoint_path"])).expanduser().resolve()
+        self.checkpoint_sha256 = str(config.get("armhack_stand_checkpoint_sha256", "")).strip().lower()
         self.report_path = Path(str(config["armhack_stand_report_path"])).expanduser().resolve()
         self.plot_path = self.report_path.with_name(f"{self.report_path.stem}__torso_world_6d.png")
         self.trace_path = self.report_path.with_name(f"{self.report_path.stem}__trace.csv")
         self.test_id = str(config.get("armhack_stand_test_id", "all"))
         self.payload_kg = float(config.get("armhack_stand_payload_kg", 0.0))
+        self.interactive = bool(config.get("armhack_stand_interactive_enable", False))
         if not 0.0 <= self.payload_kg <= 3.0:
             raise ValueError("ArmHack Stand payload must be within [0, 3] kg per wrist.")
 
         for path, label in (
             (self.csv_path, "test CSV"),
             (self.manifest_path, "manifest"),
-            (self.checkpoint_path, "checkpoint"),
         ):
             if not path.is_file():
                 raise FileNotFoundError(f"ArmHack Stand {label} does not exist: {path}")
+        if self.checkpoint_path.is_file():
+            actual_checkpoint_sha = _sha256(self.checkpoint_path)
+            if self.checkpoint_sha256 and actual_checkpoint_sha != self.checkpoint_sha256:
+                raise ValueError("ArmHack Stand checkpoint SHA-256 does not match configured identity.")
+            self.checkpoint_sha256 = actual_checkpoint_sha
+        elif len(self.checkpoint_sha256) != 64:
+            raise FileNotFoundError(
+                "ArmHack Stand checkpoint is not packaged and no verified checkpoint SHA-256 was configured: "
+                f"{self.checkpoint_path}"
+            )
 
         missing_policy_joints = sorted(set(ARM_JOINT_NAMES).difference(self.policy_joint_names))
         if missing_policy_joints:
@@ -130,6 +175,37 @@ class ArmHackStandReplay:
         if self.manifest.get("data_scope") != "arm_only_14_dof" or self.manifest.get("contains_full_body_state") is not False:
             raise ValueError("ArmHack Stand manifest must describe arm-only 14-DoF data.")
         self.timeline = self._load_timeline(float(self.csv_times[-1]))
+        self.startup_timeline = [dict(stage) for stage in self.timeline]
+
+        self.policy_active = not self.interactive
+        self.policy_activation_time_s: float | None = None
+        self.startup_complete = not self.interactive
+        self.startup_completion_announced = False
+        self.pending_enter = False
+        self.pending_space = False
+        self.stop_requested = False
+        self.space_switch_count = 0
+        self.auto_enter_s = float(config.get("armhack_stand_interactive_auto_enter_s", -1.0))
+        self.auto_space_interval_s = float(
+            config.get("armhack_stand_interactive_auto_space_interval_s", -1.0)
+        )
+        self.auto_space_max_switches = int(
+            config.get("armhack_stand_interactive_auto_space_max_switches", 0)
+        )
+        self.next_auto_space_time_s: float | None = None
+        self.interactive_sequencer: InteractiveArmSequencer | None = None
+        self.interactive_pose_labels: dict[str, str] = {}
+        self.interactive_events: list[dict[str, float | str]] = []
+        if self.interactive:
+            self._load_interactive_contract()
+            self.timeline = [
+                {
+                    "kind": "damping_standby",
+                    "label": "arms_natural_down_damping_standby",
+                    "start_s": 0.0,
+                    "end_s": float("inf"),
+                }
+            ]
 
         self.last_target = self.csv_targets[0].copy()
         self.last_target_time = 0.0
@@ -140,9 +216,187 @@ class ArmHackStandReplay:
         self.torso_delta_samples: list[np.ndarray] = []
         self.payload_report: dict[str, dict[str, float]] = {}
 
+    def _load_interactive_contract(self) -> None:
+        if self.test_id != "interactive":
+            raise ValueError("Interactive ArmHack Stand requires test_id=interactive.")
+        preset_path = Path(str(self.config.get("armhack_stand_preset_path", ""))).expanduser().resolve()
+        if not preset_path.is_file():
+            raise FileNotFoundError(f"Interactive Stand preset does not exist: {preset_path}")
+        payload = json.loads(preset_path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != 2 or payload.get("data_scope") != "arm_only_14_dof":
+            raise ValueError("Interactive Stand requires arm preset schema v2 / arm_only_14_dof.")
+        if payload.get("arm_joint_names") != ARM_JOINT_NAMES:
+            raise ValueError("Interactive Stand preset joint order does not match the canonical 14-DoF order.")
+        startup = payload.get("startup")
+        if not isinstance(startup, dict) or startup.get("policy_inference_active") is not True:
+            raise ValueError("Interactive Stand startup must mark policy_inference_active=true.")
+        startup_path = (preset_path.parent / str(startup.get("csv", ""))).resolve()
+        if startup_path != self.csv_path:
+            raise ValueError(
+                f"Interactive MuJoCo CSV differs from real deployment startup CSV: {self.csv_path} != {startup_path}"
+            )
+        if not math.isclose(float(startup.get("duration_s", -1.0)), self.csv_duration_s, abs_tol=1.0e-8):
+            raise ValueError("Interactive startup duration differs between preset and CSV.")
+
+        pose_entries = payload.get("poses")
+        if not isinstance(pose_entries, list):
+            raise ValueError("Interactive Stand poses must be a list.")
+        poses_by_id: dict[str, np.ndarray] = {}
+        for entry in pose_entries:
+            pose_id = str(entry.get("id", ""))
+            values = np.asarray(entry.get("positions_rad"), dtype=np.float64)
+            if not pose_id or values.shape != (14,) or not np.all(np.isfinite(values)):
+                raise ValueError(f"Invalid interactive Stand pose: {pose_id}")
+            poses_by_id[pose_id] = values
+            self.interactive_pose_labels[pose_id] = str(entry.get("label_zh", pose_id))
+        damping_pose_id = str(payload.get("damping_pose_id"))
+        ready_pose_id = str(payload.get("ready_pose_id"))
+        cycle_ids = [str(value) for value in payload.get("space_cycle_pose_ids", [])]
+        if damping_pose_id not in poses_by_id or ready_pose_id not in poses_by_id:
+            raise ValueError("Interactive damping/ready pose id is missing from poses.")
+        if len(cycle_ids) < 2 or cycle_ids[0] != ready_pose_id or any(value not in poses_by_id for value in cycle_ids):
+            raise ValueError("Interactive SPACE cycle must start at ready_pose_id and contain valid poses.")
+        if not np.allclose(self.csv_targets[0], poses_by_id[damping_pose_id], rtol=0.0, atol=1.0e-6):
+            raise ValueError("Interactive startup first row is not the natural-down damping pose.")
+        if not np.allclose(self.csv_targets[-1], poses_by_id[ready_pose_id], rtol=0.0, atol=1.0e-6):
+            raise ValueError("Interactive startup last row is not the flat default ready pose.")
+        transition_s = float(self.config.get("armhack_stand_interactive_transition_s", 7.5))
+        self.interactive_sequencer = InteractiveArmSequencer(
+            cycle_ids,
+            np.stack([poses_by_id[pose_id] for pose_id in cycle_ids]),
+            transition_s,
+            self.csv_duration_s,
+        )
+
     @property
     def csv_duration_s(self) -> float:
         return float(self.csv_times[-1])
+
+    @property
+    def policy_inference_enabled(self) -> bool:
+        return self.policy_active
+
+    def key_callback(self, keycode: int) -> None:
+        """GLFW callback: ENTER activates policy/debug, SPACE changes arms, Q stops."""
+        if not self.interactive:
+            return
+        if keycode in {10, 13, 257, 335}:
+            self.pending_enter = True
+        elif keycode == 32:
+            self.pending_space = True
+        elif keycode in {81, 113}:
+            self.stop_requested = True
+
+    def _trim_timeline_at(self, time_s: float) -> None:
+        trimmed: list[dict[str, float | str]] = []
+        for stage in self.timeline:
+            start_s = float(stage["start_s"])
+            end_s = float(stage["end_s"])
+            if start_s >= time_s:
+                continue
+            copied = dict(stage)
+            if end_s > time_s:
+                copied["end_s"] = float(time_s)
+            if float(copied["end_s"]) > start_s:
+                trimmed.append(copied)
+        self.timeline = trimmed
+
+    def _activate_interactive_policy(self, sim_time: float) -> None:
+        if self.policy_active:
+            print("[ArmHack Stand MuJoCo] ENTER ignored: policy/debug mode is already active.", flush=True)
+            return
+        self.policy_active = True
+        self.policy_activation_time_s = float(sim_time)
+        self.startup_complete = False
+        self._trim_timeline_at(sim_time)
+        for stage in self.startup_timeline:
+            shifted = dict(stage)
+            shifted["start_s"] = float(sim_time) + float(stage["start_s"])
+            shifted["end_s"] = float(sim_time) + float(stage["end_s"])
+            self.timeline.append(shifted)
+        assert self.interactive_sequencer is not None
+        self.interactive_sequencer.start_time = float(sim_time) + self.csv_duration_s
+        if self.auto_space_interval_s > 0.0:
+            self.next_auto_space_time_s = (
+                float(sim_time) + self.csv_duration_s + self.auto_space_interval_s
+            )
+        print(
+            "[ArmHack Stand MuJoCo] ENTER -> DEBUG / POLICY ON; "
+            "自然下垂→平直默认→向前伸直→收回平直默认。",
+            flush=True,
+        )
+
+    def process_interaction_requests(self, sim_time: float) -> bool:
+        """Apply queued/automatic keys; return False when Q requested stop."""
+        if not self.interactive:
+            return True
+        if not self.policy_active and self.auto_enter_s >= 0.0 and sim_time >= self.auto_enter_s:
+            self.pending_enter = True
+        if self.pending_enter:
+            self.pending_enter = False
+            self._activate_interactive_policy(sim_time)
+
+        if self.policy_active and self.policy_activation_time_s is not None:
+            elapsed = float(sim_time) - self.policy_activation_time_s
+            if not self.startup_complete and elapsed >= self.csv_duration_s:
+                self.startup_complete = True
+                if not self.startup_completion_announced:
+                    self.startup_completion_announced = True
+                    ready_start = self.policy_activation_time_s + self.csv_duration_s
+                    self.timeline.append(
+                        {
+                            "kind": "interactive_pose_hold",
+                            "label": "P0_symmetric_reference",
+                            "start_s": ready_start,
+                            "end_s": float("inf"),
+                        }
+                    )
+                    print(
+                        "[ArmHack Stand MuJoCo] INIT COMPLETE; SPACE 已解锁，当前为平直默认 P0。",
+                        flush=True,
+                    )
+            if (
+                self.startup_complete
+                and self.next_auto_space_time_s is not None
+                and sim_time >= self.next_auto_space_time_s
+                and self.space_switch_count < self.auto_space_max_switches
+            ):
+                self.pending_space = True
+                self.next_auto_space_time_s += self.auto_space_interval_s
+
+        if self.pending_space:
+            self.pending_space = False
+            if not self.policy_active or not self.startup_complete:
+                print("[ArmHack Stand MuJoCo] SPACE LOCKED until automatic initialization completes.", flush=True)
+            else:
+                assert self.interactive_sequencer is not None
+                self._trim_timeline_at(sim_time)
+                pose_id = self.interactive_sequencer.switch_next(sim_time)
+                transition_end = float(sim_time) + self.interactive_sequencer.transition_s
+                self.timeline.extend(
+                    [
+                        {
+                            "kind": "interactive_space_transition",
+                            "label": f"SPACE_to_{pose_id}",
+                            "start_s": float(sim_time),
+                            "end_s": transition_end,
+                        },
+                        {
+                            "kind": "interactive_pose_hold",
+                            "label": pose_id,
+                            "start_s": transition_end,
+                            "end_s": float("inf"),
+                        },
+                    ]
+                )
+                self.space_switch_count += 1
+                print(
+                    f"[ArmHack Stand MuJoCo] SPACE -> {pose_id} "
+                    f"({self.interactive_pose_labels.get(pose_id, pose_id)}), "
+                    f"minimum-jerk {self.interactive_sequencer.transition_s:.2f}s",
+                    flush=True,
+                )
+        return not self.stop_requested
 
     def _load_csv(self) -> tuple[np.ndarray, np.ndarray]:
         with self.csv_path.open("r", encoding="utf-8", newline="") as handle:
@@ -188,9 +442,35 @@ class ArmHackStandReplay:
             "synthesized_trajectories",
             "randomized_trajectories",
             "down_to_horizontal",
+            "default_forward_return_down",
+            "interactive",
         }
-        if self.test_id in collection_modes:
-            metadata = files.get(self.test_id, {})
+        if self.test_id.startswith("generated_random_trajectory_"):
+            generated_metadata_path = self.csv_path.with_suffix(".json")
+            if not generated_metadata_path.is_file():
+                raise FileNotFoundError(
+                    f"Generated ArmHack Stand trajectory metadata is missing: {generated_metadata_path}"
+                )
+            generated_metadata = json.loads(generated_metadata_path.read_text(encoding="utf-8"))
+            if (
+                generated_metadata.get("schema_version") != 1
+                or generated_metadata.get("data_scope") != "arm_only_14_dof"
+                or generated_metadata.get("contains_full_body_state") is not False
+            ):
+                raise ValueError(
+                    f"Unsupported generated ArmHack Stand trajectory metadata: {generated_metadata_path}"
+                )
+            expected_csv_sha = generated_metadata.get("output", {}).get("csv_sha256")
+            actual_csv_sha = _sha256(self.csv_path)
+            if expected_csv_sha != actual_csv_sha:
+                raise ValueError(
+                    "Generated ArmHack Stand trajectory CSV SHA-256 does not match its metadata: "
+                    f"expected={expected_csv_sha}, actual={actual_csv_sha}"
+                )
+            timeline = list(generated_metadata.get("timeline") or [])
+        elif self.test_id in collection_modes:
+            metadata_key = "interactive_startup" if self.test_id == "interactive" else self.test_id
+            metadata = files.get(metadata_key, {})
             timeline = list(metadata.get("detailed_timeline") or metadata.get("timeline") or [])
         elif "_item" in self.test_id:
             mode, item_text = self.test_id.rsplit("_item", 1)
@@ -274,7 +554,18 @@ class ArmHackStandReplay:
         return np.concatenate((position, rpy))
 
     def sample_target(self, time_s: float) -> np.ndarray:
-        sample_time = float(np.clip(time_s, 0.0, self.csv_times[-1]))
+        if self.interactive:
+            if not self.policy_active or self.policy_activation_time_s is None:
+                return self.csv_targets[0].copy()
+            elapsed = max(float(time_s) - self.policy_activation_time_s, 0.0)
+            if elapsed <= self.csv_duration_s:
+                sample_time = elapsed
+            else:
+                assert self.interactive_sequencer is not None
+                return self.interactive_sequencer.sample(time_s)
+        else:
+            sample_time = float(time_s)
+        sample_time = float(np.clip(sample_time, 0.0, self.csv_times[-1]))
         upper_index = int(np.searchsorted(self.csv_times, sample_time, side="left"))
         upper_index = min(upper_index, len(self.csv_times) - 1)
         lower_index = max(upper_index - 1, 0)
@@ -291,7 +582,14 @@ class ArmHackStandReplay:
         raw_arm_action = (target - self.default_angles[self.arm_policy_indices]) / self.action_scale
         composed[self.arm_policy_indices] = raw_arm_action.astype(np.float32)
         self.last_target = target
-        self.last_target_time = float(time_s)
+        if self.interactive:
+            self.last_target_time = (
+                0.0
+                if self.policy_activation_time_s is None
+                else min(max(float(time_s) - self.policy_activation_time_s, 0.0), self.csv_duration_s)
+            )
+        else:
+            self.last_target_time = float(time_s)
         return composed
 
     def record_control_sample(
@@ -319,10 +617,18 @@ class ArmHackStandReplay:
         label = str(stage["label"])
         if "transition" in kind or "bridge" in kind:
             return "#B0BEC5"
+        if kind == "damping_standby":
+            return "#455A64"
         if label == "arms_down_hold":
+            return "#2F4B7C"
+        if label in {"arms_default_initial_hold", "arms_default_returned_hold"}:
+            return "#4E79A7"
+        if label == "arms_natural_down_hold":
             return "#2F4B7C"
         if label == "arms_forward_horizontal_hold":
             return "#00A087"
+        if label in {"arms_flat_default_hold", "arms_flat_default_ready_hold", "P0_symmetric_reference"}:
+            return "#4E79A7"
         if label.startswith("representative_pose"):
             return "#4E79A7"
         if label.startswith("synth_pose"):
@@ -335,6 +641,8 @@ class ArmHackStandReplay:
             return "#F28E2B"
         if label.startswith("randomized_trajectory"):
             return "#EDC948"
+        if label.startswith("waypoint_"):
+            return "#76B7B2"
         return "#BAB0AC"
 
     @staticmethod
@@ -342,13 +650,36 @@ class ArmHackStandReplay:
         kind = str(stage["kind"])
         label = str(stage["label"])
         if "transition" in kind:
-            return "D→H" if label == "arms_down_to_forward_horizontal" else "T"
+            transition_labels = {
+                "arms_down_to_forward_horizontal": "D→H",
+                "arms_default_to_forward_horizontal": "P0→F",
+                "arms_forward_horizontal_to_default": "F→P0",
+                "arms_default_to_natural_down": "P0→AD",
+                "arms_natural_down_to_flat_default": "AD→P0",
+                "arms_flat_default_to_forward_horizontal": "P0→F",
+                "arms_forward_horizontal_to_flat_default": "F→P0",
+            }
+            if label.startswith("SPACE_to_"):
+                return "SPACE"
+            return transition_labels.get(label, "T")
         if "bridge" in kind:
             return "B"
         if label == "arms_down_hold":
             return "AD"
+        if label == "arms_default_initial_hold":
+            return "P0"
+        if label == "arms_default_returned_hold":
+            return "P0R"
+        if label == "arms_natural_down_hold":
+            return "AD"
         if label == "arms_forward_horizontal_hold":
             return "AH"
+        if label == "arms_natural_down_damping_standby":
+            return "DAMP"
+        if label in {"arms_flat_default_hold", "arms_flat_default_ready_hold", "P0_symmetric_reference"}:
+            return "P0"
+        if label.startswith("waypoint_"):
+            return f"W{label.split(':', 1)[0].rsplit('_', 1)[-1]}"
         replacements = (
             ("representative_pose_", "RP"),
             ("synth_pose_", "SP"),
@@ -470,6 +801,8 @@ class ArmHackStandReplay:
     def finalize(self, generic_report: dict[str, Any], sim_time: float, control_dt: float) -> dict[str, Any]:
         if not self.joint_samples or not self.torso_delta_samples:
             raise RuntimeError("ArmHack Stand MuJoCo report has no control samples.")
+        if self.interactive:
+            self._trim_timeline_at(float(sim_time))
         joint_samples = np.stack(self.joint_samples)
         target_samples = np.stack(self.arm_target_samples)
         torso_delta = np.stack(self.torso_delta_samples)
@@ -501,9 +834,9 @@ class ArmHackStandReplay:
             "rpy_displacement_norm": np.linalg.norm(torso_delta[:, 3:], axis=1),
         }
         torso_norm_statistics = {name: _norm_stats(values) for name, values in torso_norms.items()}
-        complete = float(self.sample_times[-1]) >= self.csv_duration_s - 0.5 * float(control_dt)
+        complete = self.last_target_time >= self.csv_duration_s - 0.5 * float(control_dt)
         healthy = bool(generic_report.get("health", {}).get("healthy", False))
-        checkpoint_sha = _sha256(self.checkpoint_path)
+        checkpoint_sha = self.checkpoint_sha256
         policy_path = Path(str(self.config["policy_path"])).expanduser().resolve()
 
         result: dict[str, Any] = {
@@ -523,6 +856,10 @@ class ArmHackStandReplay:
             "sim_time_s": float(sim_time),
             "csv_duration_s": self.csv_duration_s,
             "complete_csv_playback": complete,
+            "interactive": self.interactive,
+            "policy_activation_time_s": self.policy_activation_time_s,
+            "startup_complete": self.startup_complete,
+            "space_switch_count": self.space_switch_count,
             "healthy": healthy,
             "health_failure_count": 0 if healthy else 1,
             "payload_kg_per_wrist": self.payload_kg,
@@ -568,13 +905,14 @@ class ArmHackStandReplay:
             f"- manifest schema：`v{result['manifest_schema_version']}`，SHA-256 `{result['manifest_sha256']}`",
             f"- 控制样本：`{result['control_samples']}`，控制周期 `{result['control_dt_s']:.6f} s`",
             f"- CSV 时长：`{result['csv_duration_s']:.3f} s`，完整播放：`{result['complete_csv_playback']}`",
+            f"- 交互状态机：`{result['interactive']}`；policy 激活时刻：`{result['policy_activation_time_s']}`；初始化完成：`{result['startup_complete']}`；SPACE 次数：`{result['space_switch_count']}`",
             f"- 左/右 wrist-yaw 末端附加质量：各 `{result['payload_kg_per_wrist']:.3f} kg`",
             f"- MuJoCo health：`{result['healthy']}`，health failure count：`{result['health_failure_count']}`，fall time：`{health.get('fall_time')}`",
             "- 输入范围：CSV 只覆盖 14 个双臂关节；15 个腰腿关节仍由 policy 控制。覆盖后的 29 维 raw action 会写回下一帧 `last_action`。",
             "",
             "## 结论",
             "",
-            f"- 完整稳定通过：`{bool(result['complete_csv_playback'] and result['healthy'])}`。判据为完整播放 schema v5 CSV 且 MuJoCo health 全程有效。",
+            f"- 完整稳定通过：`{bool(result['complete_csv_playback'] and result['healthy'])}`。判据为完整执行初始化 CSV 且 MuJoCo health 全程有效。",
             f"- 最低 root 高度：`{float(health.get('min_root_height', 0.0)):.6f} m`；最大绝对 roll/pitch：`{float(health.get('max_abs_roll', 0.0)):.6f} / {float(health.get('max_abs_pitch', 0.0)):.6f} rad`。",
             f"- torso 水平位移 RMS/最大值：`{norms['horizontal_translation_norm']['rms']:.6f} / {norms['horizontal_translation_norm']['max']:.6f} m`。",
             f"- torso pitch 位移 RMS/最大绝对值：`{torso['delta_pitch_w']['rms']:.6f} / {torso['delta_pitch_w']['max_abs']:.6f} rad`。",
@@ -652,7 +990,7 @@ class ArmHackStandReplay:
             "",
             "## 结论边界",
             "",
-            "该报告验证的是当前 MuJoCo XML、PD 参数与固定 schema v5 输入下的 sim2sim 行为。它不替代 IsaacLab 报告，也不代表真实机器人性能。若 `complete_csv_playback=False` 或 `healthy=False`，不能判定该测试项完整稳定通过。",
+            "该报告验证的是当前 MuJoCo XML、PD 参数与 schema v5 双臂输入下的 sim2sim 行为。交互模式还验证 ENTER/SPACE 状态机，但不替代真机吊架测试。若 `complete_csv_playback=False` 或 `healthy=False`，不能判定该测试项完整稳定通过。",
             "",
         ]
         self.report_path.parent.mkdir(parents=True, exist_ok=True)

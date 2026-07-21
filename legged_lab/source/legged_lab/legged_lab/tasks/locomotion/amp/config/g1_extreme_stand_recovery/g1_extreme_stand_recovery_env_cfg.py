@@ -47,6 +47,18 @@ PERTURBED_BODY_NAMES = [
     "right_knee_link",
 ]
 
+DEFAULT_CARTESIAN_KEY_BODY_NAMES = [
+    "torso_link",
+    "left_knee_link",
+    "right_knee_link",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link",
+    "left_elbow_link",
+    "right_elbow_link",
+    "left_wrist_yaw_link",
+    "right_wrist_yaw_link",
+]
+
 
 @configclass
 class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg):
@@ -67,6 +79,9 @@ class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPrior
         )
         foot_sensor_cfg = SceneEntityCfg(
             "contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+        cartesian_key_body_cfg = SceneEntityCfg(
+            "robot", body_names=DEFAULT_CARTESIAN_KEY_BODY_NAMES, preserve_order=True
         )
 
         # Keep the original deployment contract explicit at the task boundary.
@@ -96,6 +111,26 @@ class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPrior
             ),
         )
         self.events.reset_from_ref = None
+
+        # Cache the unperturbed asset-default Cartesian pose before any reset
+        # noise is sampled.  The foot reference is separate so its exact
+        # default planar distance is available without a hard-coded number.
+        self.events.cache_default_cartesian_pose = EventTerm(
+            func=mdp.cache_default_key_body_offsets,
+            mode="startup",
+            params={
+                "asset_cfg": cartesian_key_body_cfg,
+                "reference_attr": recovery_rewards.DEFAULT_CARTESIAN_REFERENCE_ATTR,
+            },
+        )
+        self.events.cache_default_feet_pose = EventTerm(
+            func=mdp.cache_default_key_body_offsets,
+            mode="startup",
+            params={
+                "asset_cfg": foot_asset_cfg,
+                "reference_attr": recovery_rewards.DEFAULT_FEET_REFERENCE_ATTR,
+            },
+        )
 
         # Additive joint offsets are required: multiplicative noise would leave
         # every zero-valued default joint unchanged.  The three disjoint reset
@@ -294,8 +329,30 @@ class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPrior
         self.rewards.alive = RewTerm(func=mdp.is_alive, weight=1.0)
         self.rewards.default_joint_pose_exp = RewTerm(
             func=recovery_rewards.default_joint_pose_exp,
+            weight=5.0,
+            params={"std": 0.25, "asset_cfg": full_joint_cfg},
+        )
+        self.rewards.default_leg_joint_pose_exp = RewTerm(
+            func=recovery_rewards.default_joint_pose_exp,
+            weight=3.0,
+            params={"std": 0.18, "asset_cfg": leg_joint_cfg},
+        )
+        self.rewards.default_key_body_pose_exp = RewTerm(
+            func=recovery_rewards.default_key_body_pose_exp,
             weight=2.5,
-            params={"std": 0.35, "asset_cfg": full_joint_cfg},
+            params={
+                "std": 0.12,
+                "asset_cfg": cartesian_key_body_cfg,
+                "reference_attr": recovery_rewards.DEFAULT_CARTESIAN_REFERENCE_ATTR,
+            },
+        )
+        self.rewards.default_feet_distance_l2 = RewTerm(
+            func=recovery_rewards.default_feet_distance_l2,
+            weight=-8.0,
+            params={
+                "asset_cfg": foot_asset_cfg,
+                "reference_attr": recovery_rewards.DEFAULT_FEET_REFERENCE_ATTR,
+            },
         )
         self.rewards.track_torso_lin_vel_xy_exp = RewTerm(
             func=mdp.track_torso_lin_vel_xy_exp,

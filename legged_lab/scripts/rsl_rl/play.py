@@ -562,6 +562,7 @@ class _ArmHackStandJointFluctuationReport:
                 "synthesized_trajectories",
                 "randomized_trajectories",
                 "down_to_horizontal",
+                "default_forward_return_down",
             }:
                 file_metadata = files.get(self._test_id, {})
                 timeline = list(file_metadata.get("detailed_timeline") or file_metadata.get("timeline") or [])
@@ -622,6 +623,10 @@ class _ArmHackStandJointFluctuationReport:
             return "#B0BEC5"
         if label == "arms_down_hold":
             return "#2F4B7C"
+        if label in {"arms_default_initial_hold", "arms_default_returned_hold"}:
+            return "#4E79A7"
+        if label == "arms_natural_down_hold":
+            return "#2F4B7C"
         if label == "arms_forward_horizontal_hold":
             return "#00A087"
         if label.startswith("representative_pose"):
@@ -643,12 +648,24 @@ class _ArmHackStandJointFluctuationReport:
         kind = str(stage["kind"])
         label = str(stage["label"])
         if "transition" in kind:
-            return "D→H" if label == "arms_down_to_forward_horizontal" else "T"
+            transition_labels = {
+                "arms_down_to_forward_horizontal": "D→H",
+                "arms_default_to_forward_horizontal": "P0→F",
+                "arms_forward_horizontal_to_default": "F→P0",
+                "arms_default_to_natural_down": "P0→AD",
+            }
+            return transition_labels.get(label, "T")
         if "bridge" in kind:
             return "B"
         if label == "final_hold":
             return "H"
         if label == "arms_down_hold":
+            return "AD"
+        if label == "arms_default_initial_hold":
+            return "P0"
+        if label == "arms_default_returned_hold":
+            return "P0R"
+        if label == "arms_natural_down_hold":
             return "AD"
         if label == "arms_forward_horizontal_hold":
             return "AH"

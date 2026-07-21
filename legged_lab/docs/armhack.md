@@ -1,6 +1,6 @@
 # ArmHack 任务说明
 
-> 本文分为 Walk 动态任务、Stand 静态任务和附件历史原文三部分。当前实现以第一、二部分和 `armhack_train.md` 为准；Stand 第三阶段真机鲁棒训练入口已完成 smoke，但尚未完成正式训练。历史记录中的旧参数仅用于追溯。
+> 本文分为 Walk 动态任务、Stand 静态任务和附件历史原文三部分。当前实现以第一、二部分和 `armhack_train.md` 为准；Stand 第三阶段真机鲁棒训练已完成，最终模型已归档到本机 `checkpoint/stand/model_2999.pt`；第四阶段自然下垂到平直 P0 的续训入口已完成 smoke，正式续训尚未启动。历史记录中的旧参数仅用于追溯，同名 checkpoint 必须用完整路径和 SHA 区分。
 
 ## 第一部分：Walk 动态任务
 
@@ -118,7 +118,7 @@ MuJoCo 通用回放没有复现环境侧 14 维固定手臂覆盖，也不能替
 
 ### 任务目标与控制边界
 
-静态任务的目标不是让策略复现手臂动作，而是让机器人在速度指令恒为零时，对脚本强制施加的双臂运动进行下肢和腰部补偿：双脚尽量保持原地双支撑，躯干姿态、角速度、高度和世界系水平位置尽可能稳定，并在完整手臂轨迹期间不摔倒。第一阶段任务为 `LeggedLab-Isaac-AMP-G1-StandPerturb-v0`；当前从 `model_2999.pt` 续训的第二阶段任务为 `LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0`，新增了范围内随机姿态、姿态插值轨迹和手臂末端负载。
+静态任务的目标不是让策略复现手臂动作，而是让机器人在速度指令恒为零时，对脚本强制施加的双臂运动进行下肢和腰部补偿：双脚尽量保持原地双支撑，躯干姿态、角速度、高度和世界系水平位置尽可能稳定，并在完整手臂轨迹期间不摔倒。第一阶段任务为 `LeggedLab-Isaac-AMP-G1-StandPerturb-v0`；第二阶段 `LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-v0` 加入范围内随机姿态、插值轨迹和末端负载；第三阶段 `LeggedLab-Isaac-AMP-G1-StandRobust-v0` 加入外力和关节随机化；第四阶段 `LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0` 专门修复真机自然下垂初始状态到平直 P0 的适应性。
 
 控制边界如下：
 
@@ -128,6 +128,7 @@ MuJoCo 通用回放没有复现环境侧 14 维固定手臂覆盖，也不能替
 实际执行：保留腿部和腰部 15 维；14 维手臂 action 被 CSV 目标覆盖
 第一阶段手臂来源：Reference Data/ArmHack/StandPerturb/g1_arm_trajectory_named_50hz.csv
 第二阶段手臂来源：Reference Data/ArmHack/StandPerturb/RandomizedTraining/random_arm_pose_bank_seed20260715.json
+第四阶段 AD/P0 来源：Reference Data/ArmHack/StandPerturb/RealDeployment/stand_arm_presets.json
 速度命令：vx=0、vy=0、wz=0
 ```
 
@@ -242,7 +243,17 @@ cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
 bash scripts/train_g1_armhack_stand_robust.sh
 ```
 
-默认执行 `4096 env × 3000 iteration`，使用 `5e-5` 学习率和 `0.001` 的冻结输入策略 KL。2026-07-18 已完成最终配置的 `8 env × 1 iteration` 真实 smoke：startup event 表包含 actuator gain、joint parameter 和左右腕 payload 三项随机化，interval event 包含 torso wrench，奖励表确认摔倒惩罚为 `-500`；共收集 192 step、完成 PPO 更新并保存 `model_0.pt`。smoke 只证明配置、外力、随机化、checkpoint 加载、PPO 和保存链可运行，不代表鲁棒策略已经训练完成。完整命令、可调参数和证据路径见 `armhack_train.md` 第 17 节。
+默认执行 `4096 env × 3000 iteration`，使用 `5e-5` 学习率和 `0.001` 的冻结输入策略 KL。最终配置先完成 `8 env × 1 iteration` 真实 smoke，随后于 2026-07-18 在 HEC-5090 完成正式训练；最终 `model_2999.pt` 已归档到本机 `checkpoint/stand/model_2999.pt`，大小 `14,825,781 bytes`，SHA-256 为 `146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f`。完整命令、随机化参数和证据路径见 `armhack_train.md` 第 17 节。
+
+### Stand 第四阶段：自然下垂初始化与不同速度同步抬臂
+
+真机部署的真实初始状态是机器人直立、双臂自然下垂，而第三阶段 reset 仍从 512 姿态库随机取样，不能保证策略专门适应自然下垂。2026-07-21 新增 Stand-only 任务 `LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0`，从第三阶段正式 `checkpoint/stand/model_2999.pt`（SHA-256 `146aca1f547ce...`）做 policy-only 续训。
+
+每个 episode 保持原 20 s：reset 先把双臂实际关节状态无跳变地写成共享部署预设 `AD_natural_down`，直立腰腿仍按 Stand 默认状态初始化；随机保持 `2–5 s` 后，左右双臂使用同一个 minimum-jerk phase 同时上升，并以每环境独立采样的 `3–9 s` 时长到达共享 `P0_symmetric_reference`，随后保持 P0。这样并行训练同时覆盖快慢不同的抬臂速度，又保证两臂同步开始和结束。
+
+课程前 500 iteration 只训练 AD 静止站立，随后 500 iteration 把外部轨迹时钟从 0 线性升到 1，剩余 1000 iteration 使用完整速度分布。第三阶段的腕端负载、torso 外力、actuator gain 和关节 friction/armature 随机化全部保留。policy 仍只有当前 96 维状态，不接收 P0 目标、等待时间、抬臂时长、phase 或任何未来手臂信息。
+
+新入口 `scripts/train_g1_armhack_stand_down_to_default.sh` 已通过本机 `8 env × 1 iteration` 真实 Isaac smoke：8 个环境均完成 `AD→P0`，共收集 192 step、完成 PPO 更新并保存 checkpoint，短 rollout 中没有 `base_height` 或 `bad_orientation` 终止。smoke 使用的 `0.3–0.5 s` 是为了在 24 step 内走完全程，正式默认仍是 `3–9 s`；smoke 的 `model_0.pt` 不可部署。完整续训命令和证据路径见 `armhack_train.md` 第 1.1.11 节。
 
 ### Stand 的 MuJoCo sim2sim 验证
 
@@ -278,6 +289,39 @@ USE_GLFW=True REAL_TIME=True \
 bash scripts/val_mujoco_g1_armhack_stand.sh
 ```
 
+2026-07-20 从 HEC-5090 指定项目同步了 MuJoCo 与真机部署入口，并在当前第三阶段 `model_2999.pt`（SHA-256 `146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f`）上新增 `MODE=generated_random_trajectory`。该模式不是逐关节独立乱采样：它从训练使用的 512 个完整 14-DoF 双臂姿态中按 seed 无放回选点，用速度受限的五次 minimum-jerk 插值相连。`RANDOM_WAYPOINTS=N` 对应 `N-1` 条随机过渡；同一 seed 可复现，改变 seed 可继续扩充。输出只含 `time_s + 14 个双臂关节`，保存在：
+
+```text
+Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/trajectories/generated/
+```
+
+新终端无头测试与 GUI 可视化分别为：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate gmr
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+export STAND_CKPT="$PWD/../checkpoint/stand/model_2999.pt"
+
+# 无头完整测试
+CHECKPOINT="$STAND_CKPT" MODE=generated_random_trajectory \
+RANDOM_SEED=20260720 RANDOM_WAYPOINTS=8 \
+RANDOM_HOLD_S=0.5 RANDOM_TRANSITION_S=2.0 \
+PAYLOAD_KG=0 USE_GLFW=False REAL_TIME=False \
+bash scripts/val_mujoco_g1_armhack_stand.sh
+
+# GUI 使用同一条确定的随机轨迹
+CHECKPOINT="$STAND_CKPT" MODE=generated_random_trajectory \
+RANDOM_SEED=20260720 RANDOM_WAYPOINTS=8 \
+RANDOM_HOLD_S=0.5 RANDOM_TRANSITION_S=2.0 \
+PAYLOAD_KG=0 USE_GLFW=True REAL_TIME=True \
+bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+双臂轨迹的硬范围来自 512 姿态库：左臂 pitch/roll/yaw/elbow/wrist-roll/wrist-pitch/wrist-yaw 分别为 `[-0.811248,0.279171]`、`[0.437796,1.064786]`、`[-0.654099,0.123821]`、`[-0.938281,0.441631]`、`[0.248385,0.867490]`、`[-0.252484,0.747216]`、`[-0.969488,0.047236] rad`；右臂对应范围为 `[-0.899764,0.280394]`、`[-0.990113,-0.430222]`、`[-0.123126,0.691010]`、`[-0.594729,0.483144]`、`[-0.867418,-0.249536]`、`[-0.252412,0.612142]`、`[-0.046738,1.034754] rad`。完整逐关节速度上限、HEC 同步命令、真机离线 `DRY_RUN` 命令和两组新 MuJoCo 实测结果见 `armhack_train.md` 第 1.1.9 节。
+
+当前已实跑 seed `20260720`（8 个姿态点、0 kg、20.56 s）和 `20260721`（10 个姿态点、每侧 1 kg、24.10 s）；两组都完整播放、`healthy=True`、无摔倒。第二组最大 pitch 为 `0.118 rad`，明显高于第一组的 `0.044 rad`，因此结果只能说明新测试链可用，不能据此宣称真机带载稳定。
+
 完整的 0/1 kg 命令、逐项 5 秒轨迹命令、导出目录、报告路径和代码边界见 `armhack_train.md` 第 1.1.9 节。
 
 ### 双臂下垂到向前放平专项测试
@@ -300,6 +344,47 @@ special/arms_down_to_forward_horizontal_20s_50hz.csv
 
 两边都通过“完整站立且不触发终止”的最低条件，但放平保持段出现了持续前倾：IsaacLab 的 pitch 位移 RMS 约 `5.79°`、最大约 `8.76°`。因此不能只写成“稳定通过”；更准确的结论是**没有摔倒，但躯干姿态精度未达到 3° RMS 建议线**。完整的新终端命令、GUI/视频方式、报告和 6D 阶段曲线见 `armhack_train.md` 第 1.1.7.1 节。
 
+### 默认→前伸→收回→自然下垂专项测试
+
+2026-07-21 新增 `MODE=default_forward_return_down`，顺序固定为：默认姿态保持 5 s、双臂同时用 6.5 s minimum-jerk 向前伸直、前伸保持 5 s、同时收回默认姿态 6.5 s、默认姿态保持 5 s、同时移动到自然下垂 6.5 s、下垂保持 5 s。总长 `39.5 s / 1976 帧`，只覆盖 14 个双臂关节，不进入默认 `MODE=all`。
+
+默认目标来自 S3 G1 机器人配置，前伸目标复用已验证的左右实测 7-DoF 组合，自然下垂目标来自原始双臂数据 `404.897585 s`。专项 CSV 为：
+
+```text
+Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/
+special/arms_default_forward_return_down_39p5s_50hz.csv
+```
+
+MuJoCo GUI 命令：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate gmr
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+export STAND_CKPT="$PWD/../checkpoint/stand/model_2999.pt"
+
+CHECKPOINT="$STAND_CKPT" MODE=default_forward_return_down PAYLOAD_KG=0 \
+USE_GLFW=True REAL_TIME=True \
+bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+当前第三阶段模型的 MuJoCo 无负载实测完整播放、`healthy=True`、无摔倒；水平位移 RMS/最大值为 `0.03319/0.04960 m`，pitch 位移 RMS/最大值为 `0.05563/0.11148 rad`。这表示能够完成动作并站住，但最大 pitch 约 `6.39°`，尚不能称为高精度躯干稳定。IsaacLab、MuJoCo 无头报告、GUI、视频命令和逐阶段数据见 `armhack_train.md` 第 1.1.7.2 节。
+
+### MuJoCo/真机统一 Enter/Space 状态机
+
+2026-07-21 已把 MuJoCo 和真机 Stand 入口对齐到同一份 schema v2 双臂预设和同一份初始化 CSV。顺序固定为：自然下垂阻尼/待机；按一次 `ENTER` 后启动最新鲁棒 actor，并自动执行 `自然下垂→平直默认 P0→向前伸直 F→收回平直默认 P0`；25.5 s 初始化完成后才解锁 `SPACE`，随后按 `P0→P1→P2→P3→P0` 循环。三段初始化和每次 SPACE 过渡均为 7.5 s minimum-jerk。MuJoCo GUI 命令为：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate gmr
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+MODE=interactive bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+当前 MuJoCo 自动 Enter/两次 Space 的 50 s 回归得到 `startup_complete=True`、`space_switch_count=2`、`healthy=True`、无摔倒。真机入口默认使用 `checkpoint/stand/stand_robust_model_2999.onnx`；目前只完成 `DRY_RUN`，没有初始化 DDS 或向机器人发指令。完整真机安全顺序和无头测试命令见 `armhack_stand_real_deployment.md`。
+
+真机目标发送语义已与 HEC-5090 的通用 `deploy_real_g1_amp_onnx.sh` 对齐：最终 29DoF 目标按 `default_angles + action * action_scale` 直接下发，不再做 `0.05 rad` 内缩裁剪，也不再做 `4.0 rad/s` 逐帧目标限速。双臂初始化与 SPACE 切换仍使用 7.5 s minimum-jerk 轨迹；状态超时、非有限值、实测关节越硬范围、躯干倾角和接管前姿态检查仍保留。
+
 ## 两个任务的共享数据、环境与归档约定
 
 附件以下内容作为历史任务与训练记录保留。当前可运行实现以本节和 `armhack_train.md` 为准。
@@ -317,8 +402,11 @@ legged_lab/Reference Data/ArmHack/
 │   └── TestData/ArmOnly/
 │       ├── poses/{representative,synthesized,randomized}/
 │       ├── trajectories/{representative,synthesized,randomized}/
+│       ├── trajectories/generated/
 │       ├── sequences/
 │       ├── special/arms_down_to_forward_horizontal_20s_50hz.csv
+│       ├── special/arms_default_forward_return_down_39p5s_50hz.csv
+│       ├── special/arms_down_flat_forward_return_flat_25p5s_50hz.csv
 │       └── manifest.json
 └── WalkPerturbFinetune/
     ├── g1_arm_pose_set.json

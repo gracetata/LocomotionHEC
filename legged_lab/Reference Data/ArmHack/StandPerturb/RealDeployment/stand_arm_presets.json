@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "data_scope": "arm_only_14_dof",
-  "description": "ArmHack Stand 真机部署用双臂预设。空格键按列表循环切换，运行时在当前目标与下一姿态之间生成 minimum-jerk 轨迹。",
+  "description": "ArmHack Stand MuJoCo/真机共享双臂状态机。ENTER 后用固定 CSV 完成自然下垂→平直默认→向前伸直→收回平直默认；初始化结束后 SPACE 按指定列表循环切换。",
   "arm_joint_names": [
     "left_shoulder_pitch_joint",
     "left_shoulder_roll_joint",
@@ -18,15 +18,76 @@
     "right_wrist_pitch_joint",
     "right_wrist_yaw_joint"
   ],
-  "default_transition_s": 4.0,
+  "default_transition_s": 7.5,
+  "damping_pose_id": "AD_natural_down",
+  "ready_pose_id": "P0_symmetric_reference",
+  "startup": {
+    "csv": "../TestData/ArmOnly/special/arms_down_flat_forward_return_flat_25p5s_50hz.csv",
+    "duration_s": 25.5,
+    "sequence_pose_ids": [
+      "AD_natural_down",
+      "P0_symmetric_reference",
+      "F_forward_horizontal",
+      "P0_symmetric_reference"
+    ],
+    "policy_inference_active": true
+  },
+  "space_cycle_pose_ids": [
+    "P0_symmetric_reference",
+    "P1_left_arm_reach",
+    "P2_bilateral_asymmetric",
+    "P3_left_arm_extended"
+  ],
   "poses": [
     {
+      "id": "AD_natural_down",
+      "label_zh": "自然下垂阻尼待机姿态",
+      "source": "../TestData/ArmOnly/special/arms_down_flat_forward_return_flat_25p5s_50hz.csv:first_row",
+      "positions_rad": [
+        0.243184,
+        0.321956,
+        -0.107067,
+        0.736311,
+        0.066393,
+        0.049699,
+        0.006591,
+        0.252424,
+        -0.314957,
+        0.113467,
+        0.698776,
+        -0.067903,
+        0.050154,
+        -0.001546
+      ]
+    },
+    {
       "id": "P0_symmetric_reference",
-      "label_zh": "对称基准姿态",
+      "label_zh": "双臂平直默认姿态",
       "source": "../TestData/ArmOnly/poses/representative/representative_arm_pose_01_hold20s_50hz.csv:first_row",
       "positions_rad": [
         0.277447, 0.777596, -0.229618, -0.47545, 0.847381, 0.400141, 0.046355,
         0.27819, -0.778411, 0.228839, -0.473796, -0.848471, 0.400597, -0.046559
+      ]
+    },
+    {
+      "id": "F_forward_horizontal",
+      "label_zh": "双臂同时向前伸直",
+      "source": "../TestData/ArmOnly/special/arms_down_to_forward_horizontal_20s_50hz.csv:last_row",
+      "positions_rad": [
+        -0.583009,
+        0.908344,
+        -0.328727,
+        -0.355931,
+        0.699831,
+        0.576777,
+        -0.910286,
+        -0.560059,
+        -0.944992,
+        0.304627,
+        -0.411347,
+        -0.678523,
+        0.587395,
+        0.907865
       ]
     },
     {

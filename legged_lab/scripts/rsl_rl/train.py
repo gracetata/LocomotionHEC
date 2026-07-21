@@ -211,8 +211,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # load the checkpoint
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        # load previously trained model
-        runner.load(resume_path)
+        # Checkpoints can originate on a different GPU index (for example,
+        # cuda:1 on HEC-5090).  Always remap storages to the current runner
+        # device so policy-only continuation also works on a single-GPU host.
+        runner.load(resume_path, map_location=agent_cfg.device)
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)

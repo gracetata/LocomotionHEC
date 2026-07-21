@@ -76,7 +76,7 @@
     {
       "label": "former_representative_pose_02_arms_down",
       "source_time_s": 404.897585,
-      "reason": "excluded from the default representative/all suite because this source time is outside the training-reachable static-start interval; intentionally reused only by the dedicated down_to_horizontal boundary stress test"
+      "reason": "excluded from the default representative/all suite because this source time is outside the training-reachable static-start interval; intentionally reused only by dedicated boundary tests"
     }
   ],
   "representative_poses": [
@@ -267,7 +267,7 @@
       "equivalent_source_speed": 1.0,
       "max_joint_span_rad": 0.779166,
       "dominant_joint": "left_elbow_joint",
-      "motion_score": 5.934331310408219
+      "motion_score": 5.93433131040822
     },
     {
       "trajectory_id": "representative_trajectory_03",
@@ -506,6 +506,201 @@
       "runtime_random_sampling": false,
       "included_in_default_all_sequence": false,
       "path": "special/arms_down_to_forward_horizontal_20s_50hz.csv"
+    },
+    {
+      "test_id": "default_forward_return_down",
+      "data_scope": "arm_only_14_dof",
+      "profile": "5 s default hold, 6.5 s simultaneous forward reach, 5 s forward hold, 6.5 s simultaneous return, 5 s returned-default hold, 6.5 s natural-down move, 5 s natural-down hold",
+      "duration_s": 39.5,
+      "poses": {
+        "default": {
+          "source": "UNITREE_G1_29DOF_CFG.init_state and g1_amp.yaml default_angles",
+          "positions_rad": [
+            0.3,
+            0.25,
+            0.0,
+            0.97,
+            0.15,
+            0.0,
+            0.0,
+            0.3,
+            -0.25,
+            0.0,
+            0.97,
+            -0.15,
+            0.0,
+            0.0
+          ]
+        },
+        "forward_horizontal": {
+          "construction": "left-seven and right-seven measured arm samples combined without full-body data",
+          "left_source_row": 3590,
+          "left_source_time_s": 72.23892800009344,
+          "right_source_row": 16074,
+          "right_source_time_s": 323.4626790001057,
+          "positions_rad": [
+            -0.583009,
+            0.908344,
+            -0.328727,
+            -0.355931,
+            0.699831,
+            0.576777,
+            -0.910286,
+            -0.560059,
+            -0.944992,
+            0.304627,
+            -0.411347,
+            -0.678523,
+            0.587395,
+            0.907865
+          ]
+        },
+        "natural_down": {
+          "source_row": 20120,
+          "source_time_s": 404.8975850000279,
+          "outside_training_reachable_static_start_interval": true,
+          "positions_rad": [
+            0.243184,
+            0.321956,
+            -0.107067,
+            0.736311,
+            0.066393,
+            0.049699,
+            0.006591,
+            0.252424,
+            -0.314957,
+            0.113467,
+            0.698776,
+            -0.067903,
+            0.050154,
+            -0.001546
+          ]
+        }
+      },
+      "interpolation": "quintic minimum jerk",
+      "nominal_transition_duration_s": 6.5,
+      "actual_transition_duration_s": {
+        "default_to_forward": 6.5,
+        "forward_to_default": 6.5,
+        "default_to_natural_down": 6.5
+      },
+      "velocity_limited": true,
+      "measured_max_abs_velocity_rad_s": {
+        "left_shoulder_pitch_joint": 0.2547125269567768,
+        "left_shoulder_roll_joint": 0.18990572445675147,
+        "left_shoulder_yaw_joint": 0.09482449765395445,
+        "left_elbow_joint": 0.3824776820851472,
+        "left_wrist_roll_joint": 0.1586040950988854,
+        "left_wrist_pitch_joint": 0.16637693065478243,
+        "left_wrist_yaw_joint": 0.2625808426792664,
+        "right_shoulder_pitch_joint": 0.2480923764332149,
+        "right_shoulder_roll_joint": 0.20047719619477045,
+        "right_shoulder_yaw_joint": 0.08787261845492195,
+        "right_elbow_joint": 0.3984629658068728,
+        "right_wrist_roll_joint": 0.15245759543195403,
+        "right_wrist_pitch_joint": 0.16943979593840586,
+        "right_wrist_yaw_joint": 0.2618824817024662
+      },
+      "runtime_random_sampling": false,
+      "included_in_default_all_sequence": false,
+      "path": "special/arms_default_forward_return_down_39p5s_50hz.csv"
+    },
+    {
+      "test_id": "interactive_startup",
+      "data_scope": "arm_only_14_dof",
+      "profile": "post-ENTER policy-on sequence: natural down -> flat default -> forward horizontal -> flat default",
+      "duration_s": 25.5,
+      "poses": {
+        "natural_down": {
+          "source_row": 20120,
+          "source_time_s": 404.8975850000279,
+          "positions_rad": [
+            0.243184,
+            0.321956,
+            -0.107067,
+            0.736311,
+            0.066393,
+            0.049699,
+            0.006591,
+            0.252424,
+            -0.314957,
+            0.113467,
+            0.698776,
+            -0.067903,
+            0.050154,
+            -0.001546
+          ]
+        },
+        "flat_default": {
+          "source_row": 12990,
+          "source_time_s": 261.3958290000446,
+          "positions_rad": [
+            0.277447,
+            0.777596,
+            -0.229618,
+            -0.47545,
+            0.847381,
+            0.400141,
+            0.046355,
+            0.27819,
+            -0.778411,
+            0.228839,
+            -0.473796,
+            -0.848471,
+            0.400597,
+            -0.046559
+          ]
+        },
+        "forward_horizontal": {
+          "left_source_row": 3590,
+          "left_source_time_s": 72.23892800009344,
+          "right_source_row": 16074,
+          "right_source_time_s": 323.4626790001057,
+          "positions_rad": [
+            -0.583009,
+            0.908344,
+            -0.328727,
+            -0.355931,
+            0.699831,
+            0.576777,
+            -0.910286,
+            -0.560059,
+            -0.944992,
+            0.304627,
+            -0.411347,
+            -0.678523,
+            0.587395,
+            0.907865
+          ]
+        }
+      },
+      "interpolation": "quintic minimum jerk",
+      "actual_transition_duration_s": {
+        "natural_down_to_flat_default": 7.5,
+        "flat_default_to_forward_horizontal": 7.5,
+        "forward_horizontal_to_flat_default": 7.5
+      },
+      "endpoint_hold_duration_s": 1.0,
+      "measured_max_abs_velocity_rad_s": {
+        "left_shoulder_pitch_joint": 0.21511298020247538,
+        "left_shoulder_roll_joint": 0.11390945998338009,
+        "left_shoulder_yaw_joint": 0.03063760475468108,
+        "left_elbow_joint": 0.30293881384188537,
+        "left_wrist_roll_joint": 0.19524607438657082,
+        "left_wrist_pitch_joint": 0.08761008466222076,
+        "left_wrist_yaw_joint": 0.23915911620568386,
+        "right_shoulder_pitch_joint": 0.20956125652182855,
+        "right_shoulder_roll_joint": 0.1158629507223563,
+        "right_shoulder_yaw_joint": 0.028842863263107976,
+        "right_elbow_joint": 0.29314161028801133,
+        "right_wrist_roll_joint": 0.1951410748843474,
+        "right_wrist_pitch_joint": 0.08761033466103546,
+        "right_wrist_yaw_joint": 0.23860486883323095
+      },
+      "policy_inference_active_for_entire_csv": true,
+      "runtime_random_sampling": false,
+      "included_in_default_all_sequence": false,
+      "path": "special/arms_down_flat_forward_return_flat_25p5s_50hz.csv"
     }
   ],
   "files": {
@@ -741,7 +936,7 @@
           "equivalent_source_speed": 1.0,
           "max_joint_span_rad": 0.779166,
           "dominant_joint": "left_elbow_joint",
-          "motion_score": 5.934331310408219
+          "motion_score": 5.93433131040822
         },
         {
           "trajectory_id": "representative_trajectory_03",
@@ -1095,6 +1290,96 @@
           "label": "arms_forward_horizontal_hold",
           "start_s": 11.0,
           "end_s": 20.0
+        }
+      ]
+    },
+    "default_forward_return_down": {
+      "path": "special/arms_default_forward_return_down_39p5s_50hz.csv",
+      "duration_s": 39.5,
+      "timeline": [
+        {
+          "kind": "static_hold",
+          "label": "arms_default_initial_hold",
+          "start_s": 0.0,
+          "end_s": 5.0
+        },
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_default_to_forward_horizontal",
+          "start_s": 5.0,
+          "end_s": 11.5
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_forward_horizontal_hold",
+          "start_s": 11.5,
+          "end_s": 16.5
+        },
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_forward_horizontal_to_default",
+          "start_s": 16.5,
+          "end_s": 23.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_default_returned_hold",
+          "start_s": 23.0,
+          "end_s": 28.0
+        },
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_default_to_natural_down",
+          "start_s": 28.0,
+          "end_s": 34.5
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_natural_down_hold",
+          "start_s": 34.5,
+          "end_s": 39.5
+        }
+      ]
+    },
+    "interactive_startup": {
+      "path": "special/arms_down_flat_forward_return_flat_25p5s_50hz.csv",
+      "duration_s": 25.5,
+      "timeline": [
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_natural_down_to_flat_default",
+          "start_s": 0.0,
+          "end_s": 7.5
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_flat_default_hold",
+          "start_s": 7.5,
+          "end_s": 8.5
+        },
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_flat_default_to_forward_horizontal",
+          "start_s": 8.5,
+          "end_s": 16.0
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_forward_horizontal_hold",
+          "start_s": 16.0,
+          "end_s": 17.0
+        },
+        {
+          "kind": "minimum_jerk_transition",
+          "label": "arms_forward_horizontal_to_flat_default",
+          "start_s": 17.0,
+          "end_s": 24.5
+        },
+        {
+          "kind": "static_hold",
+          "label": "arms_flat_default_ready_hold",
+          "start_s": 24.5,
+          "end_s": 25.5
         }
       ]
     },
@@ -1615,6 +1900,8 @@
     "sequences/representative_trajectories_arm_only_sequence_50hz.csv": "e1bfac30dfc7b0df0ec4180f88ff943e0663e119bbc5576c88507a55372bdf63",
     "sequences/synthesized_poses_arm_only_sequence_50hz.csv": "3da6c6231cf4529e1599c879ccb7794f8eff3f1655f4f34864d068641d701d61",
     "sequences/synthesized_trajectories_arm_only_sequence_seed20260714_50hz.csv": "cee874d05d1267574d44d87db07d21a38af878acda51a0e50788838bd9b6195d",
+    "special/arms_default_forward_return_down_39p5s_50hz.csv": "0de4517916d9703250bced6c69b7a8adfa563a51ec5515379d6af84b9dd678c2",
+    "special/arms_down_flat_forward_return_flat_25p5s_50hz.csv": "a02a0c08f181286995b1f72e4c1355739eae6c34aa06df0872e38131220895e4",
     "special/arms_down_to_forward_horizontal_20s_50hz.csv": "3a326017247d0335fd8e6b46ea17d1a1ca14838f2e507c398d611011a7d39546",
     "trajectories/randomized/randomized_arm_trajectory_01_seed20260715_minjerk_50hz.csv": "92812860e8c4924664b2d18c204c7a3c39c903fb35925ff7d538f1413dc64088",
     "trajectories/randomized/randomized_arm_trajectory_02_seed20260715_minjerk_50hz.csv": "5181b0d8ab5b081b0d910995ec0417bbe54fb1aae94b6c75befa964198d83082",

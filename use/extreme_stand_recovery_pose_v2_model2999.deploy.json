@@ -1,10 +1,8 @@
 {
   "robot": "g1",
-  "checkpoint": "/home/hecggdz/LocomotionHEC_stand_robust_20260718_1550/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-18_15-53-17_armhack_stand_robust_wrench_joint_dr_from_model2999_full_hec5090_20260718/model_2999.pt",
-  "checkpoint_sha256": "146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f",
-  "onnx": "/home/hecggdz/LocomotionHEC_stand_robust_20260718_1550/legged_lab/ArmHack Checkpoints/StandPerturb/2026-07-18_15-53-17_armhack_stand_robust_wrench_joint_dr_from_model2999_full_hec5090_20260718/ONNX Export/stand_robust_model_2999.onnx",
-  "onnx_sha256": "354bf4b35572cf6d91d44d448cde36b7bb748cffe40f1e220183bf21e5553fbf",
-  "torchscript": null,
+  "checkpoint": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ExtremeStandRecovery Checkpoints/2026-07-20_12-30-10_g1_extreme_stand_recovery_pose_v2_from_model4999_full_20260720/model_2999.pt",
+  "onnx": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ExtremeStandRecovery Checkpoints/2026-07-20_12-30-10_g1_extreme_stand_recovery_pose_v2_from_model4999_full_20260720/exported_extreme_stand_recovery/policy.onnx",
+  "torchscript": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/ExtremeStandRecovery Checkpoints/2026-07-20_12-30-10_g1_extreme_stand_recovery_pose_v2_from_model4999_full_20260720/exported_extreme_stand_recovery/policy.pt",
   "obs_dim": 96,
   "action_dim": 29,
   "control_frequency_hz": 50,

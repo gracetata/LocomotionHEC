@@ -27,10 +27,12 @@ if TYPE_CHECKING:
 
 def cache_default_key_body_offsets(
     env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_attr: str = "_to_target_default_key_body_offsets_b",
 ):
     """Cache root-yaw-frame key-body offsets for the robot's startup/default pose."""
+    del env_ids  # Startup events receive this argument by convention; the cache covers every environment.
     asset: Articulation | RigidObject = env.scene[asset_cfg.name]
     body_ids = list(asset_cfg.body_ids)
     if not body_ids:

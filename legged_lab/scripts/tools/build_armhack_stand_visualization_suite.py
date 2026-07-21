@@ -36,6 +36,32 @@ SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S = 323.462679
 SPECIAL_DOWN_HOLD_S = 5.0
 SPECIAL_DOWN_TO_HORIZONTAL_NOMINAL_TRANSITION_S = 6.0
 SPECIAL_DOWN_TO_HORIZONTAL_TOTAL_S = 20.0
+SPECIAL_DEFAULT_ARM_POSE_RAD = np.asarray(
+    [
+        0.30,
+        0.25,
+        0.0,
+        0.97,
+        0.15,
+        0.0,
+        0.0,
+        0.30,
+        -0.25,
+        0.0,
+        0.97,
+        -0.15,
+        0.0,
+        0.0,
+    ],
+    dtype=np.float64,
+)
+SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_HOLD_S = 5.0
+SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TRANSITION_S = 6.5
+SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S = 39.5
+SPECIAL_FLAT_DEFAULT_SOURCE_TIME_S = 261.395829
+SPECIAL_INTERACTIVE_STARTUP_TRANSITION_S = 7.5
+SPECIAL_INTERACTIVE_STARTUP_HOLD_S = 1.0
+SPECIAL_INTERACTIVE_STARTUP_TOTAL_S = 25.5
 
 
 @dataclass(frozen=True)
@@ -315,6 +341,380 @@ def _build_down_to_horizontal_test(
         "nominal_transition_duration_s": SPECIAL_DOWN_TO_HORIZONTAL_NOMINAL_TRANSITION_S,
         "actual_transition_duration_s": transition_duration_s,
         "velocity_limited": True,
+        "runtime_random_sampling": False,
+        "included_in_default_all_sequence": False,
+    }
+    return frames, timeline, metadata
+
+
+def _build_default_forward_return_down_test(
+    joint_names: list[str],
+    times: np.ndarray,
+    positions: np.ndarray,
+    velocity_limits: np.ndarray,
+    fps: float,
+) -> tuple[np.ndarray, list[dict[str, float | str]], dict[str, object]]:
+    """Build default hold -> forward reach -> return -> natural-down test.
+
+    The default pose is the S3 G1 29-DoF articulation initial arm pose.  The
+    forward-horizontal and natural-down targets reuse the measured arm-only
+    samples already audited by the down-to-horizontal boundary test.
+    """
+    if len(joint_names) != 14 or not all(name.startswith("left_") for name in joint_names[:7]):
+        raise ValueError("Default-forward-return-down test expects left-seven then right-seven arm order.")
+    if not all(name.startswith("right_") for name in joint_names[7:]):
+        raise ValueError("Default-forward-return-down test expects left-seven then right-seven arm order.")
+
+    default_pose = SPECIAL_DEFAULT_ARM_POSE_RAD.copy()
+    if default_pose.shape != (14,) or not np.all(np.isfinite(default_pose)):
+        raise ValueError("S3 G1 default arm pose must contain 14 finite joint positions.")
+    down_index, down_pose = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_ARMS_DOWN_SOURCE_TIME_S,
+        "natural arms-down pose",
+    )
+    horizontal_left_index, horizontal_left_source = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_HORIZONTAL_LEFT_SOURCE_TIME_S,
+        "left forward-horizontal pose",
+    )
+    horizontal_right_index, horizontal_right_source = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S,
+        "right forward-horizontal pose",
+    )
+    horizontal_pose = np.concatenate((horizontal_left_source[:7], horizontal_right_source[7:]))
+
+    transition_pairs = [
+        ("default_to_forward", default_pose, horizontal_pose),
+        ("forward_to_default", horizontal_pose, default_pose),
+        ("default_to_natural_down", default_pose, down_pose),
+    ]
+    transition_durations_s = {
+        label: _velocity_safe_transition_duration_s(
+            start,
+            end,
+            velocity_limits,
+            SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TRANSITION_S,
+        )
+        for label, start, end in transition_pairs
+    }
+    total_duration_s = (
+        4.0 * SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_HOLD_S
+        + sum(transition_durations_s.values())
+    )
+    if not np.isclose(
+        total_duration_s,
+        SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S,
+        rtol=0.0,
+        atol=1.0e-9,
+    ):
+        raise ValueError(
+            "Velocity-safe default-forward-return-down duration changed; update the named test contract: "
+            f"actual={total_duration_s:.6f}s, expected={SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S:.6f}s."
+        )
+
+    initial_hold_count = int(round(SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_HOLD_S * fps)) + 1
+    later_hold_count = int(round(SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_HOLD_S * fps))
+    frames = np.concatenate(
+        (
+            np.repeat(default_pose[None, :], initial_hold_count, axis=0),
+            _min_jerk(
+                default_pose,
+                horizontal_pose,
+                transition_durations_s["default_to_forward"],
+                fps,
+            ),
+            np.repeat(horizontal_pose[None, :], later_hold_count, axis=0),
+            _min_jerk(
+                horizontal_pose,
+                default_pose,
+                transition_durations_s["forward_to_default"],
+                fps,
+            ),
+            np.repeat(default_pose[None, :], later_hold_count, axis=0),
+            _min_jerk(
+                default_pose,
+                down_pose,
+                transition_durations_s["default_to_natural_down"],
+                fps,
+            ),
+            np.repeat(down_pose[None, :], later_hold_count, axis=0),
+        ),
+        axis=0,
+    )
+    expected_frames = int(round(SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S * fps)) + 1
+    if len(frames) != expected_frames:
+        raise ValueError(
+            f"Default-forward-return-down test expected {expected_frames} frames, got {len(frames)}."
+        )
+    measured_max_velocity = np.max(np.abs(np.diff(frames, axis=0)) * fps, axis=0)
+    if np.any(measured_max_velocity > velocity_limits + 1.0e-8):
+        raise ValueError("Default-forward-return-down test exceeds an arm interpolation velocity limit.")
+
+    hold_s = SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_HOLD_S
+    forward_start_s = hold_s
+    forward_end_s = forward_start_s + transition_durations_s["default_to_forward"]
+    forward_hold_end_s = forward_end_s + hold_s
+    return_end_s = forward_hold_end_s + transition_durations_s["forward_to_default"]
+    returned_hold_end_s = return_end_s + hold_s
+    down_end_s = returned_hold_end_s + transition_durations_s["default_to_natural_down"]
+    timeline: list[dict[str, float | str]] = [
+        {
+            "kind": "static_hold",
+            "label": "arms_default_initial_hold",
+            "start_s": 0.0,
+            "end_s": forward_start_s,
+        },
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_default_to_forward_horizontal",
+            "start_s": forward_start_s,
+            "end_s": forward_end_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_forward_horizontal_hold",
+            "start_s": forward_end_s,
+            "end_s": forward_hold_end_s,
+        },
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_forward_horizontal_to_default",
+            "start_s": forward_hold_end_s,
+            "end_s": return_end_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_default_returned_hold",
+            "start_s": return_end_s,
+            "end_s": returned_hold_end_s,
+        },
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_default_to_natural_down",
+            "start_s": returned_hold_end_s,
+            "end_s": down_end_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_natural_down_hold",
+            "start_s": down_end_s,
+            "end_s": SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S,
+        },
+    ]
+    metadata: dict[str, object] = {
+        "test_id": "default_forward_return_down",
+        "data_scope": "arm_only_14_dof",
+        "profile": (
+            "5 s default hold, 6.5 s simultaneous forward reach, 5 s forward hold, "
+            "6.5 s simultaneous return, 5 s returned-default hold, 6.5 s natural-down move, "
+            "5 s natural-down hold"
+        ),
+        "duration_s": SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S,
+        "poses": {
+            "default": {
+                "source": "UNITREE_G1_29DOF_CFG.init_state and g1_amp.yaml default_angles",
+                "positions_rad": default_pose.tolist(),
+            },
+            "forward_horizontal": {
+                "construction": "left-seven and right-seven measured arm samples combined without full-body data",
+                "left_source_row": horizontal_left_index,
+                "left_source_time_s": float(times[horizontal_left_index]),
+                "right_source_row": horizontal_right_index,
+                "right_source_time_s": float(times[horizontal_right_index]),
+                "positions_rad": horizontal_pose.tolist(),
+            },
+            "natural_down": {
+                "source_row": down_index,
+                "source_time_s": float(times[down_index]),
+                "outside_training_reachable_static_start_interval": True,
+                "positions_rad": down_pose.tolist(),
+            },
+        },
+        "interpolation": "quintic minimum jerk",
+        "nominal_transition_duration_s": SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TRANSITION_S,
+        "actual_transition_duration_s": transition_durations_s,
+        "velocity_limited": True,
+        "measured_max_abs_velocity_rad_s": {
+            name: float(measured_max_velocity[index]) for index, name in enumerate(joint_names)
+        },
+        "runtime_random_sampling": False,
+        "included_in_default_all_sequence": False,
+    }
+    return frames, timeline, metadata
+
+
+def _build_interactive_startup_test(
+    joint_names: list[str],
+    times: np.ndarray,
+    positions: np.ndarray,
+    velocity_limits: np.ndarray,
+    fps: float,
+) -> tuple[np.ndarray, list[dict[str, float | str]], dict[str, object]]:
+    """Build the real/MuJoCo shared post-ENTER arm initialization.
+
+    The program starts from the natural arms-down damping/standby posture,
+    rises to the flat default P0 posture, reaches forward horizontally, and
+    returns to P0.  It contains arm-only targets; policy inference owns the
+    remaining 15 waist/leg actions from the moment ENTER activates debug mode.
+    """
+    if len(joint_names) != 14 or not all(name.startswith("left_") for name in joint_names[:7]):
+        raise ValueError("Interactive startup expects canonical left-seven then right-seven arm order.")
+    if not all(name.startswith("right_") for name in joint_names[7:]):
+        raise ValueError("Interactive startup expects canonical left-seven then right-seven arm order.")
+
+    down_index, down_pose = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_ARMS_DOWN_SOURCE_TIME_S,
+        "interactive natural arms-down pose",
+    )
+    flat_index, flat_pose = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_FLAT_DEFAULT_SOURCE_TIME_S,
+        "interactive flat default P0 pose",
+    )
+    horizontal_left_index, horizontal_left_source = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_HORIZONTAL_LEFT_SOURCE_TIME_S,
+        "interactive left forward-horizontal pose",
+    )
+    horizontal_right_index, horizontal_right_source = _source_pose_at_time(
+        times,
+        positions,
+        SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S,
+        "interactive right forward-horizontal pose",
+    )
+    forward_pose = np.concatenate((horizontal_left_source[:7], horizontal_right_source[7:]))
+
+    pairs = [
+        ("natural_down_to_flat_default", down_pose, flat_pose),
+        ("flat_default_to_forward_horizontal", flat_pose, forward_pose),
+        ("forward_horizontal_to_flat_default", forward_pose, flat_pose),
+    ]
+    transition_durations_s = {
+        label: _velocity_safe_transition_duration_s(
+            start,
+            end,
+            velocity_limits,
+            SPECIAL_INTERACTIVE_STARTUP_TRANSITION_S,
+        )
+        for label, start, end in pairs
+    }
+    total_duration_s = (
+        sum(transition_durations_s.values())
+        + 3.0 * SPECIAL_INTERACTIVE_STARTUP_HOLD_S
+    )
+    if not np.isclose(total_duration_s, SPECIAL_INTERACTIVE_STARTUP_TOTAL_S, rtol=0.0, atol=1.0e-9):
+        raise ValueError(
+            "Velocity-safe interactive startup duration changed; update its named contract: "
+            f"actual={total_duration_s:.6f}s, expected={SPECIAL_INTERACTIVE_STARTUP_TOTAL_S:.6f}s."
+        )
+
+    transition_frames = [
+        _min_jerk(start, end, transition_durations_s[label], fps)
+        for label, start, end in pairs
+    ]
+    hold_count = int(round(SPECIAL_INTERACTIVE_STARTUP_HOLD_S * fps))
+    frames = np.concatenate(
+        (
+            down_pose[None, :],
+            transition_frames[0],
+            np.repeat(flat_pose[None, :], hold_count, axis=0),
+            transition_frames[1],
+            np.repeat(forward_pose[None, :], hold_count, axis=0),
+            transition_frames[2],
+            np.repeat(flat_pose[None, :], hold_count, axis=0),
+        ),
+        axis=0,
+    )
+    expected_frames = int(round(SPECIAL_INTERACTIVE_STARTUP_TOTAL_S * fps)) + 1
+    if len(frames) != expected_frames:
+        raise ValueError(f"Interactive startup expected {expected_frames} frames, got {len(frames)}.")
+    measured_max_velocity = np.max(np.abs(np.diff(frames, axis=0)) * fps, axis=0)
+    if np.any(measured_max_velocity > velocity_limits + 1.0e-8):
+        raise ValueError("Interactive startup exceeds an arm interpolation velocity limit.")
+
+    transition_s = SPECIAL_INTERACTIVE_STARTUP_TRANSITION_S
+    hold_s = SPECIAL_INTERACTIVE_STARTUP_HOLD_S
+    timeline: list[dict[str, float | str]] = [
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_natural_down_to_flat_default",
+            "start_s": 0.0,
+            "end_s": transition_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_flat_default_hold",
+            "start_s": transition_s,
+            "end_s": transition_s + hold_s,
+        },
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_flat_default_to_forward_horizontal",
+            "start_s": transition_s + hold_s,
+            "end_s": 2.0 * transition_s + hold_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_forward_horizontal_hold",
+            "start_s": 2.0 * transition_s + hold_s,
+            "end_s": 2.0 * transition_s + 2.0 * hold_s,
+        },
+        {
+            "kind": "minimum_jerk_transition",
+            "label": "arms_forward_horizontal_to_flat_default",
+            "start_s": 2.0 * transition_s + 2.0 * hold_s,
+            "end_s": 3.0 * transition_s + 2.0 * hold_s,
+        },
+        {
+            "kind": "static_hold",
+            "label": "arms_flat_default_ready_hold",
+            "start_s": 3.0 * transition_s + 2.0 * hold_s,
+            "end_s": SPECIAL_INTERACTIVE_STARTUP_TOTAL_S,
+        },
+    ]
+    metadata: dict[str, object] = {
+        "test_id": "interactive_startup",
+        "data_scope": "arm_only_14_dof",
+        "profile": (
+            "post-ENTER policy-on sequence: natural down -> flat default -> "
+            "forward horizontal -> flat default"
+        ),
+        "duration_s": SPECIAL_INTERACTIVE_STARTUP_TOTAL_S,
+        "poses": {
+            "natural_down": {
+                "source_row": down_index,
+                "source_time_s": float(times[down_index]),
+                "positions_rad": down_pose.tolist(),
+            },
+            "flat_default": {
+                "source_row": flat_index,
+                "source_time_s": float(times[flat_index]),
+                "positions_rad": flat_pose.tolist(),
+            },
+            "forward_horizontal": {
+                "left_source_row": horizontal_left_index,
+                "left_source_time_s": float(times[horizontal_left_index]),
+                "right_source_row": horizontal_right_index,
+                "right_source_time_s": float(times[horizontal_right_index]),
+                "positions_rad": forward_pose.tolist(),
+            },
+        },
+        "interpolation": "quintic minimum jerk",
+        "actual_transition_duration_s": transition_durations_s,
+        "endpoint_hold_duration_s": hold_s,
+        "measured_max_abs_velocity_rad_s": {
+            name: float(measured_max_velocity[index]) for index, name in enumerate(joint_names)
+        },
+        "policy_inference_active_for_entire_csv": True,
         "runtime_random_sampling": False,
         "included_in_default_all_sequence": False,
     }
@@ -709,8 +1109,17 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     if not np.isclose(args.trajectory_speed_scale, 1.0, rtol=0.0, atol=1.0e-12):
         raise ValueError("Stand evaluation trajectories are fixed to the original 1.0x source speed.")
-    for generated_directory in ("poses", "trajectories", "sequences", "special"):
+    for generated_directory in ("poses", "sequences", "special"):
         shutil.rmtree(output / generated_directory, ignore_errors=True)
+    trajectories_directory = output / "trajectories"
+    if trajectories_directory.is_dir():
+        for child in trajectories_directory.iterdir():
+            if child.name == "generated":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
     (output / "manifest.json").unlink(missing_ok=True)
     rng = np.random.default_rng(args.seed)
 
@@ -995,6 +1404,60 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         "timeline": down_to_horizontal_timeline,
     }
 
+    (
+        default_forward_return_down_sequence,
+        default_forward_return_down_timeline,
+        default_forward_return_down_metadata,
+    ) = _build_default_forward_return_down_test(
+        joint_names,
+        times,
+        positions,
+        random_velocity_limits,
+        args.fps,
+    )
+    default_forward_return_down_path = (
+        output / "special" / "arms_default_forward_return_down_39p5s_50hz.csv"
+    )
+    default_forward_return_down_metadata["path"] = (
+        default_forward_return_down_path.relative_to(output).as_posix()
+    )
+    files["default_forward_return_down"] = {
+        "path": default_forward_return_down_path.relative_to(output).as_posix(),
+        "duration_s": _write_trajectory(
+            default_forward_return_down_path,
+            joint_names,
+            default_forward_return_down_sequence,
+            args.fps,
+        ),
+        "timeline": default_forward_return_down_timeline,
+    }
+
+    (
+        interactive_startup_sequence,
+        interactive_startup_timeline,
+        interactive_startup_metadata,
+    ) = _build_interactive_startup_test(
+        joint_names,
+        times,
+        positions,
+        random_velocity_limits,
+        args.fps,
+    )
+    interactive_startup_path = (
+        output / "special" / "arms_down_flat_forward_return_flat_25p5s_50hz.csv"
+    )
+    interactive_startup_metadata["path"] = interactive_startup_path.relative_to(output).as_posix()
+    files["interactive_startup"] = {
+        "path": interactive_startup_path.relative_to(output).as_posix(),
+        "duration_s": _write_trajectory(
+            interactive_startup_path,
+            joint_names,
+            interactive_startup_sequence,
+            args.fps,
+        ),
+        "timeline": interactive_startup_timeline,
+    }
+
     all_sequence, all_timeline = _concat_labeled_sequences(
         [
             ("representative_poses", representative_pose_sequence),
@@ -1138,7 +1601,7 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
                 "reason": (
                     "excluded from the default representative/all suite because this source time is "
                     "outside the training-reachable static-start interval; intentionally reused only "
-                    "by the dedicated down_to_horizontal boundary stress test"
+                    "by dedicated boundary tests"
                 ),
             }
         ],
@@ -1156,10 +1619,17 @@ def build_suite(args: argparse.Namespace) -> dict[str, object]:
         "representative_trajectories": representative_trajectory_metadata,
         "synthesized_trajectories": synthesized_trajectory_metadata,
         "randomized_trajectories": randomized_trajectory_metadata,
-        "special_tests": [down_to_horizontal_metadata],
+        "special_tests": [
+            down_to_horizontal_metadata,
+            default_forward_return_down_metadata,
+            interactive_startup_metadata,
+        ],
         "files": files,
     }
-    generated_paths = [path for path in output.rglob("*.csv")]
+    runtime_generated_directory = output / "trajectories" / "generated"
+    generated_paths = [
+        path for path in output.rglob("*.csv") if runtime_generated_directory not in path.parents
+    ]
     manifest["generated_file_sha256"] = {
         path.relative_to(output).as_posix(): _sha256(path) for path in sorted(generated_paths)
     }
@@ -1229,12 +1699,11 @@ def main() -> None:
         f"Randomized evaluation: {len(manifest['randomized_poses'])} poses + "
         f"{len(manifest['randomized_trajectories'])} pose-interpolation trajectories"
     )
-    special_test = manifest["special_tests"][0]
-    print(
-        "Special boundary test: "
-        f"{special_test['test_id']}, duration={special_test['duration_s']:.3f}s, "
-        f"transition={special_test['actual_transition_duration_s']:.3f}s"
-    )
+    for special_test in manifest["special_tests"]:
+        print(
+            "Special boundary test: "
+            f"{special_test['test_id']}, duration={special_test['duration_s']:.3f}s"
+        )
     print(f"All-sequence duration: {manifest['files']['all']['duration_s']:.3f}s")
 
 

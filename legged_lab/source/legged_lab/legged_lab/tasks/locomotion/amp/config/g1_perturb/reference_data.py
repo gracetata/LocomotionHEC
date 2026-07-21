@@ -19,6 +19,12 @@ STAND_RANDOM_POSE_BANK_RELATIVE_PATH = (
     / "RandomizedTraining"
     / "random_arm_pose_bank_seed20260715.json"
 )
+STAND_ARM_PRESETS_RELATIVE_PATH = (
+    REFERENCE_DATA_ROOT_RELATIVE
+    / "StandPerturb"
+    / "RealDeployment"
+    / "stand_arm_presets.json"
+)
 WALK_ARM_POSE_SET_RELATIVE_PATH = (
     REFERENCE_DATA_ROOT_RELATIVE / "WalkPerturbFinetune" / "g1_arm_pose_set.json"
 )
@@ -41,6 +47,44 @@ def resolve_reference_data_path(relative_path: str | Path) -> Path:
     if not resolved_path.is_file():
         raise FileNotFoundError(f"ArmHack reference-data file not found: {resolved_path}")
     return resolved_path
+
+
+def load_stand_arm_pose(
+    pose_id: str,
+    target_joint_order: list[str],
+    relative_path: str | Path = STAND_ARM_PRESETS_RELATIVE_PATH,
+) -> list[float]:
+    """Load one named Stand arm pose and reorder it for the action term."""
+
+    resolved_path = resolve_reference_data_path(relative_path)
+    with resolved_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    if payload.get("schema_version") != 2 or payload.get("data_scope") != "arm_only_14_dof":
+        raise ValueError(f"Unsupported Stand arm-preset schema: {resolved_path}")
+    source_joint_order = payload.get("arm_joint_names")
+    if not isinstance(source_joint_order, list) or len(source_joint_order) != len(set(source_joint_order)):
+        raise ValueError(f"Stand arm-preset joint names must be a unique list: {resolved_path}")
+    if len(target_joint_order) != len(source_joint_order) or set(target_joint_order) != set(source_joint_order):
+        raise ValueError(
+            "Stand arm-preset joints do not match the requested target order: "
+            f"{resolved_path}"
+        )
+
+    poses = payload.get("poses")
+    if not isinstance(poses, list):
+        raise ValueError(f"Stand arm-preset poses must be a list: {resolved_path}")
+    matching = [entry for entry in poses if isinstance(entry, dict) and entry.get("id") == pose_id]
+    if len(matching) != 1:
+        raise ValueError(f"Expected exactly one Stand arm pose {pose_id!r}: {resolved_path}")
+    values = matching[0].get("positions_rad")
+    if not isinstance(values, list) or len(values) != len(source_joint_order):
+        raise ValueError(f"Stand arm pose {pose_id!r} has an invalid positions_rad vector: {resolved_path}")
+    if any(not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in values):
+        raise ValueError(f"Stand arm pose {pose_id!r} contains non-finite values: {resolved_path}")
+
+    by_name = {name: float(value) for name, value in zip(source_joint_order, values)}
+    return [by_name[name] for name in target_joint_order]
 
 
 def load_walk_arm_pose_entries(

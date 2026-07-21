@@ -266,7 +266,13 @@ def check_stand_random_pose_bank() -> None:
     )
 
 
-def _check_visualization_csv(path: Path, source_lower: list[float], source_upper: list[float]) -> tuple[int, float, float]:
+def _check_visualization_csv(
+    path: Path,
+    source_lower: list[float],
+    source_upper: list[float],
+    *,
+    enforce_source_bounds: bool = True,
+) -> tuple[int, float, float]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         header = next(reader)
@@ -295,12 +301,13 @@ def _check_visualization_csv(path: Path, source_lower: list[float], source_upper
                     max_frame_delta,
                     max(abs(value - previous) for value, previous in zip(pose, previous_pose, strict=True)),
                 )
-            for index, value in enumerate(pose):
-                if value < source_lower[index] - 1.0e-7 or value > source_upper[index] + 1.0e-7:
-                    raise ValueError(
-                        f"Visualization CSV {path.name} leaves source joint bounds at "
-                        f"{ARM_JOINT_COLUMNS[index]}={value}"
-                    )
+            if enforce_source_bounds:
+                for index, value in enumerate(pose):
+                    if value < source_lower[index] - 1.0e-7 or value > source_upper[index] + 1.0e-7:
+                        raise ValueError(
+                            f"Visualization CSV {path.name} leaves source joint bounds at "
+                            f"{ARM_JOINT_COLUMNS[index]}={value}"
+                        )
             previous_time = time_value
             previous_pose = pose
             final_time = time_value
@@ -392,9 +399,14 @@ def check_stand_arm_only_test_data() -> None:
         raise ValueError("Stand visualization suite must contain 6 randomized trajectories")
 
     special_tests = manifest.get("special_tests", [])
-    if len(special_tests) != 1 or special_tests[0].get("test_id") != "down_to_horizontal":
+    down_to_horizontal_tests = [
+        entry
+        for entry in special_tests
+        if isinstance(entry, dict) and entry.get("test_id") == "down_to_horizontal"
+    ]
+    if len(down_to_horizontal_tests) != 1:
         raise ValueError("Stand visualization suite must contain the down_to_horizontal special test")
-    special_test = special_tests[0]
+    special_test = down_to_horizontal_tests[0]
     if special_test.get("data_scope") != "arm_only_14_dof":
         raise ValueError("Stand down_to_horizontal test must contain arm-only 14-DoF targets")
     if special_test.get("included_in_default_all_sequence") is not False:
@@ -462,7 +474,12 @@ def check_stand_arm_only_test_data() -> None:
 
     generated_hashes = manifest.get("generated_file_sha256", {})
     actual_csv_names = {
-        path.relative_to(STAND_TEST_DATA_ROOT).as_posix() for path in STAND_TEST_DATA_ROOT.rglob("*.csv")
+        path.relative_to(STAND_TEST_DATA_ROOT).as_posix()
+        for path in STAND_TEST_DATA_ROOT.rglob("*.csv")
+        # Runtime, seed-addressed MuJoCo trajectories are independently
+        # reproducible artifacts and intentionally not part of the fixed
+        # schema-v5 visualization manifest.
+        if "trajectories/generated" not in path.relative_to(STAND_TEST_DATA_ROOT).as_posix()
     }
     if set(generated_hashes) != actual_csv_names:
         raise ValueError("Stand visualization manifest and generated CSV file set differ")
@@ -482,7 +499,19 @@ def check_stand_arm_only_test_data() -> None:
                 raise ValueError(f"Visualization pose catalog expected 17 rows, got {len(rows)}")
             continue
 
-        rows, final_time, max_frame_delta = _check_visualization_csv(path, source_lower, source_upper)
+        # This one audited boundary test intentionally includes the robot
+        # configuration's symmetric default pose (shoulder pitch 0.30 rad),
+        # which is just outside the measured source maximum.  Its exact bytes
+        # are still protected by the manifest SHA above.
+        enforce_source_bounds = file_name != (
+            "special/arms_default_forward_return_down_39p5s_50hz.csv"
+        )
+        rows, final_time, max_frame_delta = _check_visualization_csv(
+            path,
+            source_lower,
+            source_upper,
+            enforce_source_bounds=enforce_source_bounds,
+        )
         checked_trajectory_files += 1
         if file_name.startswith(("poses/representative/", "poses/synthesized/", "poses/randomized/")):
             if rows != 1001 or not math.isclose(final_time, 20.0, abs_tol=1.0e-8):

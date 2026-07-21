@@ -11,10 +11,10 @@ Core functions:
     health, Important Metrics analogs, and scores.
 
 Inputs/outputs:
-    Input is a TorchScript policy exported by scripts/export_g1_amp_policy.sh
-    and a Unitree G1 29DoF MuJoCo XML. Output is a GLFW visualization or a
-    headless MuJoCo rollout plus scalar evaluation metrics. The source XML is
-    never modified; any missing floor is written to a generated temporary scene.
+    Input is a TorchScript or ONNX policy exported by the project policy
+    exporters and a Unitree G1 29DoF MuJoCo XML. Output is a GLFW visualization
+    or a headless MuJoCo rollout plus scalar evaluation metrics. The source XML
+    is never modified; any missing floor is written to a generated temporary scene.
 
 Usage:
     python deploy/deploy_mujoco/deploy_mujoco_g1_amp.py deploy/deploy_mujoco/configs/g1_amp.yaml
@@ -271,6 +271,10 @@ def load_config(config_path: str) -> dict:
     config["armhack_stand_checkpoint_path"] = _resolve_path(
         os.environ.get("G1_AMP_ARMHACK_STAND_CHECKPOINT_PATH", config.get("armhack_stand_checkpoint_path", ""))
     )
+    config["armhack_stand_checkpoint_sha256"] = os.environ.get(
+        "G1_AMP_ARMHACK_STAND_CHECKPOINT_SHA256",
+        config.get("armhack_stand_checkpoint_sha256", ""),
+    )
     config["armhack_stand_report_path"] = _resolve_path(
         os.environ.get("G1_AMP_ARMHACK_STAND_REPORT_PATH", config.get("armhack_stand_report_path", ""))
     )
@@ -279,6 +283,29 @@ def load_config(config_path: str) -> dict:
     )
     config["armhack_stand_payload_kg"] = _env_float(
         "G1_AMP_ARMHACK_STAND_PAYLOAD_KG", float(config.get("armhack_stand_payload_kg", 0.0))
+    )
+    config["armhack_stand_interactive_enable"] = _env_bool(
+        "G1_AMP_ARMHACK_STAND_INTERACTIVE_ENABLE",
+        bool(config.get("armhack_stand_interactive_enable", False)),
+    )
+    config["armhack_stand_preset_path"] = _resolve_path(
+        os.environ.get("G1_AMP_ARMHACK_STAND_PRESET_PATH", config.get("armhack_stand_preset_path", ""))
+    )
+    config["armhack_stand_interactive_transition_s"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_INTERACTIVE_TRANSITION_S",
+        float(config.get("armhack_stand_interactive_transition_s", 7.5)),
+    )
+    config["armhack_stand_interactive_auto_enter_s"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_ENTER_S",
+        float(config.get("armhack_stand_interactive_auto_enter_s", -1.0)),
+    )
+    config["armhack_stand_interactive_auto_space_interval_s"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_SPACE_INTERVAL_S",
+        float(config.get("armhack_stand_interactive_auto_space_interval_s", -1.0)),
+    )
+    config["armhack_stand_interactive_auto_space_max_switches"] = _env_int(
+        "G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_SPACE_MAX_SWITCHES",
+        int(config.get("armhack_stand_interactive_auto_space_max_switches", 0)),
     )
     config["armhack_walk_enable"] = _env_bool(
         "G1_AMP_ARMHACK_WALK_ENABLE", bool(config.get("armhack_walk_enable", False))
@@ -329,6 +356,18 @@ def load_config(config_path: str) -> dict:
         "G1_AMP_EXTREME_STAND_RECOVERY_SEED",
         int(config.get("extreme_stand_recovery_seed", 20260719)),
     )
+    config["extreme_stand_recovery_interactive_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_ENABLE",
+        bool(config.get("extreme_stand_recovery_interactive_enable", False)),
+    )
+    config["extreme_stand_recovery_interactive_pose_start_random"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_POSE_START_RANDOM",
+        bool(config.get("extreme_stand_recovery_interactive_pose_start_random", False)),
+    )
+    config["extreme_stand_recovery_interactive_wrench_start_enabled"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_WRENCH_START_ENABLED",
+        bool(config.get("extreme_stand_recovery_interactive_wrench_start_enabled", False)),
+    )
     for key, env_name, default in (
         ("extreme_stand_recovery_leg_noise_rad", "G1_AMP_EXTREME_STAND_LEG_NOISE_RAD", 0.20),
         ("extreme_stand_recovery_waist_noise_rad", "G1_AMP_EXTREME_STAND_WAIST_NOISE_RAD", 0.25),
@@ -342,6 +381,11 @@ def load_config(config_path: str) -> dict:
             "extreme_stand_recovery_root_roll_pitch_noise_rad",
             "G1_AMP_EXTREME_STAND_ROOT_RP_NOISE_RAD",
             0.18,
+        ),
+        (
+            "extreme_stand_recovery_root_yaw_noise_rad",
+            "G1_AMP_EXTREME_STAND_ROOT_YAW_NOISE_RAD",
+            0.0,
         ),
         (
             "extreme_stand_recovery_root_linear_velocity_noise_m_s",
@@ -364,6 +408,31 @@ def load_config(config_path: str) -> dict:
             "extreme_stand_recovery_wrench_duration_s",
             "G1_AMP_EXTREME_STAND_WRENCH_DURATION_S",
             0.25,
+        ),
+        (
+            "extreme_stand_recovery_joint_limit_margin_rad",
+            "G1_AMP_EXTREME_STAND_JOINT_LIMIT_MARGIN_RAD",
+            0.02,
+        ),
+        (
+            "extreme_stand_recovery_joint_mae_threshold_rad",
+            "G1_AMP_EXTREME_STAND_JOINT_MAE_THRESHOLD_RAD",
+            0.12,
+        ),
+        (
+            "extreme_stand_recovery_joint_max_threshold_rad",
+            "G1_AMP_EXTREME_STAND_JOINT_MAX_THRESHOLD_RAD",
+            0.20,
+        ),
+        (
+            "extreme_stand_recovery_hold_time_s",
+            "G1_AMP_EXTREME_STAND_HOLD_TIME_S",
+            1.0,
+        ),
+        (
+            "extreme_stand_recovery_final_window_s",
+            "G1_AMP_EXTREME_STAND_FINAL_WINDOW_S",
+            1.0,
         ),
     ):
         config[key] = _env_float(env_name, float(config.get(key, default)))
@@ -1555,6 +1624,48 @@ def draw_rollout_traces(viewer, metrics: dict, config: dict) -> None:
         return
 
 
+def draw_extreme_stand_external_wrench(
+    viewer,
+    data: mujoco.MjData,
+    extreme_stand_recovery: ExtremeStandRecoveryPerturbation | None,
+) -> None:
+    """Draw the actual xfrc_applied force as a magenta world-frame arrow."""
+
+    if extreme_stand_recovery is None or extreme_stand_recovery.active_body_id < 0:
+        return
+    body_id = int(extreme_stand_recovery.active_body_id)
+    force_world = np.asarray(data.xfrc_applied[body_id, :3], dtype=np.float64)
+    force_norm = float(np.linalg.norm(force_world))
+    if force_norm <= 1.0e-9:
+        return
+    try:
+        scene = viewer.user_scn
+        if int(scene.ngeom) >= len(scene.geoms):
+            return
+        start = np.asarray(data.xpos[body_id], dtype=np.float64).copy()
+        arrow_length = min(0.004 * force_norm, 0.35)
+        end = start + force_world * (arrow_length / force_norm)
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            mujoco.mjtGeom.mjGEOM_ARROW,
+            np.zeros(3, dtype=np.float64),
+            np.zeros(3, dtype=np.float64),
+            np.eye(3, dtype=np.float64).reshape(-1),
+            np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32),
+        )
+        mujoco.mjv_connector(
+            geom,
+            mujoco.mjtGeom.mjGEOM_ARROW,
+            0.018,
+            start,
+            end,
+        )
+        scene.ngeom += 1
+    except Exception:
+        return
+
+
 def write_torso_trace_csv(metrics: dict, config: dict) -> str:
     trace_path = str(config.get("torso_trace_path", ""))
     if not trace_path or not metrics.get("torso_trace_points"):
@@ -2034,6 +2145,9 @@ def run_mujoco(config: dict) -> None:
         )
     if armhack_stand is not None:
         armhack_stand.initialize_model_and_state(mujoco, model, data, qpos_addresses, torso_body_id)
+        # Keep last_action consistent with the arm target from the first frame.
+        # In interactive mode this is the natural-down damping/standby posture.
+        action = armhack_stand.compose_action(action, 0.0)
     else:
         if armhack_walk is not None:
             armhack_walk.initialize_state(data, qpos_addresses)
@@ -2064,12 +2178,52 @@ def run_mujoco(config: dict) -> None:
         initial_segment.update(nav2_segment_info)
     rollout_metrics["command_segments"].append(initial_segment)
 
-    policy = torch.jit.load(config["policy_path"], map_location="cpu")
-    policy.eval()
+    policy_path = Path(config["policy_path"])
+    if policy_path.suffix.lower() == ".onnx":
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise RuntimeError(
+                "ONNX MuJoCo policy requires onnxruntime in UNITREE_PYTHON."
+            ) from exc
+        onnx_session = ort.InferenceSession(
+            str(policy_path),
+            providers=["CPUExecutionProvider"],
+        )
+        onnx_input_name = onnx_session.get_inputs()[0].name
+        onnx_output_name = onnx_session.get_outputs()[0].name
+
+        def infer_policy(obs: np.ndarray) -> np.ndarray:
+            output = onnx_session.run(
+                [onnx_output_name],
+                {onnx_input_name: obs[None, :].astype(np.float32, copy=False)},
+            )[0]
+            return np.asarray(output, dtype=np.float32).squeeze(0)
+
+        print(f"[INFO] Loaded ONNX policy with ONNX Runtime: {policy_path}")
+    else:
+        torchscript_policy = torch.jit.load(str(policy_path), map_location="cpu")
+        torchscript_policy.eval()
+
+        def infer_policy(obs: np.ndarray) -> np.ndarray:
+            with torch.inference_mode():
+                return (
+                    torchscript_policy(torch.from_numpy(obs).unsqueeze(0))
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .squeeze(0)
+                    .astype(np.float32)
+                )
+
+        print(f"[INFO] Loaded TorchScript policy: {policy_path}")
 
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
         if counter % int(config["control_decimation"]) != 0:
             return action
+        if armhack_stand is not None and not armhack_stand.policy_inference_enabled:
+            # Damping/standby simulation: no actor inference before ENTER.
+            return armhack_stand.compose_action(np.zeros_like(action), sim_time)
         obs = build_observation(
             data,
             policy_joint_names,
@@ -2080,8 +2234,7 @@ def run_mujoco(config: dict) -> None:
             command,
             config,
         )
-        with torch.inference_mode():
-            next_action = policy(torch.from_numpy(obs).unsqueeze(0)).detach().cpu().numpy().squeeze().astype(np.float32)
+        next_action = infer_policy(obs)
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
@@ -2098,6 +2251,17 @@ def run_mujoco(config: dict) -> None:
                 if viewer is not None and not viewer.is_running():
                     break
                 step_start = time.time()
+                if armhack_stand is not None and not armhack_stand.process_interaction_requests(sim_time):
+                    print("[ArmHack Stand MuJoCo] Q stop requested.", flush=True)
+                    break
+                if extreme_stand_recovery is not None:
+                    pose_reset = extreme_stand_recovery.process_interaction_requests(
+                        model, data, sim_time
+                    )
+                    if pose_reset:
+                        action = np.zeros(len(policy_joint_names), dtype=np.float32)
+                        target_command = np.zeros(3, dtype=np.float32)
+                        command = np.zeros(3, dtype=np.float32)
                 if armhack_walk is not None:
                     previous_target_command = target_command.copy()
                     target_command = armhack_walk.current_target_command(sim_time)
@@ -2178,6 +2342,8 @@ def run_mujoco(config: dict) -> None:
                 mujoco.mj_step(model, data)
                 counter += 1
                 sim_time += model.opt.timestep
+                if extreme_stand_recovery is not None and control_step:
+                    extreme_stand_recovery.record_state(data, sim_time)
                 if armhack_stand is not None and control_step:
                     armhack_stand.record_control_sample(
                         data,
@@ -2202,6 +2368,11 @@ def run_mujoco(config: dict) -> None:
                 if viewer is not None:
                     update_follow_camera(viewer, data, torso_body_id, config)
                     draw_rollout_traces(viewer, rollout_metrics, config)
+                    draw_extreme_stand_external_wrench(
+                        viewer,
+                        data,
+                        extreme_stand_recovery,
+                    )
                     viewer.sync()
                 if bool(config.get("real_time", True)):
                     sleep_time = model.opt.timestep - (time.time() - step_start)
@@ -2242,7 +2413,19 @@ def run_mujoco(config: dict) -> None:
     if bool(config.get("use_glfw", True)):
         from mujoco import viewer as mujoco_viewer
 
-        key_callback = armhack_walk.key_callback if armhack_walk is not None else None
+        key_callback = (
+            armhack_stand.key_callback
+            if armhack_stand is not None and armhack_stand.interactive
+            else (
+                armhack_walk.key_callback
+                if armhack_walk is not None
+                else (
+                    extreme_stand_recovery.key_callback
+                    if extreme_stand_recovery is not None
+                    else None
+                )
+            )
+        )
         with mujoco_viewer.launch_passive(model, data, key_callback=key_callback) as active_viewer:
             update_follow_camera(active_viewer, data, torso_body_id, config)
             simulate_loop(active_viewer)

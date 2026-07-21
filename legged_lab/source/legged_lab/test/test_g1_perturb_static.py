@@ -35,6 +35,15 @@ STAND_ROBUST_CFG_FILE = (
     / "g1_perturb"
     / "g1_stand_robust_env_cfg.py"
 )
+STAND_DOWN_TO_DEFAULT_CFG_FILE = (
+    PACKAGE_ROOT
+    / "tasks"
+    / "locomotion"
+    / "amp"
+    / "config"
+    / "g1_perturb"
+    / "g1_stand_down_to_default_env_cfg.py"
+)
 WALK_CFG_FILE = (
     PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "config" / "g1_perturb" / "g1_walk_perturb_env_cfg.py"
 )
@@ -74,6 +83,9 @@ STAND_RANDOMIZED_TRAIN_SCRIPT_FILE = (
 STAND_ROBUST_TRAIN_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_robust.sh"
 )
+STAND_DOWN_TO_DEFAULT_TRAIN_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_down_to_default.sh"
+)
 STAND_RANDOM_DATA_BUILDER_FILE = (
     Path(__file__).resolve().parents[3]
     / "scripts"
@@ -97,6 +109,12 @@ STAND_VIS_BUILDER_FILE = (
 STAND_MUJOCO_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "val_mujoco_g1_armhack_stand.sh"
 )
+STAND_RANDOM_TRAJECTORY_GENERATOR_FILE = (
+    Path(__file__).resolve().parents[3]
+    / "scripts"
+    / "tools"
+    / "generate_armhack_stand_random_trajectory.py"
+)
 MUJOCO_RUNNER_FILE = (
     PROJECT_ROOT.parent
     / "unitree_sim2sim2real"
@@ -111,6 +129,22 @@ MUJOCO_ARMHACK_FILE = (
     / "deploy_mujoco"
     / "armhack_stand.py"
 )
+REAL_ARMHACK_RUNNER_FILE = (
+    PROJECT_ROOT.parent
+    / "unitree_sim2sim2real"
+    / "deploy"
+    / "deploy_real"
+    / "deploy_real_g1_armhack_stand.py"
+)
+REAL_ARMHACK_LAUNCHER_FILE = PROJECT_ROOT.parent / "scripts" / "deploy_real_g1_armhack_stand.sh"
+REAL_ARM_PRESET_FILE = (
+    PROJECT_ROOT
+    / "Reference Data"
+    / "ArmHack"
+    / "StandPerturb"
+    / "RealDeployment"
+    / "stand_arm_presets.json"
+)
 STAND_VIS_MANIFEST = (
     PROJECT_ROOT
     / "Reference Data"
@@ -121,6 +155,7 @@ STAND_VIS_MANIFEST = (
     / "manifest.json"
 )
 PLAY_SCRIPT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "rsl_rl" / "play.py"
+RSL_TRAIN_SCRIPT_FILE = Path(__file__).resolve().parents[3] / "scripts" / "rsl_rl" / "train.py"
 WALK_TRAIN_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_walk.sh"
 )
@@ -151,6 +186,7 @@ def test_g1_perturb_files_exist():
         STAND_CFG_FILE,
         STAND_RANDOMIZED_CFG_FILE,
         STAND_ROBUST_CFG_FILE,
+        STAND_DOWN_TO_DEFAULT_CFG_FILE,
         WALK_CFG_FILE,
         AGENT_CFG_FILE,
         REFERENCE_DATA_MODULE,
@@ -165,15 +201,21 @@ def test_g1_perturb_files_exist():
         STAND_TRAIN_SCRIPT_FILE,
         STAND_RANDOMIZED_TRAIN_SCRIPT_FILE,
         STAND_ROBUST_TRAIN_SCRIPT_FILE,
+        STAND_DOWN_TO_DEFAULT_TRAIN_SCRIPT_FILE,
         STAND_RANDOM_DATA_BUILDER_FILE,
         STAND_RANDOM_POSE_BANK,
         STAND_VIS_EVAL_SCRIPT_FILE,
         STAND_VIS_BUILDER_FILE,
         STAND_MUJOCO_SCRIPT_FILE,
+        STAND_RANDOM_TRAJECTORY_GENERATOR_FILE,
         MUJOCO_RUNNER_FILE,
         MUJOCO_ARMHACK_FILE,
+        REAL_ARMHACK_RUNNER_FILE,
+        REAL_ARMHACK_LAUNCHER_FILE,
+        REAL_ARM_PRESET_FILE,
         STAND_VIS_MANIFEST,
         PLAY_SCRIPT_FILE,
+        RSL_TRAIN_SCRIPT_FILE,
         WALK_TRAIN_SCRIPT_FILE,
         VIS_SCRIPT_FILE,
         CHECKPOINT_README,
@@ -196,7 +238,10 @@ def test_g1_perturb_env_exports_and_joint_groups_present():
     assert "G1_FULL_BODY_SDK_JOINT_NAMES" in env_text
     assert "class G1PerturbAmpEnv(ManagerBasedAmpEnv):" in env_text
     assert "def step(self, action: torch.Tensor):" in env_text
-    assert 'source: Literal["sine", "csv", "pose_set", "random_pose_trajectory"] = "sine"' in env_text
+    assert (
+        'source: Literal["sine", "csv", "pose_set", "random_pose_trajectory", "pose_transition"] = "sine"'
+        in env_text
+    )
     assert "_advance_random_pose_trajectories" in env_text
     assert "contains_future_policy_observation" not in env_text
     assert "csv_use_g1_action_order_q_columns" in env_text
@@ -379,8 +424,9 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
     assert len(visualization_manifest["synthesized_trajectories"]) == 3
     assert len(visualization_manifest["randomized_poses"]) == 8
     assert len(visualization_manifest["randomized_trajectories"]) == 6
-    assert len(visualization_manifest["special_tests"]) == 1
-    special_test = visualization_manifest["special_tests"][0]
+    assert len(visualization_manifest["special_tests"]) == 3
+    special_tests = {item["test_id"]: item for item in visualization_manifest["special_tests"]}
+    special_test = special_tests["down_to_horizontal"]
     assert special_test["test_id"] == "down_to_horizontal"
     assert special_test["data_scope"] == "arm_only_14_dof"
     assert special_test["included_in_default_all_sequence"] is False
@@ -399,6 +445,63 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
         "arms_down_to_forward_horizontal",
         "arms_forward_horizontal_hold",
     ]
+    four_stage_test = special_tests["default_forward_return_down"]
+    assert four_stage_test["data_scope"] == "arm_only_14_dof"
+    assert four_stage_test["included_in_default_all_sequence"] is False
+    assert four_stage_test["duration_s"] == 39.5
+    assert four_stage_test["poses"]["default"]["positions_rad"] == [
+        0.3,
+        0.25,
+        0.0,
+        0.97,
+        0.15,
+        0.0,
+        0.0,
+        0.3,
+        -0.25,
+        0.0,
+        0.97,
+        -0.15,
+        0.0,
+        0.0,
+    ]
+    assert four_stage_test["poses"]["forward_horizontal"]["left_source_time_s"] == 72.23892800009344
+    assert four_stage_test["poses"]["forward_horizontal"]["right_source_time_s"] == 323.4626790001057
+    assert four_stage_test["poses"]["natural_down"]["source_time_s"] == 404.8975850000279
+    assert four_stage_test["actual_transition_duration_s"] == {
+        "default_to_forward": 6.5,
+        "forward_to_default": 6.5,
+        "default_to_natural_down": 6.5,
+    }
+    four_stage_file = visualization_manifest["files"]["default_forward_return_down"]
+    assert four_stage_file["path"] == "special/arms_default_forward_return_down_39p5s_50hz.csv"
+    assert four_stage_file["duration_s"] == 39.5
+    assert [stage["label"] for stage in four_stage_file["timeline"]] == [
+        "arms_default_initial_hold",
+        "arms_default_to_forward_horizontal",
+        "arms_forward_horizontal_hold",
+        "arms_forward_horizontal_to_default",
+        "arms_default_returned_hold",
+        "arms_default_to_natural_down",
+        "arms_natural_down_hold",
+    ]
+    interactive_test = special_tests["interactive_startup"]
+    assert interactive_test["duration_s"] == 25.5
+    assert interactive_test["policy_inference_active_for_entire_csv"] is True
+    assert interactive_test["poses"]["natural_down"]["source_time_s"] == 404.8975850000279
+    assert interactive_test["poses"]["flat_default"]["source_time_s"] == 261.3958290000446
+    assert interactive_test["poses"]["forward_horizontal"]["left_source_time_s"] == 72.23892800009344
+    assert interactive_test["poses"]["forward_horizontal"]["right_source_time_s"] == 323.4626790001057
+    interactive_file = visualization_manifest["files"]["interactive_startup"]
+    assert interactive_file["path"] == "special/arms_down_flat_forward_return_flat_25p5s_50hz.csv"
+    assert [stage["label"] for stage in interactive_file["timeline"]] == [
+        "arms_natural_down_to_flat_default",
+        "arms_flat_default_hold",
+        "arms_flat_default_to_forward_horizontal",
+        "arms_forward_horizontal_hold",
+        "arms_forward_horizontal_to_flat_default",
+        "arms_flat_default_ready_hold",
+    ]
     assert visualization_manifest["schema_version"] == 5
     assert visualization_manifest["random_pose_bank"]["seed"] == 20260715
     assert visualization_manifest["random_pose_bank"]["bank_size"] == 512
@@ -416,6 +519,58 @@ def test_armhack_reference_data_is_repository_relative_and_valid():
         trajectory["equivalent_source_speed"] == 1.0
         for trajectory in visualization_manifest["synthesized_trajectories"]
     )
+
+
+def test_stand_mujoco_and_real_share_interactive_mode_contract():
+    mujoco_launcher = _read_text(STAND_MUJOCO_SCRIPT_FILE)
+    mujoco_adapter = _read_text(MUJOCO_ARMHACK_FILE)
+    mujoco_runner = _read_text(MUJOCO_RUNNER_FILE)
+    real_launcher = _read_text(REAL_ARMHACK_LAUNCHER_FILE)
+    real_runner = _read_text(REAL_ARMHACK_RUNNER_FILE)
+    presets = json.loads(REAL_ARM_PRESET_FILE.read_text(encoding="utf-8"))
+
+    assert presets["schema_version"] == 2
+    assert presets["damping_pose_id"] == "AD_natural_down"
+    assert presets["ready_pose_id"] == "P0_symmetric_reference"
+    assert presets["startup"]["sequence_pose_ids"] == [
+        "AD_natural_down",
+        "P0_symmetric_reference",
+        "F_forward_horizontal",
+        "P0_symmetric_reference",
+    ]
+    assert presets["startup"]["policy_inference_active"] is True
+    assert presets["space_cycle_pose_ids"] == [
+        "P0_symmetric_reference",
+        "P1_left_arm_reach",
+        "P2_bilateral_asymmetric",
+        "P3_left_arm_extended",
+    ]
+
+    assert 'MODE=interactive' in mujoco_launcher
+    assert 'arms_down_flat_forward_return_flat_25p5s_50hz.csv' in mujoco_launcher
+    assert 'G1_AMP_ARMHACK_STAND_INTERACTIVE_ENABLE' in mujoco_launcher
+    assert 'armhack_stand.key_callback' in mujoco_runner
+    assert 'not armhack_stand.policy_inference_enabled' in mujoco_runner
+    assert 'SPACE LOCKED until automatic initialization completes' in mujoco_adapter
+    assert 'ENTER -> DEBUG / POLICY ON' in mujoco_adapter
+
+    assert 'use/armhack_stand_model_2999.onnx' in real_launcher
+    assert 'use/armhack_stand_model_2999.deploy.json' in real_launcher
+    assert '354bf4b35572cf6d91d44d448cde36b7bb748cffe40f1e220183bf21e5553fbf' in real_launcher
+    assert '[DAMPING / STANDBY] 尚未初始化 DDS，也未发送 LowCmd。' in real_runner
+    assert 'G1_ARMHACK_STAND_DAMPING_UPRIGHT_MAX_TILT_RAD' in real_runner
+    assert 'G1_ARMHACK_STAND_DAMPING_BODY_MAX_ERROR_RAD' in real_runner
+    assert 'G1_ARMHACK_STAND_DAMPING_ARM_MAX_ERROR_RAD' in real_runner
+    assert 'activate_policy_initialization' in real_runner
+    assert 'SPACE LOCKED' in real_runner
+    assert 'natural-down -> flat-default -> forward -> flat-default' in real_runner
+    assert 'G1_ARMHACK_STAND_JOINT_LIMIT_MARGIN_RAD' not in real_launcher
+    assert 'G1_ARMHACK_STAND_MAX_TARGET_SPEED_RAD_S' not in real_launcher
+    assert 'G1_ARMHACK_STAND_JOINT_LIMIT_MARGIN_RAD' not in real_runner
+    assert 'G1_ARMHACK_STAND_MAX_TARGET_SPEED_RAD_S' not in real_runner
+    assert 'previous_target_policy' not in real_runner
+    assert 'np.clip(target_policy' not in real_runner
+    assert 'target_policy = self._validate_target(target_policy)' in real_runner
 
 
 def test_stand_random_pose_bank_is_arm_only_and_reproducible():
@@ -479,6 +634,7 @@ def test_csv_full_body_playback_defaults_to_sdk_to_lab_mapping():
 def test_runner_cfg_and_amp_runner_support_policy_only_resume():
     agent_cfg_text = _read_text(AGENT_CFG_FILE)
     amp_runner_text = _read_text(AMP_RUNNER_FILE)
+    train_script_text = _read_text(RSL_TRAIN_SCRIPT_FILE)
 
     assert "load_policy_only = False" in agent_cfg_text
     assert "load_policy_only = True" in agent_cfg_text
@@ -492,6 +648,54 @@ def test_runner_cfg_and_amp_runner_support_policy_only_resume():
     assert "Loaded policy-only AMP checkpoint from:" in amp_runner_text
     assert 'checkpoint_output_dir = self.cfg.get("checkpoint_output_dir")' in amp_runner_text
     assert "shutil.copy2(primary_path, exported_path)" in amp_runner_text
+    assert "runner.load(resume_path, map_location=agent_cfg.device)" in train_script_text
+
+
+def test_stand_down_to_default_continuation_contract():
+    env_text = _read_text(ENV_FILE)
+    task_init_text = _read_text(TASK_INIT_FILE)
+    cfg_text = _read_text(STAND_DOWN_TO_DEFAULT_CFG_FILE)
+    train_text = _read_text(STAND_DOWN_TO_DEFAULT_TRAIN_SCRIPT_FILE)
+    reference_data_text = _read_text(REFERENCE_DATA_MODULE)
+    presets = json.loads(REAL_ARM_PRESET_FILE.read_text(encoding="utf-8"))
+
+    poses = {entry["id"]: entry["positions_rad"] for entry in presets["poses"]}
+    assert len(poses["AD_natural_down"]) == 14
+    assert len(poses["P0_symmetric_reference"]) == 14
+    assert poses["AD_natural_down"] != poses["P0_symmetric_reference"]
+
+    assert '"pose_transition"' in env_text
+    assert "pose_transition_start_positions" in env_text
+    assert "pose_transition_goal_positions" in env_text
+    assert "def _reset_pose_transitions" in env_text
+    assert "def _sample_pose_transition_targets" in env_text
+    assert "def _initialize_pose_transition_arm_joint_state" in env_text
+    assert "10.0 * phase**3 - 15.0 * phase**4 + 6.0 * phase**5" in env_text
+    assert 'log_extras["ArmHack/down_to_default_duration_mean_s"]' in env_text
+
+    assert "STAND_ARM_PRESETS_RELATIVE_PATH" in reference_data_text
+    assert "def load_stand_arm_pose(" in reference_data_text
+    assert '"AD_natural_down", G1_UPPER_BODY_JOINT_NAMES' in cfg_text
+    assert '"P0_symmetric_reference", G1_UPPER_BODY_JOINT_NAMES' in cfg_text
+    assert 'perturbation.source = "pose_transition"' in cfg_text
+    assert "pose_transition_initialize_joint_state_on_reset = True" in cfg_text
+    assert "pose_transition_start_delay_range_s = (2.0, 5.0)" in cfg_text
+    assert "pose_transition_duration_range_s = (3.0, 9.0)" in cfg_text
+    assert "pose_transition_curriculum_static_steps = 12_000" in cfg_text
+    assert "pose_transition_curriculum_ramp_steps = 12_000" in cfg_text
+
+    assert 'id="LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0"' in task_init_text
+    assert 'TASK="LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0"' in train_text
+    assert "checkpoint/stand/model_2999.pt" in train_text
+    assert "146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f" in train_text
+    assert "START_DELAY_MIN_S=${START_DELAY_MIN_S:-2.0}" in train_text
+    assert "START_DELAY_MAX_S=${START_DELAY_MAX_S:-5.0}" in train_text
+    assert "LIFT_DURATION_MIN_S=${LIFT_DURATION_MIN_S:-3.0}" in train_text
+    assert "LIFT_DURATION_MAX_S=${LIFT_DURATION_MAX_S:-9.0}" in train_text
+    assert "agent.load_policy_only=True" in train_text
+    assert "agent.reset_iteration_on_policy_only_load=True" in train_text
+    assert "g1_walk" not in train_text
+    assert "WalkPerturb" not in train_text
 
 
 def test_train_scripts_have_isolated_working_defaults():
@@ -507,6 +711,7 @@ def test_train_scripts_have_isolated_working_defaults():
     stand_vis_eval_text = _read_text(STAND_VIS_EVAL_SCRIPT_FILE)
     stand_vis_builder_text = _read_text(STAND_VIS_BUILDER_FILE)
     stand_mujoco_script_text = _read_text(STAND_MUJOCO_SCRIPT_FILE)
+    stand_random_trajectory_generator_text = _read_text(STAND_RANDOM_TRAJECTORY_GENERATOR_FILE)
     mujoco_runner_text = _read_text(MUJOCO_RUNNER_FILE)
     mujoco_armhack_text = _read_text(MUJOCO_ARMHACK_FILE)
     play_script_text = _read_text(PLAY_SCRIPT_FILE)
@@ -599,11 +804,18 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "runtime_random_sampling" in stand_vis_builder_text
     assert "np.random.default_rng(args.seed)" in stand_vis_builder_text
     assert '"data_scope": "arm_only_14_dof"' in stand_vis_builder_text
-    assert "2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715" in stand_mujoco_script_text
+    assert 'DEFAULT_CHECKPOINT="${PROJECT_ROOT}/checkpoint/stand/model_2999.pt"' in stand_mujoco_script_text
     assert "Test Reports/StandArmOnlyMuJoCo" in stand_mujoco_script_text
     assert "ROBOT_ASSET=s3_g1_29dof" in stand_mujoco_script_text
     assert "CMD_INIT='[0.0, 0.0, 0.0]'" in stand_mujoco_script_text
     assert "G1_AMP_ARMHACK_STAND_ENABLE=True" in stand_mujoco_script_text
+    assert "generated_random_trajectory" in stand_mujoco_script_text
+    assert "RANDOM_WAYPOINTS=${RANDOM_WAYPOINTS:-8}" in stand_mujoco_script_text
+    assert "generate_armhack_stand_random_trajectory.py" in stand_mujoco_script_text
+    assert '"data_scope": "arm_only_14_dof"' in stand_random_trajectory_generator_text
+    assert "rng.choice(len(poses), size=args.waypoint_count, replace=False)" in stand_random_trajectory_generator_text
+    assert "1.875 * np.abs(pose - previous_pose) / velocity_limits" in stand_random_trajectory_generator_text
+    assert "Generated trajectory exceeded the randomized training pose-bank range." in stand_random_trajectory_generator_text
     assert "ArmHackStandReplay" in mujoco_runner_text
     assert "armhack_stand.compose_action" in mujoco_runner_text
     assert "armhack_stand.record_control_sample" in mujoco_runner_text
@@ -611,6 +823,8 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "PAYLOAD_BODY_NAMES = (\"left_wrist_yaw_link\", \"right_wrist_yaw_link\")" in mujoco_armhack_text
     assert "composed[self.arm_policy_indices]" in mujoco_armhack_text
     assert 'manifest.get("schema_version", -1)' in mujoco_armhack_text
+    assert 'self.test_id.startswith("generated_random_trajectory_")' in mujoco_armhack_text
+    assert "Generated ArmHack Stand trajectory CSV SHA-256 does not match its metadata" in mujoco_armhack_text
     assert "torso_world_6d" in mujoco_armhack_text
     assert '"contains_full_body_state": False' in stand_vis_builder_text
     assert '"trajectory_speed_scale": args.trajectory_speed_scale' in stand_vis_builder_text
@@ -620,19 +834,28 @@ def test_train_scripts_have_isolated_working_defaults():
     assert "SPECIAL_ARMS_DOWN_SOURCE_TIME_S = 404.897585" in stand_vis_builder_text
     assert "SPECIAL_HORIZONTAL_LEFT_SOURCE_TIME_S = 72.238928" in stand_vis_builder_text
     assert "SPECIAL_HORIZONTAL_RIGHT_SOURCE_TIME_S = 323.462679" in stand_vis_builder_text
+    assert "SPECIAL_DEFAULT_FORWARD_RETURN_DOWN_TOTAL_S = 39.5" in stand_vis_builder_text
+    assert "SPECIAL_INTERACTIVE_STARTUP_TOTAL_S = 25.5" in stand_vis_builder_text
     assert "_build_down_to_horizontal_test" in stand_vis_builder_text
+    assert "_build_default_forward_return_down_test" in stand_vis_builder_text
+    assert "_build_interactive_startup_test" in stand_vis_builder_text
     assert "maximum_static_pose_source_time_s" in stand_vis_builder_text
     assert "randomized_poses" in stand_vis_eval_text
     assert "randomized_trajectories" in stand_vis_eval_text
     assert "MODE=down_to_horizontal" in stand_vis_eval_text
+    assert "MODE=default_forward_return_down" in stand_vis_eval_text
     assert "arms_down_to_forward_horizontal_20s_50hz.csv" in stand_vis_eval_text
+    assert "arms_default_forward_return_down_39p5s_50hz.csv" in stand_vis_eval_text
     assert 'TASK=LeggedLab-Isaac-AMP-G1-StandRandomizedPayload-Play-v0' in stand_vis_eval_text
     assert "PAYLOAD_KG=${PAYLOAD_KG:-0.0}" in stand_vis_eval_text
     assert '--armhack_stand_payload_kg "${PAYLOAD_KG}"' in stand_vis_eval_text
     assert "down_to_horizontal" in play_script_text
+    assert "default_forward_return_down" in play_script_text
     assert "arms_down_to_forward_horizontal" in play_script_text
     assert "down_to_horizontal" in stand_mujoco_script_text
+    assert "default_forward_return_down" in stand_mujoco_script_text
     assert "down_to_horizontal" in mujoco_armhack_text
+    assert "default_forward_return_down" in mujoco_armhack_text
     assert '"--armhack_stand_manifest"' in play_script_text
     assert '"--armhack_stand_payload_kg"' in play_script_text
     assert "body_pos_w" in play_script_text

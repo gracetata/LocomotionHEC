@@ -1,0 +1,346 @@
+{
+  "schema_version": 1,
+  "data_scope": "arm_only_14_dof",
+  "contains_full_body_state": false,
+  "generation": {
+    "method": "seeded pose-bank sampling without replacement plus quintic minimum-jerk interpolation",
+    "seed": 20260721,
+    "waypoint_count": 10,
+    "requested_hold_s": 0.5,
+    "actual_hold_s": 0.5,
+    "nominal_transition_s": 2.0,
+    "fps": 50.0,
+    "frame_count": 1206,
+    "duration_s": 24.1,
+    "transition_duration_min_s": 2.0,
+    "transition_duration_max_s": 3.12
+  },
+  "source": {
+    "pose_bank_path": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/Reference Data/ArmHack/StandPerturb/RandomizedTraining/random_arm_pose_bank_seed20260715.json",
+    "pose_bank_sha256": "1ff56b9a59abaa01d5aadaa2f60685517b3f5db1dc3c2f06ad6acfd5ff3246a1",
+    "pose_bank_schema_version": 1,
+    "pose_bank_size": 512,
+    "manifest_path": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/manifest.json",
+    "manifest_sha256": "ad50dd881d8d94ca718b32d3895e0e7b542dceaa81f9865c8d2953571f82cc58"
+  },
+  "selected_waypoints": [
+    {
+      "sequence_index": 1,
+      "bank_index": 281,
+      "pose_id": "random_convex_pose_0218"
+    },
+    {
+      "sequence_index": 2,
+      "bank_index": 240,
+      "pose_id": "random_convex_pose_0177"
+    },
+    {
+      "sequence_index": 3,
+      "bank_index": 195,
+      "pose_id": "random_convex_pose_0132"
+    },
+    {
+      "sequence_index": 4,
+      "bank_index": 353,
+      "pose_id": "random_convex_pose_0290"
+    },
+    {
+      "sequence_index": 5,
+      "bank_index": 130,
+      "pose_id": "random_convex_pose_0067"
+    },
+    {
+      "sequence_index": 6,
+      "bank_index": 84,
+      "pose_id": "random_convex_pose_0021"
+    },
+    {
+      "sequence_index": 7,
+      "bank_index": 139,
+      "pose_id": "random_convex_pose_0076"
+    },
+    {
+      "sequence_index": 8,
+      "bank_index": 288,
+      "pose_id": "random_convex_pose_0225"
+    },
+    {
+      "sequence_index": 9,
+      "bank_index": 215,
+      "pose_id": "random_convex_pose_0152"
+    },
+    {
+      "sequence_index": 10,
+      "bank_index": 416,
+      "pose_id": "random_convex_pose_0353"
+    }
+  ],
+  "joint_names": [
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "joint_range_and_speed": {
+    "left_shoulder_pitch_joint": {
+      "pose_bank_min_rad": -0.811248,
+      "pose_bank_max_rad": 0.27917094504072465,
+      "generated_min_rad": -0.07603266220895734,
+      "generated_max_rad": 0.27720437625967537,
+      "velocity_limit_rad_s": 0.3875527806368849,
+      "measured_max_abs_velocity_rad_s": 0.27589986291690904
+    },
+    "left_shoulder_roll_joint": {
+      "pose_bank_min_rad": 0.437796,
+      "pose_bank_max_rad": 1.064786,
+      "generated_min_rad": 0.7206631947185144,
+      "generated_max_rad": 0.9056125704103262,
+      "velocity_limit_rad_s": 0.2,
+      "measured_max_abs_velocity_rad_s": 0.09599834060964874
+    },
+    "left_shoulder_yaw_joint": {
+      "pose_bank_min_rad": -0.654099,
+      "pose_bank_max_rad": 0.123821,
+      "generated_min_rad": -0.3569009688371109,
+      "generated_max_rad": -0.06404038562135178,
+      "velocity_limit_rad_s": 0.2116840676831589,
+      "measured_max_abs_velocity_rad_s": 0.15510494940065428
+    },
+    "left_elbow_joint": {
+      "pose_bank_min_rad": -0.938281,
+      "pose_bank_max_rad": 0.441631,
+      "generated_min_rad": -0.5893280239446317,
+      "generated_max_rad": -0.0777724607133248,
+      "velocity_limit_rad_s": 0.49859254260668284,
+      "measured_max_abs_velocity_rad_s": 0.3726030198073882
+    },
+    "left_wrist_roll_joint": {
+      "pose_bank_min_rad": 0.248385,
+      "pose_bank_max_rad": 0.86749,
+      "generated_min_rad": 0.718750852735284,
+      "generated_max_rad": 0.8568004526878188,
+      "velocity_limit_rad_s": 0.2,
+      "measured_max_abs_velocity_rad_s": 0.08234815742955703
+    },
+    "left_wrist_pitch_joint": {
+      "pose_bank_min_rad": -0.252484,
+      "pose_bank_max_rad": 0.747216,
+      "generated_min_rad": 0.09448065716068897,
+      "generated_max_rad": 0.5285573673034334,
+      "velocity_limit_rad_s": 0.3618166680152602,
+      "measured_max_abs_velocity_rad_s": 0.28640234676191034
+    },
+    "left_wrist_yaw_joint": {
+      "pose_bank_min_rad": -0.969488,
+      "pose_bank_max_rad": 0.047235973955581614,
+      "generated_min_rad": -0.5880877148177477,
+      "generated_max_rad": 0.04626570064842292,
+      "velocity_limit_rad_s": 0.4772064439049128,
+      "measured_max_abs_velocity_rad_s": 0.3474207432868387
+    },
+    "right_shoulder_pitch_joint": {
+      "pose_bank_min_rad": -0.899764,
+      "pose_bank_max_rad": 0.2803939562425212,
+      "generated_min_rad": -0.2371451795111089,
+      "generated_max_rad": 0.2795756118166764,
+      "velocity_limit_rad_s": 0.4221754451476886,
+      "measured_max_abs_velocity_rad_s": 0.36166812659553793
+    },
+    "right_shoulder_roll_joint": {
+      "pose_bank_min_rad": -0.990113,
+      "pose_bank_max_rad": -0.430222,
+      "generated_min_rad": -0.8898327444812213,
+      "generated_max_rad": -0.6873135803165892,
+      "velocity_limit_rad_s": 0.2165586631662388,
+      "measured_max_abs_velocity_rad_s": 0.16452854613118184
+    },
+    "right_shoulder_yaw_joint": {
+      "pose_bank_min_rad": -0.123126,
+      "pose_bank_max_rad": 0.69101,
+      "generated_min_rad": 0.01697673631482932,
+      "generated_max_rad": 0.37251934423621424,
+      "velocity_limit_rad_s": 0.213857249607781,
+      "measured_max_abs_velocity_rad_s": 0.21364402075630812
+    },
+    "right_elbow_joint": {
+      "pose_bank_min_rad": -0.594729,
+      "pose_bank_max_rad": 0.483144,
+      "generated_min_rad": -0.5283441442158332,
+      "generated_max_rad": 0.0420882992257461,
+      "velocity_limit_rad_s": 0.5026451357857084,
+      "measured_max_abs_velocity_rad_s": 0.4568041683047572
+    },
+    "right_wrist_roll_joint": {
+      "pose_bank_min_rad": -0.867418,
+      "pose_bank_max_rad": -0.249536,
+      "generated_min_rad": -0.8598458580648946,
+      "generated_max_rad": -0.6552939503016447,
+      "velocity_limit_rad_s": 0.2,
+      "measured_max_abs_velocity_rad_s": 0.16729219930665118
+    },
+    "right_wrist_pitch_joint": {
+      "pose_bank_min_rad": -0.252412,
+      "pose_bank_max_rad": 0.612142,
+      "generated_min_rad": 0.003935676520888887,
+      "generated_max_rad": 0.4005383414629578,
+      "velocity_limit_rad_s": 0.36806154046485495,
+      "measured_max_abs_velocity_rad_s": 0.36241046899371243
+    },
+    "right_wrist_yaw_joint": {
+      "pose_bank_min_rad": -0.046738,
+      "pose_bank_max_rad": 1.034754,
+      "generated_min_rad": -0.046622789655762775,
+      "generated_max_rad": 0.4269761851958788,
+      "velocity_limit_rad_s": 0.4806174420799663,
+      "measured_max_abs_velocity_rad_s": 0.44388065338767657
+    }
+  },
+  "timeline": [
+    {
+      "kind": "static_hold",
+      "label": "waypoint_01:random_convex_pose_0218",
+      "start_s": 0.0,
+      "end_s": 0.5
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_01_to_02",
+      "start_s": 0.5,
+      "end_s": 2.5,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.8466213313583026
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_02:random_convex_pose_0177",
+      "start_s": 2.5,
+      "end_s": 3.0
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_02_to_03",
+      "start_s": 3.0,
+      "end_s": 5.0,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.8476193331724333
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_03:random_convex_pose_0132",
+      "start_s": 5.0,
+      "end_s": 5.5
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_03_to_04",
+      "start_s": 5.5,
+      "end_s": 7.5,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 0.6158297187065225
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_04:random_convex_pose_0290",
+      "start_s": 7.5,
+      "end_s": 8.0
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_04_to_05",
+      "start_s": 8.0,
+      "end_s": 10.0,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.9698180119692033
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_05:random_convex_pose_0067",
+      "start_s": 10.0,
+      "end_s": 10.5
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_05_to_06",
+      "start_s": 10.5,
+      "end_s": 12.5,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.8180858346609696
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_06:random_convex_pose_0021",
+      "start_s": 12.5,
+      "end_s": 13.0
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_06_to_07",
+      "start_s": 13.0,
+      "end_s": 15.0,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.5198877240853776
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_07:random_convex_pose_0076",
+      "start_s": 15.0,
+      "end_s": 15.5
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_07_to_08",
+      "start_s": 15.5,
+      "end_s": 18.62,
+      "duration_s": 3.12,
+      "minimum_required_duration_s": 3.1172307278581104
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_08:random_convex_pose_0225",
+      "start_s": 18.62,
+      "end_s": 19.12
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_08_to_09",
+      "start_s": 19.12,
+      "end_s": 21.12,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.9418076966972253
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_09:random_convex_pose_0152",
+      "start_s": 21.12,
+      "end_s": 21.62
+    },
+    {
+      "kind": "velocity_safe_transition",
+      "label": "waypoint_09_to_10",
+      "start_s": 21.62,
+      "end_s": 23.62,
+      "duration_s": 2.0,
+      "minimum_required_duration_s": 1.4173272287487522
+    },
+    {
+      "kind": "static_hold",
+      "label": "waypoint_10:random_convex_pose_0353",
+      "start_s": 23.62,
+      "end_s": 24.12
+    }
+  ],
+  "output": {
+    "csv_path": "/home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab/Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/trajectories/generated/generated_random_arm_trajectory_seed20260721_wp10_hold0p5s_transition2p0s_50hz.csv",
+    "csv_sha256": "2b27d486a0a5e4f12661f5410df2892e5f269ba4751ca77489d845444d2fa4b1"
+  }
+}

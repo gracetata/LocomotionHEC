@@ -81,6 +81,10 @@ core.*
 /legged_lab/ExtremeStandRecovery Checkpoints/**/*.pt
 /legged_lab/ExtremeStandRecovery Checkpoints/**/*.pth
 /legged_lab/ExtremeStandRecovery Checkpoints/**/*.ckpt
+# Extreme Stand 的可部署 ONNX/JSON 已集中在 use/；完整训练目录和评估产物不入库。
+/legged_lab/ExtremeStandRecovery Checkpoints/
+/checkpoint/stand/MuJoCo Export/
+/checkpoint/stand/Test Reports/
 /legged_lab/deployment/armhack_walk/behavior/
 
 # ArmHack 动态任务的外部 Nav2 速度分布（由 Reference Data/README 记录来源和校验和）
@@ -93,3 +97,6 @@ core.*
 /*.zip
 /*.7z
 /project_transfer*
+
+# use/ 中只保留模型、部署元数据和说明；运行时 trace 属于可再生产物。
+/use/mujoco_*_trace.csv

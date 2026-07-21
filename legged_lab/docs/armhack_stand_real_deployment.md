@@ -1,4 +1,18 @@
-# ArmHack Stand `stand.onnx` 真机部署指南
+# ArmHack Stand 最新鲁棒模型真机部署与交互式 MuJoCo 指南
+
+> 2026-07-21 当前权威状态：默认模型已经从历史 `legged_lab/deployment/armhack_stand/stand.onnx` 切换到 `checkpoint/stand/stand_robust_model_2999.onnx`。当前状态机只使用一次 `ENTER`：启动阶段保持原生阻尼/待机且不初始化 DDS；`ENTER` 后进入低层调试控制并立即启用 actor，自动执行 `自然下垂→平直默认→向前伸直→收回平直默认`；初始化完成后才允许 `SPACE` 切换双臂姿态。下文若引用旧的两次 Enter/5 s 移动到 P0，均以本节和第 8.3 节的新顺序为准。
+
+当前模型身份：
+
+```text
+checkpoint/stand/model_2999.pt
+SHA-256 146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f
+
+checkpoint/stand/stand_robust_model_2999.onnx
+SHA-256 354bf4b35572cf6d91d44d448cde36b7bb748cffe40f1e220183bf21e5553fbf
+```
+
+> 2026-07-21 已新增 `LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0`，专门从上述鲁棒 checkpoint 续训“自然下垂静止站立，并以不同速度同时抬到平直 P0”。该入口已通过 `8 env × 1 iteration` Isaac smoke，但正式续训尚未完成；smoke 的 `model_0.pt` 不能部署。因此本指南当前仍锁定上面的第三阶段正式 ONNX，待第四阶段完整训练、Isaac/MuJoCo 固定测试和重新导出全部通过后，才能更新本节模型 SHA。
 
 ## 快速开始：新电脑从 clone 到真机
 
@@ -23,16 +37,18 @@ export REPO_ROOT="$PWD"
 git clone git@github.com:gracetata/LocomotionHEC.git
 ```
 
-确认当前 clone 确实包含本次部署所需的五个文件：
+确认当前工作副本包含本次部署所需的七个文件：
 
 ```bash
 cd "$REPO_ROOT"
 
-test -s legged_lab/deployment/armhack_stand/stand.onnx
-test -s legged_lab/deployment/armhack_stand/stand.deploy.json
+test -s checkpoint/stand/stand_robust_model_2999.onnx
+test -s checkpoint/stand/stand_robust_model_2999.deploy.json
 test -s "legged_lab/Reference Data/ArmHack/StandPerturb/RealDeployment/stand_arm_presets.json"
+test -s "legged_lab/Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/special/arms_down_flat_forward_return_flat_25p5s_50hz.csv"
 test -s scripts/deploy_real_g1_armhack_stand.sh
 test -s unitree_sim2sim2real/deploy/deploy_real/deploy_real_g1_armhack_stand.py
+test -s legged_lab/scripts/val_mujoco_g1_armhack_stand.sh
 
 chmod +x scripts/deploy_real_g1_armhack_stand.sh
 chmod +x unitree_sim2sim2real/deploy/deploy_real/deploy_real_g1_armhack_stand.py
@@ -43,20 +59,71 @@ chmod +x unitree_sim2sim2real/deploy/deploy_real/deploy_real_g1_armhack_stand.py
 ```bash
 cd "$REPO_ROOT"
 
-sha256sum legged_lab/deployment/armhack_stand/stand.onnx
-sha256sum legged_lab/deployment/armhack_stand/stand.deploy.json
+sha256sum checkpoint/stand/stand_robust_model_2999.onnx
+sha256sum checkpoint/stand/stand_robust_model_2999.deploy.json
 sha256sum "legged_lab/Reference Data/ArmHack/StandPerturb/RealDeployment/stand_arm_presets.json"
+sha256sum "legged_lab/Reference Data/ArmHack/StandPerturb/TestData/ArmOnly/special/arms_down_flat_forward_return_flat_25p5s_50hz.csv"
 ```
 
 当前预期值为：
 
 ```text
-0801f6463211503b69a231855f7488180713eef8b9c1705d6dce818d7605b8ce  stand.onnx
-4c1aae3bfddf9f6c4a3699fcb8c6564d8bdbb102a07cc87be310f2205056c67c  stand.deploy.json
-104a641450a536e90c012f982833b7f198b4b43b6259b5509e25de358c4ae67d  stand_arm_presets.json
+354bf4b35572cf6d91d44d448cde36b7bb748cffe40f1e220183bf21e5553fbf  stand_robust_model_2999.onnx
+49145392cdc1ece9bd05bebe45f79a405c871ea8d922e2181a13675228bf1ed8  stand_robust_model_2999.deploy.json
+f7a79eda6b177ddc34f7483885c1bf83c42f30126616c418b6af88c5ff0f7414  stand_arm_presets.json
+a02a0c08f181286995b1f72e4c1355739eae6c34aa06df0872e38131220895e4  arms_down_flat_forward_return_flat_25p5s_50hz.csv
 ```
 
 任何一个 `test -s` 失败，都说明 GitHub 上的分支还没有包含完整部署包，不能继续真机测试。ONNX 哈希不一致时 launcher 也会拒绝启动，不要绕过该检查。
+
+### A.1.1 本机最新第三阶段模型的离线自检
+
+上面的 `legged_lab/deployment/armhack_stand/stand.onnx` 是仓库内的固定发布件。2026-07-20 本机还保存了 HEC-5090 第三阶段鲁棒训练的更新模型：
+
+```text
+checkpoint/stand/model_2999.pt
+SHA-256: 146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f
+
+checkpoint/stand/stand_robust_model_2999.onnx
+SHA-256: 354bf4b35572cf6d91d44d448cde36b7bb748cffe40f1e220183bf21e5553fbf
+```
+
+2026-07-21 复核 HEC-5090 时，远端真机 Shell、真机 Python、预设 JSON 和历史 `stand.onnx` 与当时本机文件一致；远端 MuJoCo Stand 仍是固定 CSV 回放，并没有 Enter/SPACE。此后本机按新的交互需求继续更新，因此不能再用旧的远端 Shell 哈希覆盖本机。当前 launcher 已默认锁定更新 ONNX，无需手工覆盖路径：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
+
+DRY_RUN=True NET=enp11s0 \
+UNITREE_PYTHON=/home/user/anaconda3/envs/gmr/bin/python \
+bash scripts/deploy_real_g1_armhack_stand.sh
+```
+
+本次命令已得到 `[SELF-TEST PASS]`，且明确打印“未初始化 DDS，也未向机器人发送任何命令”。这只是离线接口验证；`checkpoint/stand/` 可能不属于 Git 固定发布包，新电脑必须先确认文件已安全复制且 SHA 一致，不能把本机路径直接假设为 clone 后必然存在。
+
+### A.1.2 MuJoCo 使用相同 Enter/Space 状态机
+
+新终端运行 GUI：
+
+```bash
+source /home/user/anaconda3/etc/profile.d/conda.sh
+conda activate gmr
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+MODE=interactive bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+MuJoCo 启动时不运行 actor，机器人保持自然下垂待机；`ENTER` 启动 actor 和 `AD→P0→F→P0` 自动初始化；终端出现 `INIT COMPLETE` 后 `SPACE` 才切换 P1/P2/P3/P0；`Q` 结束。无头回归命令为：
+
+```bash
+MODE=interactive USE_GLFW=False REAL_TIME=False \
+INTERACTIVE_AUTO_ENTER_S=0.5 \
+INTERACTIVE_AUTO_SPACE_INTERVAL_S=8.0 \
+INTERACTIVE_AUTO_SPACE_MAX_SWITCHES=2 \
+SIMULATION_DURATION=50 \
+bash scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+2026-07-21 当前最新模型实跑结果：初始化完成、两次 SPACE 均执行、CSV 完整播放、`healthy=True`、无摔倒；最低 root 高度 `0.775567 m`，最大绝对 roll/pitch `0.115899 / 0.086728 rad`。报告与阶段曲线位于 `checkpoint/stand/Test Reports/StandArmOnlyMuJoCo/model_2999_146aca1f547c__mujoco__interactive__payload_0kg.*`。
 
 ### A.2 安装系统工具与 Miniconda
 
@@ -229,11 +296,11 @@ bash scripts/deploy_real_g1_armhack_stand.sh
 
 终端中的人工顺序：
 
-1. 程序保持当前 29DoF 姿态并调用 `ReleaseMode()`，看到 `[DEBUG MODE]` 后才算进入低层调试控制；
-2. 检查吊架、关节方向和现场急停，第一次按 `Enter`；机器人用 5 s 平滑移动到 P0；
-3. 到达 P0 后再次检查，第二次按 `Enter`；此时才开始 50 Hz Stand policy；
-4. policy 稳定后按一次空格，进入 P1；再次按空格依次进入 P2、P3、P0；
-5. 按 `q`、`Ctrl-C` 或遥控器 `Select` 停止。退出后是低层阻尼，机器人可能失去主动站立，吊架必须持续承重。
+1. 启动后终端显示 `[DAMPING / STANDBY]`；此时程序尚未初始化 DDS、没有发送 LowCmd，机器人应由原生阻尼/待机保持直立且双臂自然下垂；
+2. 检查吊架、双臂下垂姿态、关节方向和现场急停，只按一次 `Enter`；程序随后建立当前位置保持、检查下垂误差、调用 `ReleaseMode()`，进入低层调试控制并启动 50 Hz actor；
+3. actor 持续推理腰腿，双臂自动用 25.5 s 执行 `自然下垂→平直默认→向前伸直→收回平直默认`；看到 `[INIT COMPLETE]` 前不要按空格，提前按会打印 `SPACE LOCKED` 并忽略；
+4. 初始化完成后按一次空格进入 P1；再次按空格依次进入 P2、P3、P0，每段 7.5 s minimum-jerk；
+5. 按 `q`、`Ctrl-C` 或遥控器 `Select` 停止。低层接管已经成功时，退出会发送低层阻尼，吊架必须持续承重。
 
 30 秒吊架短测没有异常后，才可去掉 `RUN_DURATION=30` 做持续测试：
 
@@ -250,28 +317,26 @@ bash scripts/deploy_real_g1_armhack_stand.sh
 
 ## 1. 适用范围与当前结论
 
-本指南只适用于 S3 G1 29DoF 的 ArmHack Stand 策略，不适用于 Walk/Nav2。当前部署模型来自第二阶段“随机双臂姿态、minimum-jerk 轨迹、腕部负载随机化”正式训练：
+本指南只适用于 S3 G1 29DoF 的 ArmHack Stand 策略，不适用于 Walk/Nav2。当前默认部署模型来自 HEC-5090 第三阶段鲁棒训练：
 
 ```text
 checkpoint:
-ArmHack Checkpoints/StandPerturb/
-2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/
-model_2999.pt
+checkpoint/stand/model_2999.pt
 
 checkpoint SHA-256:
-877e929d516cffe9131cc235477ceef4b226ec69e41c0f1c23e48816cfa28821
+146aca1f547ce073756c942508e8ea43c8cea91b27eee3b8347dd4131c87bc5f
 
 ONNX:
-deployment/armhack_stand/stand.onnx
+checkpoint/stand/stand_robust_model_2999.onnx
 
 ONNX SHA-256:
-0801f6463211503b69a231855f7488180713eef8b9c1705d6dce818d7605b8ce
+354bf4b35572cf6d91d44d448cde36b7bb748cffe40f1e220183bf21e5553fbf
 
 deployment metadata:
-deployment/armhack_stand/stand.deploy.json
+checkpoint/stand/stand_robust_model_2999.deploy.json
 ```
 
-`stand.onnx` 已通过 ONNX checker、PyTorch/ONNX 数值一致性检查，并用同一 actor 完成 IsaacLab 与 MuJoCo sim2sim。它仍然不是“已经通过真机安全认证”的控制器。第一次上机必须使用吊架、急停、限幅和状态超时保护，并先在低刚度/小动作范围内验证关节顺序。
+`stand_robust_model_2999.onnx` 已通过 ONNX checker、ONNX Runtime 和 MuJoCo 交互状态机实跑。它仍然不是“已经通过真机安全认证”的控制器。第一次上机必须使用吊架、急停、限幅和状态超时保护，并先验证关节顺序。
 
 策略契约是：
 
@@ -296,8 +361,8 @@ cd "$HOME/LocomotionHEC"
 export REPO_ROOT="$PWD"
 cd legged_lab
 
-sha256sum deployment/armhack_stand/stand.onnx
-sha256sum deployment/armhack_stand/stand.deploy.json
+sha256sum ../checkpoint/stand/stand_robust_model_2999.onnx
+sha256sum ../checkpoint/stand/stand_robust_model_2999.deploy.json
 ```
 
 检查 ONNX 接口：
@@ -307,7 +372,7 @@ python - <<'PY'
 import onnx
 import onnxruntime as ort
 
-path = "deployment/armhack_stand/stand.onnx"
+path = "../checkpoint/stand/stand_robust_model_2999.onnx"
 model = onnx.load(path)
 onnx.checker.check_model(model)
 session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
@@ -319,18 +384,18 @@ PY
 
 预期输出为 opset 11、`obs [1, 96] tensor(float)` 和 `actions [1, 29] tensor(float)`。模型 batch 维固定为 1；不能直接传入 `[96]`，也不能一次传多台机器的 batch。
 
-新 clone 的真机电脑只需要已经发布的 `stand.onnx`，不需要 14.8 MB 的训练 checkpoint。下面的重新导出命令只应在仍保存 `model_2999.pt` 和训练代码的电脑上执行，并且必须显式写出 Stand 的零速度命令：
+真机电脑只需要 ONNX、元数据、预设 JSON 和初始化 CSV，不需要训练 checkpoint。下面的重新导出命令只应在仍保存当前 `checkpoint/stand/model_2999.pt` 和训练环境的电脑上执行，并且必须显式写出 Stand 的零速度命令：
 
 ```bash
 python scripts/rsl_rl/export_amp_actor_to_onnx.py \
   --robot g1 \
-  --checkpoint "ArmHack Checkpoints/StandPerturb/2026-07-15_14-12-54_armhack_stand_randomized_payload_from_model2999_full_20260715/model_2999.pt" \
-  --output deployment/armhack_stand/stand.onnx \
-  --metadata deployment/armhack_stand/stand.deploy.json \
+  --checkpoint ../checkpoint/stand/model_2999.pt \
+  --output ../checkpoint/stand/stand_robust_model_2999.onnx \
+  --metadata ../checkpoint/stand/stand_robust_model_2999.deploy.json \
   --default-command 0 0 0
 ```
 
-## 3. `stand.onnx` 的 96 维输入
+## 3. `stand_robust_model_2999.onnx` 的 96 维输入
 
 输入必须是连续的 `numpy.float32` 数组，形状为 `[1, 96]`。部署时不加入训练噪声，也没有额外 observation normalizer。各段顺序如下：
 
@@ -604,11 +669,11 @@ bash scripts/deploy_real_g1_armhack_stand.sh
 
 状态顺序固定为：
 
-1. 连接 `rt/lowstate`，用当前 29 个关节位置预热并持续发送 LowCmd 保持；
-2. 调用 `MotionSwitcher.ReleaseMode()`，轮询确认高层 motion mode 已清空，进入该脚本使用的低层调试控制状态；此路径不经过零力矩自由下落；
-3. 保持当前姿态，操作员第一次按 `ENTER` 后，才用 5 s minimum-jerk 移动到 P0 Stand 启动姿态；
-4. 到达 P0 后继续保持，操作员第二次按 `ENTER` 才启动 50 Hz、29DoF policy；
-5. policy 运行中按一次 `SPACE` 切至下一组双臂姿态；`q`、`Ctrl-C` 或遥控器 `Select` 立即停止 policy 并进入低层阻尼。
+1. `[DAMPING / STANDBY]`：不初始化 DDS、不发送 LowCmd；机器人必须已处于原生阻尼/待机、全身直立、双臂自然下垂；
+2. 操作员只按一次 `ENTER`，程序才连接 `rt/lowstate`，用当前 29 个关节位置做安全预热，并检查躯干 roll/pitch 不超过 `0.20 rad`、腰腿相对 Stand 默认角的最大误差不超过 `0.50 rad`、双臂相对自然下垂 AD 的最大误差不超过 `0.45 rad`；
+3. 检查通过后调用 `MotionSwitcher.ReleaseMode()`，进入低层调试控制并启动 50 Hz、29DoF actor；从这一阶段起每个控制帧都执行模型推理，速度命令固定 `[0,0,0]`；
+4. actor 控制腰腿 15 维的同时，双臂按共享 CSV 自动执行 `AD→P0→F→P0`。三段各 7.5 s、三个端点各保持 1 s，总长 25.5 s；初始化完成前 `SPACE` 被锁定；
+5. 出现 `[INIT COMPLETE]` 后，`SPACE` 才按 `P0→P1→P2→P3→P0` 切换；`q`、`Ctrl-C` 或遥控器 `Select` 停止 policy 并进入低层阻尼。
 
 默认双臂循环为 `P0 对称基准 → P1 左臂变化 → P2 双臂非对称 → P3 左臂大范围变化 → P0`。预设保存在：
 
@@ -616,23 +681,26 @@ bash scripts/deploy_real_g1_armhack_stand.sh
 Reference Data/ArmHack/StandPerturb/RealDeployment/stand_arm_presets.json
 ```
 
-该文件只有按“左臂 7 维、右臂 7 维”排列的 14DoF 位置。每次空格切换都从当前插值位置重新规划 4 s minimum-jerk 轨迹，所以连续快速按空格也不会在相邻控制帧产生位置跳变。腰腿 15 维始终来自 actor；actor 本身仍输出 29 维，双臂 14 维随后按训练语义覆盖。默认每秒打印一次全部 29 个最终目标关节角，可用 `JOINT_PRINT_HZ=0` 关闭。
+该 schema v2 文件只有按“左臂 7 维、右臂 7 维”排列的 14DoF 位置，并引用与 MuJoCo 共用的初始化 CSV。每次空格切换都从当前插值位置重新规划 7.5 s minimum-jerk 轨迹，所以连续快速按空格也不会在相邻控制帧产生位置跳变。腰腿 15 维从 Enter 后始终来自 actor；actor 本身仍输出 29 维，双臂 14 维随后按训练语义覆盖。默认每秒打印一次全部 29 个最终目标关节角，可用 `JOINT_PRINT_HZ=0` 关闭。
 
 官方 README 的人工路径是在零力矩状态按遥控器 `L2+R2` 进入调试模式；本专用入口使用现有代码已经采用的 `ReleaseMode()` 软件路径，并在调用前持续保持当前位置。两种路径不要叠加操作；若机器人固件不允许 `ReleaseMode()` 或模式确认不为空，脚本会报错并停止，不应绕过检查。
 
 常用安全参数可以在命令前覆盖：
 
 ```bash
-TRANSITION_S=4.0 STARTUP_MOVE_S=5.0 \
+TRANSITION_S=7.5 \
+DAMPING_UPRIGHT_MAX_TILT_RAD=0.20 \
+DAMPING_BODY_MAX_ERROR_RAD=0.50 DAMPING_ARM_MAX_ERROR_RAD=0.45 \
 LOWSTATE_TIMEOUT_S=0.20 MAX_TILT_RAD=0.60 \
-JOINT_LIMIT_MARGIN_RAD=0.05 MAX_TARGET_SPEED_RAD_S=4.0 \
 JOINT_PRINT_HZ=1.0 RUN_DURATION=30 \
 UNITREE_PYTHON="$CONDA_PREFIX/bin/python" \
 CONFIRM_REAL_ROBOT=I_UNDERSTAND NET=enp3s0 \
 bash scripts/deploy_real_g1_armhack_stand.sh
 ```
 
-首次上机不要放宽这些阈值。脚本固定检查 policy SHA-256；若有意换模型，必须同时显式传入新的 `POLICY_PATH` 和 `EXPECTED_POLICY_SHA256`，避免模型路径改了但仍误以为是本文记录的 Stand `model_2999`。
+2026-07-21 起，Stand 真机输出链与 HEC-5090 的 `scripts/deploy_real_g1_amp_onnx.sh` / `deploy_real_g1_amp.py` 对齐：最终目标按 `default_angles + action * action_scale` 直接发送，不再执行 `0.05 rad` 关节范围内缩裁剪，也不再执行 `4.0 rad/s` 的部署层逐帧目标变化限速。因此 `JOINT_LIMIT_MARGIN_RAD` 和 `MAX_TARGET_SPEED_RAD_S` 已从入口删除，设置它们不会生效。双臂的 7.5 s minimum-jerk 仍然保留；它是明确的动作轨迹，不是部署层输出过滤器。
+
+首次上机不要放宽仍保留的状态阈值。脚本固定检查 policy SHA-256；若有意换模型，必须同时显式传入新的 `POLICY_PATH` 和 `EXPECTED_POLICY_SHA256`，避免模型路径改了但仍误以为是本文记录的 Stand `model_2999`。
 
 ### 8.4 吊架安全验收顺序
 
@@ -647,7 +715,7 @@ bash scripts/deploy_real_g1_armhack_stand.sh
 7. 从 0 kg 开始逐级增加对称负载，最后才测试训练上限附近的每侧 1 kg；
 8. 最后再接入实际手指/夹爪闭合，优先抓取柔软、轻量物体。
 
-当前专用入口已实现 low-state 超时、ONNX/状态有限值、硬件关节位置范围、目标关节限位、目标速度、IMU 四元数、roll/pitch、终端/遥控器停止和退出阻尼检查；它没有世界系 base height 传感器输入，也没有独立的目标加速度限制器。任何安全阈值都应根据真机和吊架实验继续收紧，不能从本文或 MuJoCo 数值直接照搬。
+当前专用入口仍实现 low-state 超时、ONNX/状态有限值、实测硬件关节位置范围、IMU 四元数、roll/pitch、接管前姿态门槛、终端/遥控器停止和退出阻尼检查。它不再裁剪待发送的目标关节位置，也不再限制相邻控制帧的目标变化；同时没有世界系 base height 传感器输入或独立目标加速度限制器。这与 HEC-5090 通用 AMP ONNX 直通输出语义一致，但风险高于带输出过滤器的版本，首次验证必须使用吊架和现场急停。
 
 ## 9. 代码依据
 

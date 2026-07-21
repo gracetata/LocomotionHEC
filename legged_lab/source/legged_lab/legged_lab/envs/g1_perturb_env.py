@@ -124,7 +124,7 @@ class UpperBodyPerturbationCfg:
 
     enabled: bool = True
     joint_names: list[str] = G1_UPPER_BODY_JOINT_NAMES
-    source: Literal["sine", "csv", "pose_set", "random_pose_trajectory"] = "sine"
+    source: Literal["sine", "csv", "pose_set", "random_pose_trajectory", "pose_transition"] = "sine"
     csv_path: str = ""
     csv_time_column: str = "time_s"
     csv_loop: bool = True
@@ -155,6 +155,15 @@ class UpperBodyPerturbationCfg:
     random_curriculum_ramp_steps: int = 0
     random_curriculum_motion_scale: float = 1.0
     random_transition_duration_range_s: tuple[float, float] = (2.0, 6.0)
+    pose_transition_start_positions: list[float] = []
+    pose_transition_goal_positions: list[float] = []
+    pose_transition_start_delay_range_s: tuple[float, float] = (1.0, 4.0)
+    pose_transition_duration_range_s: tuple[float, float] = (3.0, 9.0)
+    pose_transition_initialize_joint_state_on_reset: bool = True
+    pose_transition_curriculum_enabled: bool = False
+    pose_transition_curriculum_static_steps: int = 0
+    pose_transition_curriculum_ramp_steps: int = 0
+    pose_transition_curriculum_motion_scale: float = 1.0
 
 
 class G1PerturbAmpEnv(ManagerBasedAmpEnv):
@@ -181,6 +190,11 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._random_segment_goal_targets: torch.Tensor | None = None
         self._random_segment_elapsed_s: torch.Tensor | None = None
         self._random_segment_duration_s: torch.Tensor | None = None
+        self._pose_transition_start_target: torch.Tensor | None = None
+        self._pose_transition_goal_target: torch.Tensor | None = None
+        self._pose_transition_elapsed_s: torch.Tensor | None = None
+        self._pose_transition_start_delay_s: torch.Tensor | None = None
+        self._pose_transition_duration_s: torch.Tensor | None = None
 
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
@@ -202,6 +216,11 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._random_segment_goal_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
         self._random_segment_elapsed_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._random_segment_duration_s = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
+        self._pose_transition_start_target = torch.empty(0, dtype=torch.float32, device=self.device)
+        self._pose_transition_goal_target = torch.empty(0, dtype=torch.float32, device=self.device)
+        self._pose_transition_elapsed_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._pose_transition_start_delay_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._pose_transition_duration_s = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
 
         self._perturbation_cfg = getattr(self.cfg, "upper_body_perturbation", None)
         if self._perturbation_cfg is not None and self._perturbation_cfg.enabled:
@@ -219,6 +238,9 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             elif self._perturbation_cfg.source == "random_pose_trajectory":
                 motion_scale = self._random_curriculum_motion_scale()
                 self._advance_random_pose_trajectories(motion_scale)
+            elif self._perturbation_cfg.source == "pose_transition":
+                motion_scale = self._pose_transition_curriculum_motion_scale()
+                self._advance_pose_transitions(motion_scale)
 
         step_result = super().step(action)
         if motion_scale is not None:
@@ -231,7 +253,7 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 log_extras["ArmHack/csv_start_time_std_s"] = torch.std(
                     self._csv_start_time_offsets, unbiased=False
                 )
-            else:
+            elif source == "random_pose_trajectory":
                 target_scale = max(float(self._perturbation_cfg.random_curriculum_motion_scale), 0.0)
                 log_extras["ArmHack/random_motion_scale"] = torch.tensor(motion_scale, device=self.device)
                 log_extras["ArmHack/random_pose_bank_size"] = torch.tensor(
@@ -240,6 +262,26 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 log_extras["ArmHack/random_transition_duration_mean_s"] = torch.mean(
                     self._random_segment_duration_s
                 )
+            else:
+                target_scale = max(
+                    float(self._perturbation_cfg.pose_transition_curriculum_motion_scale), 0.0
+                )
+                progress = torch.clamp(
+                    (self._pose_transition_elapsed_s - self._pose_transition_start_delay_s)
+                    / torch.clamp(self._pose_transition_duration_s, min=float(self.step_dt)),
+                    min=0.0,
+                    max=1.0,
+                )
+                log_extras["ArmHack/down_to_default_motion_scale"] = torch.tensor(
+                    motion_scale, device=self.device
+                )
+                log_extras["ArmHack/down_to_default_start_delay_mean_s"] = torch.mean(
+                    self._pose_transition_start_delay_s
+                )
+                log_extras["ArmHack/down_to_default_duration_mean_s"] = torch.mean(
+                    self._pose_transition_duration_s
+                )
+                log_extras["ArmHack/down_to_default_progress_mean"] = torch.mean(progress)
             if motion_scale <= 0.0:
                 stage = 0.0
             elif motion_scale + 1.0e-8 < target_scale:
@@ -270,6 +312,10 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             self._reset_random_pose_trajectories(env_ids_tensor)
             if cfg.random_initialize_joint_state_on_reset:
                 self._initialize_random_arm_joint_state(env_ids_tensor)
+        elif cfg.source == "pose_transition":
+            self._reset_pose_transitions(env_ids_tensor)
+            if cfg.pose_transition_initialize_joint_state_on_reset:
+                self._initialize_pose_transition_arm_joint_state(env_ids_tensor)
 
     def _initialize_upper_body_perturbation(self) -> None:
         action_term = self.action_manager.get_term("joint_pos")
@@ -323,6 +369,9 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         elif cfg.source == "random_pose_trajectory":
             self._validate_random_pose_trajectory_cfg()
             self._initialize_random_pose_trajectory()
+        elif cfg.source == "pose_transition":
+            self._validate_pose_transition_cfg()
+            self._initialize_pose_transition()
 
     def _compose_perturbed_action(self, raw_policy_action: torch.Tensor) -> torch.Tensor:
         cfg = self._perturbation_cfg
@@ -344,6 +393,8 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             targets = self._active_pose_targets
         elif cfg.source == "random_pose_trajectory":
             targets = self._sample_random_pose_trajectory_targets()
+        elif cfg.source == "pose_transition":
+            targets = self._sample_pose_transition_targets()
         else:
             episode_time_s = self.episode_length_buf.to(dtype=torch.float32).unsqueeze(-1) * self.step_dt
             phase = (
@@ -627,6 +678,139 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         if env_ids.numel() == 0:
             return
         targets = self._sample_random_pose_trajectory_targets(env_ids)
+        targets = self._clip_upper_position_targets(targets, env_ids=env_ids)
+        robot = self.scene["robot"]
+        robot.write_joint_state_to_sim(
+            targets,
+            torch.zeros_like(targets),
+            joint_ids=self._upper_asset_joint_ids,
+            env_ids=env_ids,
+        )
+
+    def _validate_pose_transition_cfg(self) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        expected_num_joints = self._upper_action_indices.numel()
+        for field_name, values in (
+            ("pose_transition_start_positions", cfg.pose_transition_start_positions),
+            ("pose_transition_goal_positions", cfg.pose_transition_goal_positions),
+        ):
+            if len(values) != expected_num_joints:
+                raise ValueError(
+                    f"upper_body_perturbation.{field_name} must contain "
+                    f"{expected_num_joints} joint positions, got {len(values)}."
+                )
+            tensor = torch.tensor(values, dtype=torch.float32)
+            if not torch.all(torch.isfinite(tensor)):
+                raise ValueError(f"upper_body_perturbation.{field_name} must be finite.")
+
+        delay_range = tuple(float(value) for value in cfg.pose_transition_start_delay_range_s)
+        if len(delay_range) != 2 or delay_range[0] < 0.0 or delay_range[1] < delay_range[0]:
+            raise ValueError(
+                "pose_transition_start_delay_range_s must be a non-negative ordered pair, "
+                f"got {cfg.pose_transition_start_delay_range_s}."
+            )
+        duration_range = tuple(float(value) for value in cfg.pose_transition_duration_range_s)
+        if len(duration_range) != 2 or duration_range[0] <= 0.0 or duration_range[1] < duration_range[0]:
+            raise ValueError(
+                "pose_transition_duration_range_s must be a positive ordered pair, "
+                f"got {cfg.pose_transition_duration_range_s}."
+            )
+        if cfg.pose_transition_curriculum_static_steps < 0:
+            raise ValueError("pose_transition_curriculum_static_steps must be non-negative.")
+        if cfg.pose_transition_curriculum_ramp_steps < 0:
+            raise ValueError("pose_transition_curriculum_ramp_steps must be non-negative.")
+        if cfg.pose_transition_curriculum_motion_scale < 0.0:
+            raise ValueError("pose_transition_curriculum_motion_scale must be non-negative.")
+
+    def _initialize_pose_transition(self) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        self._pose_transition_start_target = torch.tensor(
+            cfg.pose_transition_start_positions, dtype=torch.float32, device=self.device
+        )
+        self._pose_transition_goal_target = torch.tensor(
+            cfg.pose_transition_goal_positions, dtype=torch.float32, device=self.device
+        )
+        self._pose_transition_elapsed_s = torch.zeros(
+            self.num_envs, dtype=torch.float32, device=self.device
+        )
+        self._pose_transition_start_delay_s = torch.zeros_like(self._pose_transition_elapsed_s)
+        self._pose_transition_duration_s = torch.ones_like(self._pose_transition_elapsed_s)
+
+        all_env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        self._reset_pose_transitions(all_env_ids)
+        if cfg.pose_transition_initialize_joint_state_on_reset:
+            self._initialize_pose_transition_arm_joint_state(all_env_ids)
+
+    def _reset_pose_transitions(self, env_ids: torch.Tensor) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        if env_ids.numel() == 0:
+            return
+        delay_min, delay_max = (float(value) for value in cfg.pose_transition_start_delay_range_s)
+        duration_min, duration_max = (float(value) for value in cfg.pose_transition_duration_range_s)
+        self._pose_transition_elapsed_s[env_ids] = 0.0
+        self._pose_transition_start_delay_s[env_ids] = delay_min + torch.rand(
+            env_ids.numel(), device=self.device
+        ) * (delay_max - delay_min)
+        self._pose_transition_duration_s[env_ids] = duration_min + torch.rand(
+            env_ids.numel(), device=self.device
+        ) * (duration_max - duration_min)
+
+    def _sample_pose_transition_targets(
+        self, env_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        elapsed = (
+            self._pose_transition_elapsed_s
+            if env_ids is None
+            else self._pose_transition_elapsed_s[env_ids]
+        )
+        delay = (
+            self._pose_transition_start_delay_s
+            if env_ids is None
+            else self._pose_transition_start_delay_s[env_ids]
+        )
+        duration = (
+            self._pose_transition_duration_s
+            if env_ids is None
+            else self._pose_transition_duration_s[env_ids]
+        )
+        phase = torch.clamp(
+            (elapsed - delay) / torch.clamp(duration, min=float(self.step_dt)),
+            min=0.0,
+            max=1.0,
+        )
+        blend = 10.0 * phase**3 - 15.0 * phase**4 + 6.0 * phase**5
+        start = self._pose_transition_start_target.unsqueeze(0).expand(elapsed.shape[0], -1)
+        goal = self._pose_transition_goal_target.unsqueeze(0).expand(elapsed.shape[0], -1)
+        return torch.lerp(start, goal, blend.unsqueeze(-1))
+
+    def _advance_pose_transitions(self, motion_scale: float) -> None:
+        if motion_scale <= 0.0 or self._pose_transition_elapsed_s.numel() == 0:
+            return
+        self._pose_transition_elapsed_s.add_(float(motion_scale) * float(self.step_dt))
+
+    def _pose_transition_curriculum_motion_scale(self) -> float:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        target_scale = max(float(cfg.pose_transition_curriculum_motion_scale), 0.0)
+        if not cfg.pose_transition_curriculum_enabled:
+            return target_scale
+        step = max(int(self.common_step_counter), 0)
+        static_steps = max(int(cfg.pose_transition_curriculum_static_steps), 0)
+        ramp_steps = max(int(cfg.pose_transition_curriculum_ramp_steps), 0)
+        if step < static_steps:
+            return 0.0
+        if ramp_steps == 0:
+            return target_scale
+        ramp_fraction = min(max((step - static_steps) / ramp_steps, 0.0), 1.0)
+        return target_scale * ramp_fraction
+
+    def _initialize_pose_transition_arm_joint_state(self, env_ids: torch.Tensor) -> None:
+        if env_ids.numel() == 0:
+            return
+        targets = self._pose_transition_start_target.unsqueeze(0).expand(env_ids.numel(), -1)
         targets = self._clip_upper_position_targets(targets, env_ids=env_ids)
         robot = self.scene["robot"]
         robot.write_joint_state_to_sim(
