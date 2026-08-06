@@ -1,0 +1,57 @@
+# G1 Nav2 two-goal curriculum
+
+This refinement starts from the protected `model_12995.pt` actor and frozen AMP
+state. It targets only two new capabilities: collision-free pure lateral motion
+and zero-linear-velocity in-place yaw. The 96/297/29 policy interface and the
+280-D full-body AMP discriminator are unchanged.
+
+## Training contract
+
+- Sampling is 40% pure lateral, 40% exact-zero-linear pure yaw, and 20% recorded
+  Nav2 retention commands.
+- Baseline-policy KL uses scale `0.005` on the two specialization command
+  families and `0.08` on retention samples. Only retention KL is subject to the
+  `0.15` hard limit.
+- The first actor hidden layer and AMP discriminator/normalizer stay frozen.
+  Iterations 0-9 update only the fresh critic; remaining actor layers and action
+  noise become trainable at iteration 10.
+- Checkpoints are saved every 10 iterations. A stage is limited to 60 iterations
+  and must be evaluated before continuation.
+
+## Reward contract
+
+The main lateral and yaw rewards are calculated from actual root displacement
+and wrapped root-heading change between safe alternating touchdowns. Instantaneous
+torso sway cannot earn touchdown progress. Progress is quality-gated by undesired
+forward/yaw leakage or planar drift. Standing still receives a bounded response
+shortfall penalty.
+
+The swept oriented sole geometry uses a 40 mm soft margin and a separate 25 mm
+hard barrier. Productive touchdown rewards require clearance of at least 25 mm;
+overlap receives the strongest penalty.
+
+## Curriculum
+
+Stage 1 uses `|vy|=0.25-0.45 m/s` and `|wz|=0.35-0.60 rad/s`, with reduced
+leak/drift/cadence penalties so the policy can initiate motion:
+
+```bash
+STAGE=1 MAX_ITERATIONS=60 RUN_NAME=nav2_two_goal_stage1 \
+  bash legged_lab/scripts/train_g1_amp_nav2_two_goal.sh
+```
+
+Stage 2 uses `|vy|=0.10-0.40 m/s` and `|wz|=0.20-0.50 rad/s` and restores the
+quality guards. It must start from an accepted stage-1 full-state checkpoint:
+
+```bash
+STAGE=2 SOURCE_CHECKPOINT=/absolute/path/model_59.pt \
+SOURCE_SIZE=$(stat -c '%s' /absolute/path/model_59.pt) \
+SOURCE_SHA256=$(sha256sum /absolute/path/model_59.pt | awk '{print $1}') \
+MAX_ITERATIONS=60 RUN_NAME=nav2_two_goal_stage2 \
+  bash legged_lab/scripts/train_g1_amp_nav2_two_goal.sh
+```
+
+Acceptance requires no hard-clearance violation or falls, signed lateral speed
+of at least 0.18 m/s for `vy=0.25`, signed yaw rate of at least 0.25 rad/s for
+`wz=0.35`, pure-yaw planar drift below 0.08 m/s, safe alternating touchdowns,
+retention loss below 15%, and `bad_orientation < 0.02`.

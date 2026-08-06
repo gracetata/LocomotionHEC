@@ -48,6 +48,8 @@ class AMPRunner(OnPolicyRunner):
             max_episode_length_s=(self.env.max_episode_length*self.env.unwrapped.step_dt),
         )
         self._initialize_static_demo_normalizer()
+        self._permanently_frozen_actor_parameters: set[int] = set()
+        self._actor_warmup_active: bool | None = None
         self._freeze_actor_hidden_layers()
 
     def _freeze_actor_hidden_layers(self) -> None:
@@ -66,7 +68,35 @@ class AMPRunner(OnPolicyRunner):
         for layer in hidden_layers[:count]:
             for parameter in layer.parameters():
                 parameter.requires_grad_(False)
+                self._permanently_frozen_actor_parameters.add(id(parameter))
         print(f"Froze the first {count} actor hidden linear layers for conservative refinement.")
+
+    def _set_actor_warmup_state(self, iteration: int) -> None:
+        """Train only the fresh critic during the configured initial iterations."""
+        warmup_iterations = int(self.cfg.get("actor_warmup_iterations", 0))
+        warmup_active = iteration < warmup_iterations
+        if warmup_active == self._actor_warmup_active:
+            return
+
+        for name, parameter in self.alg.policy.named_parameters():
+            is_actor_parameter = name.startswith("actor.") or name in {"std", "log_std"}
+            if not is_actor_parameter:
+                continue
+            if warmup_active or id(parameter) in self._permanently_frozen_actor_parameters:
+                parameter.requires_grad_(False)
+            else:
+                parameter.requires_grad_(True)
+        self._actor_warmup_active = warmup_active
+        if warmup_active:
+            print(
+                f"Actor warmup active at iteration {iteration}: training the fresh critic only "
+                f"until iteration {warmup_iterations}."
+            )
+        else:
+            print(
+                f"Actor warmup complete at iteration {iteration}: enabled actor layers except "
+                "the permanently frozen hidden prefix."
+            )
 
     def _initialize_static_demo_normalizer(self) -> None:
         amp_cfg = self.alg_cfg.get("amp_cfg", {})
@@ -112,6 +142,7 @@ class AMPRunner(OnPolicyRunner):
         start_it = self.current_learning_iteration
         total_it = start_it + num_learning_iterations
         for it in range(start_it, total_it):
+            self._set_actor_warmup_state(it)
             start = time.time()
             # Rollout
             with torch.inference_mode():

@@ -106,6 +106,22 @@ class RslRlPpoAmpAlgorithmCfg:
         hard_limit: float = 0.0
         """Abort an update when mean baseline-policy KL exceeds this positive limit."""
 
+        command_conditioned: bool = False
+        """Apply separate KL scales to specialization and retention commands."""
+
+        command_obs_start_index: int = 6
+        """Start of the ``[vx, vy, wz]`` command in the flattened 96-D policy input."""
+
+        specialization_scale: float = 0.0
+        """KL multiplier for pure-lateral and exact-zero-linear pure-yaw samples."""
+
+        lateral_min_command: float = 0.10
+        pure_yaw_min_command: float = 0.10
+        max_forward_command: float = 0.02
+        max_lateral_yaw_command: float = 0.05
+        max_pure_yaw_translation_command: float = 0.02
+        """Thresholds used to identify the two specialization command families."""
+
     baseline_kl_cfg: BaselineKLCfg = BaselineKLCfg()
     """Optional frozen baseline-policy KL regularizer configuration."""
 

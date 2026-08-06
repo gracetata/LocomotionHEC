@@ -37,7 +37,9 @@ from .reward_math import (
     relative_command_response_shortfall_l1,
     signed_command_progress_ratio,
     swept_convex_footprint_signed_clearance_xy,
+    touchdown_pose_progress,
     two_goal_command_masks,
+    two_goal_response_shortfall_l2,
     update_footstep_cadence_state,
 )
 
@@ -1414,36 +1416,207 @@ def _oriented_footprint_corners_xy(
     return world_corners[..., :2]
 
 
-def lateral_command_progress(
-    env: ManagerBasedRLEnv,
-    command_name: str,
-    min_command: float = 0.10,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """Reward signed lateral response; standing still receives no credit."""
-    asset: RigidObject = env.scene[asset_cfg.name]
-    command = env.command_manager.get_command(command_name)
-    lateral, _ = two_goal_command_masks(command, lateral_min_command=min_command)
-    progress = signed_command_progress_ratio(
-        command[:, 1], asset.data.root_lin_vel_b[:, 1], min_command=min_command
-    )
-    return progress * lateral.float() * _upright_scale(env)
+class _safe_alternating_touchdown_pose_progress(ManagerTermBase):
+    """Track root-pose changes between consecutive safe alternating touchdowns."""
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._last_foot = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+        self._last_mode = torch.zeros(env.num_envs, dtype=torch.int8, device=env.device)
+        self._has_anchor = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self._anchor_root_xy_w = torch.zeros(env.num_envs, 2, device=env.device)
+        self._anchor_heading_w = torch.zeros(env.num_envs, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._last_foot[env_ids] = -1
+        self._last_mode[env_ids] = 0
+        self._has_anchor[env_ids] = False
+        self._anchor_root_xy_w[env_ids] = 0.0
+        self._anchor_heading_w[env_ids] = 0.0
+
+    def _measure(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        asset_cfg: SceneEntityCfg,
+        *,
+        min_lateral_command: float,
+        min_yaw_command: float,
+        min_clearance: float,
+        center_offset_x: float,
+        half_length: float,
+        half_width: float,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        asset: RigidObject = env.scene[asset_cfg.name]
+        command = env.command_manager.get_command(command_name)
+        lateral, pure_yaw = two_goal_command_masks(
+            command,
+            lateral_min_command=min_lateral_command,
+            pure_yaw_min_command=min_yaw_command,
+        )
+        mode = lateral.to(torch.int8) + 2 * pure_yaw.to(torch.int8)
+        mode_changed = mode != self._last_mode
+        self._last_foot[mode_changed] = -1
+        self._has_anchor[mode_changed] = False
+        self._last_mode.copy_(mode)
+
+        first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
+        exactly_one_touchdown = torch.sum(first_contact.int(), dim=1) == 1
+        touchdown_foot = torch.argmax(first_contact.int(), dim=1)
+        alternating = (self._last_foot >= 0) & (touchdown_foot != self._last_foot)
+        active_touchdown = exactly_one_touchdown & (mode > 0)
+
+        corners = _oriented_footprint_corners_xy(
+            asset,
+            asset_cfg,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        clearance = convex_footprint_signed_clearance_xy(corners[:, 0], corners[:, 1])
+        safe = clearance >= float(min_clearance)
+        event = active_touchdown & alternating & self._has_anchor & safe
+
+        root_xy_w = asset.data.root_pos_w[:, :2]
+        heading_w = asset.data.heading_w
+        forward_delta, lateral_delta, yaw_delta = touchdown_pose_progress(
+            self._anchor_root_xy_w,
+            self._anchor_heading_w,
+            root_xy_w,
+            heading_w,
+        )
+
+        # Always advance the anchor on a task touchdown. An unsafe touchdown is
+        # therefore never allowed to accumulate delayed progress credit.
+        self._last_foot[active_touchdown] = touchdown_foot[active_touchdown]
+        self._anchor_root_xy_w[active_touchdown] = root_xy_w[active_touchdown]
+        self._anchor_heading_w[active_touchdown] = heading_w[active_touchdown]
+        self._has_anchor[active_touchdown] = True
+        return command, lateral, pure_yaw, event, forward_delta, lateral_delta, yaw_delta
 
 
-def pure_yaw_command_progress(
+class lateral_command_progress(_safe_alternating_touchdown_pose_progress):
+    """Reward real lateral root displacement between safe alternating touchdowns."""
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        asset_cfg: SceneEntityCfg,
+        min_command: float = 0.10,
+        target_displacement: float = 0.060,
+        forward_leak_scale: float = 0.050,
+        yaw_leak_scale: float = 0.100,
+        min_clearance: float = 0.025,
+        center_offset_x: float = 0.035,
+        half_length: float = 0.090,
+        half_width: float = 0.035,
+    ) -> torch.Tensor:
+        if target_displacement <= 0.0 or forward_leak_scale <= 0.0 or yaw_leak_scale <= 0.0:
+            raise ValueError("Lateral touchdown progress scales must be positive.")
+        command, lateral, _, event, forward_delta, lateral_delta, yaw_delta = self._measure(
+            env,
+            command_name,
+            sensor_cfg,
+            asset_cfg,
+            min_lateral_command=min_command,
+            min_yaw_command=min_command,
+            min_clearance=min_clearance,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        signed_progress = torch.sign(command[:, 1]) * lateral_delta / float(target_displacement)
+        quality = torch.exp(
+            -torch.square(forward_delta / float(forward_leak_scale))
+            -torch.square(yaw_delta / float(yaw_leak_scale))
+        )
+        return (
+            torch.clamp(signed_progress, min=-1.0, max=1.25)
+            * quality
+            * event.float()
+            * lateral.float()
+            * _upright_scale(env)
+        )
+
+
+class pure_yaw_command_progress(_safe_alternating_touchdown_pose_progress):
+    """Reward real wrapped root-heading change between safe alternating touchdowns."""
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        asset_cfg: SceneEntityCfg,
+        min_command: float = 0.10,
+        target_yaw_delta: float = 0.100,
+        planar_drift_scale: float = 0.050,
+        min_clearance: float = 0.025,
+        center_offset_x: float = 0.035,
+        half_length: float = 0.090,
+        half_width: float = 0.035,
+    ) -> torch.Tensor:
+        if target_yaw_delta <= 0.0 or planar_drift_scale <= 0.0:
+            raise ValueError("Pure-yaw touchdown progress scales must be positive.")
+        command, _, pure_yaw, event, forward_delta, lateral_delta, yaw_delta = self._measure(
+            env,
+            command_name,
+            sensor_cfg,
+            asset_cfg,
+            min_lateral_command=min_command,
+            min_yaw_command=min_command,
+            min_clearance=min_clearance,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        signed_progress = torch.sign(command[:, 2]) * yaw_delta / float(target_yaw_delta)
+        planar_drift = torch.sqrt(torch.square(forward_delta) + torch.square(lateral_delta))
+        quality = torch.exp(-torch.square(planar_drift / float(planar_drift_scale)))
+        return (
+            torch.clamp(signed_progress, min=-1.0, max=1.25)
+            * quality
+            * event.float()
+            * pure_yaw.float()
+            * _upright_scale(env)
+        )
+
+
+def two_goal_response_shortfall(
     env: ManagerBasedRLEnv,
     command_name: str,
-    min_command: float = 0.10,
+    target_fraction: float = 0.50,
+    max_penalty: float = 1.0,
+    min_lateral_command: float = 0.10,
+    min_yaw_command: float = 0.10,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """Reward actual signed yaw response for an exactly zero-translation command."""
+    """Penalize bounded lateral/yaw response shortfall without an upright gate."""
     asset: RigidObject = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
-    _, pure_yaw = two_goal_command_masks(command, pure_yaw_min_command=min_command)
-    progress = signed_command_progress_ratio(
-        command[:, 2], asset.data.root_ang_vel_b[:, 2], min_command=min_command
+    return two_goal_response_shortfall_l2(
+        command,
+        asset.data.root_lin_vel_b[:, :2],
+        asset.data.root_ang_vel_b[:, 2],
+        target_fraction=target_fraction,
+        max_penalty=max_penalty,
+        lateral_min_command=min_lateral_command,
+        pure_yaw_min_command=min_yaw_command,
     )
-    return progress * pure_yaw.float() * _upright_scale(env)
 
 
 def pure_yaw_planar_drift_l2(
@@ -1482,25 +1655,8 @@ def lateral_command_leak_l2(
     return leakage * lateral.float()
 
 
-class safe_alternating_touchdown_progress(ManagerTermBase):
-    """Reward alternating touchdowns only after safe task-directed progress."""
-
-    def __init__(self, cfg: RewardTermCfg, env):
-        super().__init__(cfg, env)
-        self._lateral_progress = torch.zeros(env.num_envs, device=env.device)
-        self._yaw_progress = torch.zeros_like(self._lateral_progress)
-        self._last_foot = torch.full(
-            (env.num_envs,), -1, dtype=torch.long, device=env.device
-        )
-        self._last_mode = torch.zeros(env.num_envs, dtype=torch.int8, device=env.device)
-
-    def reset(self, env_ids: Sequence[int] | None = None) -> None:
-        if env_ids is None:
-            env_ids = slice(None)
-        self._lateral_progress[env_ids] = 0.0
-        self._yaw_progress[env_ids] = 0.0
-        self._last_foot[env_ids] = -1
-        self._last_mode[env_ids] = 0
+class safe_alternating_touchdown_progress(_safe_alternating_touchdown_pose_progress):
+    """Reward safe alternating touchdowns only when they produce real progress."""
 
     def __call__(
         self,
@@ -1510,43 +1666,81 @@ class safe_alternating_touchdown_progress(ManagerTermBase):
         asset_cfg: SceneEntityCfg,
         min_lateral_command: float = 0.10,
         min_yaw_command: float = 0.10,
-        lateral_progress_per_step: float = 0.035,
-        yaw_progress_per_step: float = 0.060,
+        lateral_progress_per_step: float = 0.060,
+        yaw_progress_per_step: float = 0.100,
+        minimum_productive_fraction: float = 0.20,
         min_clearance: float = 0.025,
         center_offset_x: float = 0.035,
         half_length: float = 0.090,
         half_width: float = 0.035,
     ) -> torch.Tensor:
-        if lateral_progress_per_step <= 0.0 or yaw_progress_per_step <= 0.0:
+        if (
+            lateral_progress_per_step <= 0.0
+            or yaw_progress_per_step <= 0.0
+            or minimum_productive_fraction < 0.0
+        ):
             raise ValueError("Touchdown progress targets must be positive.")
+        command, lateral, pure_yaw, event, _, lateral_delta, yaw_delta = self._measure(
+            env,
+            command_name,
+            sensor_cfg,
+            asset_cfg,
+            min_lateral_command=min_lateral_command,
+            min_yaw_command=min_yaw_command,
+            min_clearance=min_clearance,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        signed_lateral_progress = torch.sign(command[:, 1]) * lateral_delta
+        signed_yaw_progress = torch.sign(command[:, 2]) * yaw_delta
+        normalized_progress = torch.where(
+            lateral,
+            signed_lateral_progress / float(lateral_progress_per_step),
+            signed_yaw_progress / float(yaw_progress_per_step),
+        )
+        productive = normalized_progress >= float(minimum_productive_fraction)
+        return (
+            torch.clamp(normalized_progress, min=0.0, max=1.0)
+            * productive.float()
+            * event.float()
+            * (lateral | pure_yaw).float()
+            * _upright_scale(env)
+        )
+
+
+class safe_step_initiation(ManagerTermBase):
+    """Give one small reward when a safe specialization step starts."""
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._swing_active = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._swing_active[env_ids] = False
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        asset_cfg: SceneEntityCfg,
+        min_air_time: float = 0.040,
+        min_clearance: float = 0.025,
+        center_offset_x: float = 0.035,
+        half_length: float = 0.090,
+        half_width: float = 0.035,
+    ) -> torch.Tensor:
         contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
         asset: RigidObject = env.scene[asset_cfg.name]
         command = env.command_manager.get_command(command_name)
-        lateral, pure_yaw = two_goal_command_masks(
-            command,
-            lateral_min_command=min_lateral_command,
-            pure_yaw_min_command=min_yaw_command,
-        )
-        mode = lateral.to(torch.int8) + 2 * pure_yaw.to(torch.int8)
-        mode_changed = mode != self._last_mode
-        self._lateral_progress[mode_changed] = 0.0
-        self._yaw_progress[mode_changed] = 0.0
-        self._last_foot[mode_changed] = -1
-        self._last_mode = mode
-
-        lateral_velocity = torch.sign(command[:, 1]) * asset.data.root_lin_vel_b[:, 1]
-        yaw_velocity = torch.sign(command[:, 2]) * asset.data.root_ang_vel_b[:, 2]
-        self._lateral_progress += (
-            torch.clamp(lateral_velocity, min=0.0) * float(env.step_dt) * lateral.float()
-        )
-        self._yaw_progress += (
-            torch.clamp(yaw_velocity, min=0.0) * float(env.step_dt) * pure_yaw.float()
-        )
-
-        first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
-        exactly_one_touchdown = torch.sum(first_contact.int(), dim=1) == 1
-        touchdown_foot = torch.argmax(first_contact.int(), dim=1)
-        alternating = (self._last_foot >= 0) & (touchdown_foot != self._last_foot)
+        lateral, pure_yaw = two_goal_command_masks(command)
+        active = lateral | pure_yaw
+        air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+        exactly_one_swing = torch.sum((air_time >= float(min_air_time)).int(), dim=1) == 1
+        started = exactly_one_swing & ~self._swing_active & active
         corners = _oriented_footprint_corners_xy(
             asset,
             asset_cfg,
@@ -1556,24 +1750,8 @@ class safe_alternating_touchdown_progress(ManagerTermBase):
         )
         clearance = convex_footprint_signed_clearance_xy(corners[:, 0], corners[:, 1])
         safe = clearance >= float(min_clearance)
-        normalized_progress = torch.where(
-            lateral,
-            self._lateral_progress / float(lateral_progress_per_step),
-            self._yaw_progress / float(yaw_progress_per_step),
-        )
-        reward = (
-            torch.clamp(normalized_progress, min=0.0, max=1.0)
-            * exactly_one_touchdown.float()
-            * alternating.float()
-            * safe.float()
-            * (mode > 0).float()
-            * _upright_scale(env)
-        )
-        touchdown = exactly_one_touchdown & (mode > 0)
-        self._last_foot[touchdown] = touchdown_foot[touchdown]
-        self._lateral_progress[touchdown] = 0.0
-        self._yaw_progress[touchdown] = 0.0
-        return reward
+        self._swing_active.copy_(exactly_one_swing & active)
+        return started.float() * safe.float() * _upright_scale(env)
 
 
 class swept_oriented_footprint_proximity_l2(ManagerTermBase):
@@ -1604,10 +1782,13 @@ class swept_oriented_footprint_proximity_l2(ManagerTermBase):
         hard_clearance: float = 0.025,
         hard_scale: float = 3.0,
         overlap_scale: float = 8.0,
+        component: str = "combined",
         interpolation_steps: int = 4,
     ) -> torch.Tensor:
         if not 0.0 <= hard_clearance < soft_clearance:
             raise ValueError("Footprint clearances require 0 <= hard < soft.")
+        if component not in {"soft", "hard", "combined"}:
+            raise ValueError("Footprint barrier component must be soft, hard, or combined.")
         asset: RigidObject = env.scene[asset_cfg.name]
         current = _oriented_footprint_corners_xy(
             asset,
@@ -1641,7 +1822,13 @@ class swept_oriented_footprint_proximity_l2(ManagerTermBase):
         soft = torch.square(soft)
         hard = (clearance < float(hard_clearance)).float() * float(hard_scale)
         overlap = (clearance < 0.0).float() * float(overlap_scale)
-        return (soft + hard + overlap) * active.float()
+        if component == "soft":
+            penalty = soft
+        elif component == "hard":
+            penalty = hard + overlap
+        else:
+            penalty = soft + hard + overlap
+        return penalty * active.float()
 
 
 def feet_swing_clearance_band_l2(

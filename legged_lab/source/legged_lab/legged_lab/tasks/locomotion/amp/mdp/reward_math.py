@@ -217,6 +217,78 @@ def signed_command_progress_ratio(
     return torch.clamp(ratio, min=float(minimum_ratio), max=float(maximum_ratio)) * active.float()
 
 
+def two_goal_response_shortfall_l2(
+    command: torch.Tensor,
+    actual_lin_vel_xy_b: torch.Tensor,
+    actual_yaw_rate_b: torch.Tensor,
+    *,
+    target_fraction: float = 0.50,
+    max_penalty: float = 1.0,
+    lateral_min_command: float = 0.10,
+    pure_yaw_min_command: float = 0.10,
+) -> torch.Tensor:
+    """Return a bounded response-shortfall penalty for the two specialization modes.
+
+    A stationary response has a penalty of ``target_fraction**2``. Motion in the
+    commanded direction removes the penalty once it reaches ``target_fraction``
+    of the requested speed, while reverse motion is penalized more strongly.
+    """
+    if target_fraction <= 0.0 or max_penalty <= 0.0:
+        raise ValueError("Response target_fraction and max_penalty must be positive.")
+    if actual_lin_vel_xy_b.shape != command[:, :2].shape:
+        raise ValueError("Planar velocity response must have shape [num_envs, 2].")
+    if actual_yaw_rate_b.shape != command[:, 2].shape:
+        raise ValueError("Yaw-rate response must have shape [num_envs].")
+
+    lateral, pure_yaw = two_goal_command_masks(
+        command,
+        lateral_min_command=lateral_min_command,
+        pure_yaw_min_command=pure_yaw_min_command,
+    )
+    lateral_ratio = (
+        torch.sign(command[:, 1]) * actual_lin_vel_xy_b[:, 1]
+        / torch.clamp(torch.abs(command[:, 1]), min=float(lateral_min_command))
+    )
+    yaw_ratio = (
+        torch.sign(command[:, 2]) * actual_yaw_rate_b
+        / torch.clamp(torch.abs(command[:, 2]), min=float(pure_yaw_min_command))
+    )
+    response_ratio = torch.where(lateral, lateral_ratio, yaw_ratio)
+    shortfall = torch.square(torch.clamp(float(target_fraction) - response_ratio, min=0.0))
+    active = lateral | pure_yaw
+    return torch.clamp(shortfall, max=float(max_penalty)) * active.float()
+
+
+def touchdown_pose_progress(
+    previous_root_xy_w: torch.Tensor,
+    previous_heading_w: torch.Tensor,
+    current_root_xy_w: torch.Tensor,
+    current_heading_w: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Measure actual forward/lateral displacement and wrapped yaw change.
+
+    Translation is expressed in the root-yaw frame saved at the preceding
+    touchdown. This prevents torso sway or world-frame drift from being counted
+    as command-directed progress.
+    """
+    if previous_root_xy_w.shape != current_root_xy_w.shape:
+        raise ValueError("Previous and current root positions must have identical shapes.")
+    if previous_root_xy_w.ndim != 2 or previous_root_xy_w.shape[1] != 2:
+        raise ValueError("Root XY positions must have shape [num_envs, 2].")
+    if previous_heading_w.shape != current_heading_w.shape:
+        raise ValueError("Previous and current headings must have identical shapes.")
+    if previous_heading_w.ndim != 1 or previous_heading_w.shape[0] != previous_root_xy_w.shape[0]:
+        raise ValueError("Root headings must have shape [num_envs].")
+
+    delta_w = current_root_xy_w - previous_root_xy_w
+    cos_heading = torch.cos(previous_heading_w)
+    sin_heading = torch.sin(previous_heading_w)
+    forward_delta = cos_heading * delta_w[:, 0] + sin_heading * delta_w[:, 1]
+    lateral_delta = -sin_heading * delta_w[:, 0] + cos_heading * delta_w[:, 1]
+    yaw_delta = torch.remainder(current_heading_w - previous_heading_w + torch.pi, 2.0 * torch.pi) - torch.pi
+    return forward_delta, lateral_delta, yaw_delta
+
+
 def swept_convex_footprint_signed_clearance_xy(
     previous_left_corners_xy: torch.Tensor,
     previous_right_corners_xy: torch.Tensor,

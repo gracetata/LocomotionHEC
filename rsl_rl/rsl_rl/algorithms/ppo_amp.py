@@ -16,6 +16,35 @@ from rsl_rl.algorithms import PPO
 from rsl_rl.modules.amp import LossType
 
 
+def two_goal_specialization_mask_from_policy_obs(
+    policy_obs: torch.Tensor,
+    *,
+    command_obs_start_index: int = 6,
+    lateral_min_command: float = 0.10,
+    pure_yaw_min_command: float = 0.10,
+    max_forward_command: float = 0.02,
+    max_lateral_yaw_command: float = 0.05,
+    max_pure_yaw_translation_command: float = 0.02,
+) -> torch.Tensor:
+    """Classify pure-lateral and pure-yaw samples without changing policy I/O."""
+    if policy_obs.ndim != 2:
+        raise ValueError("Flattened policy observations must have shape [batch, features].")
+    start = int(command_obs_start_index)
+    if start < 0 or start + 3 > policy_obs.shape[1]:
+        raise ValueError("Velocity-command observation slice is outside the policy input.")
+    command = policy_obs[:, start : start + 3]
+    lateral = (
+        (torch.abs(command[:, 1]) >= float(lateral_min_command))
+        & (torch.abs(command[:, 0]) <= float(max_forward_command))
+        & (torch.abs(command[:, 2]) <= float(max_lateral_yaw_command))
+    )
+    pure_yaw = (
+        (torch.linalg.vector_norm(command[:, :2], dim=1) <= float(max_pure_yaw_translation_command))
+        & (torch.abs(command[:, 2]) >= float(pure_yaw_min_command))
+    )
+    return lateral | pure_yaw
+
+
 class PPOAMP(PPO):
 
     policy: ActorCritic | ActorCriticRecurrent | ActorCriticCNN
@@ -87,6 +116,18 @@ class PPOAMP(PPO):
         self.baseline_kl_max_scale = float(self.baseline_kl_cfg.get("max_scale", 1.0))
         self.baseline_kl_adaptation_rate = float(self.baseline_kl_cfg.get("adaptation_rate", 1.5))
         self.baseline_kl_hard_limit = float(self.baseline_kl_cfg.get("hard_limit", 0.0))
+        self.baseline_kl_command_conditioned = bool(self.baseline_kl_cfg.get("command_conditioned", False))
+        self.baseline_kl_command_obs_start_index = int(self.baseline_kl_cfg.get("command_obs_start_index", 6))
+        self.baseline_kl_specialization_scale = float(self.baseline_kl_cfg.get("specialization_scale", 0.0))
+        self.baseline_kl_lateral_min_command = float(self.baseline_kl_cfg.get("lateral_min_command", 0.10))
+        self.baseline_kl_pure_yaw_min_command = float(self.baseline_kl_cfg.get("pure_yaw_min_command", 0.10))
+        self.baseline_kl_max_forward_command = float(self.baseline_kl_cfg.get("max_forward_command", 0.02))
+        self.baseline_kl_max_lateral_yaw_command = float(
+            self.baseline_kl_cfg.get("max_lateral_yaw_command", 0.05)
+        )
+        self.baseline_kl_max_pure_yaw_translation_command = float(
+            self.baseline_kl_cfg.get("max_pure_yaw_translation_command", 0.02)
+        )
         if self.baseline_kl_adaptation_rate <= 1.0:
             raise ValueError("baseline KL adaptation_rate must be greater than one.")
         if self.baseline_kl_max_scale < self.baseline_kl_min_scale:
@@ -203,6 +244,9 @@ class PPOAMP(PPO):
         mean_disc_score = 0
         mean_disc_demo_score = 0
         mean_baseline_kl = 0
+        mean_baseline_kl_specialization = 0
+        mean_baseline_kl_retention = 0
+        mean_baseline_kl_weighted = 0
 
         # Get mini batch generator
         if self.policy.is_recurrent:
@@ -336,23 +380,61 @@ class PPOAMP(PPO):
                     baseline_mu_batch = self.baseline_policy.action_mean.detach()
                 baseline_sigma_batch = self.baseline_policy.action_std.detach().clamp_min(self.baseline_kl_min_std)
                 if self.baseline_kl_mean_only:
-                    baseline_kl_loss = torch.sum(
+                    baseline_kl_per_sample = torch.sum(
                         torch.square(mu_batch - baseline_mu_batch)
                         / (2.0 * torch.square(baseline_sigma_batch)),
                         dim=-1,
-                    ).mean()
+                    )
                 else:
                     current_sigma_batch = sigma_batch.clamp_min(self.baseline_kl_min_std)
-                    baseline_kl_loss = torch.sum(
+                    baseline_kl_per_sample = torch.sum(
                         torch.log(baseline_sigma_batch / current_sigma_batch)
                         + (torch.square(current_sigma_batch) + torch.square(mu_batch - baseline_mu_batch))
                         / (2.0 * torch.square(baseline_sigma_batch))
                         - 0.5,
                         dim=-1,
-                    ).mean()
-                loss = loss + self.baseline_kl_scale * baseline_kl_loss
+                    )
+                baseline_kl_loss = baseline_kl_per_sample.mean()
+                if self.baseline_kl_command_conditioned:
+                    actor_obs_batch = self.policy.get_actor_obs(baseline_obs_batch)
+                    specialization_mask = two_goal_specialization_mask_from_policy_obs(
+                        actor_obs_batch,
+                        command_obs_start_index=self.baseline_kl_command_obs_start_index,
+                        lateral_min_command=self.baseline_kl_lateral_min_command,
+                        pure_yaw_min_command=self.baseline_kl_pure_yaw_min_command,
+                        max_forward_command=self.baseline_kl_max_forward_command,
+                        max_lateral_yaw_command=self.baseline_kl_max_lateral_yaw_command,
+                        max_pure_yaw_translation_command=(
+                            self.baseline_kl_max_pure_yaw_translation_command
+                        ),
+                    )
+                    retention_mask = ~specialization_mask
+                    baseline_kl_specialization = torch.where(
+                        specialization_mask,
+                        baseline_kl_per_sample,
+                        torch.zeros_like(baseline_kl_per_sample),
+                    ).sum() / torch.clamp(specialization_mask.sum(), min=1)
+                    baseline_kl_retention = torch.where(
+                        retention_mask,
+                        baseline_kl_per_sample,
+                        torch.zeros_like(baseline_kl_per_sample),
+                    ).sum() / torch.clamp(retention_mask.sum(), min=1)
+                    kl_scale = torch.where(
+                        specialization_mask,
+                        torch.full_like(baseline_kl_per_sample, self.baseline_kl_specialization_scale),
+                        torch.full_like(baseline_kl_per_sample, self.baseline_kl_scale),
+                    )
+                    baseline_kl_weighted_loss = torch.mean(kl_scale * baseline_kl_per_sample)
+                else:
+                    baseline_kl_specialization = torch.zeros((), device=self.device)
+                    baseline_kl_retention = baseline_kl_loss
+                    baseline_kl_weighted_loss = self.baseline_kl_scale * baseline_kl_loss
+                loss = loss + baseline_kl_weighted_loss
             else:
                 baseline_kl_loss = torch.zeros((), device=self.device)
+                baseline_kl_specialization = torch.zeros((), device=self.device)
+                baseline_kl_retention = torch.zeros((), device=self.device)
+                baseline_kl_weighted_loss = torch.zeros((), device=self.device)
 
             # Symmetry loss
             if self.symmetry:
@@ -486,6 +568,9 @@ class PPOAMP(PPO):
             mean_disc_score += disc_score.mean().item()
             mean_disc_demo_score += disc_demo_score.mean().item()
             mean_baseline_kl += baseline_kl_loss.item()
+            mean_baseline_kl_specialization += baseline_kl_specialization.item()
+            mean_baseline_kl_retention += baseline_kl_retention.item()
+            mean_baseline_kl_weighted += baseline_kl_weighted_loss.item()
 
         # Divide the losses by the number of updates
         num_updates = self.num_learning_epochs * self.num_mini_batches
@@ -501,25 +586,28 @@ class PPOAMP(PPO):
         mean_disc_score /= num_updates
         mean_disc_demo_score /= num_updates
         mean_baseline_kl /= num_updates
+        mean_baseline_kl_specialization /= num_updates
+        mean_baseline_kl_retention /= num_updates
+        mean_baseline_kl_weighted /= num_updates
 
         if (
             self.baseline_policy is not None
             and self.baseline_kl_hard_limit > 0.0
-            and mean_baseline_kl > self.baseline_kl_hard_limit
+            and mean_baseline_kl_retention > self.baseline_kl_hard_limit
         ):
             raise RuntimeError(
                 "Baseline-policy KL safety limit exceeded: "
-                f"{mean_baseline_kl:.6f} > {self.baseline_kl_hard_limit:.6f}. "
+                f"{mean_baseline_kl_retention:.6f} > {self.baseline_kl_hard_limit:.6f}. "
                 "Refusing to continue a degrading refinement run."
             )
 
         if self.baseline_policy is not None and self.baseline_kl_target > 0.0:
-            if mean_baseline_kl > self.baseline_kl_target * 1.5:
+            if mean_baseline_kl_retention > self.baseline_kl_target * 1.5:
                 self.baseline_kl_scale = min(
                     self.baseline_kl_scale * self.baseline_kl_adaptation_rate,
                     self.baseline_kl_max_scale,
                 )
-            elif mean_baseline_kl < self.baseline_kl_target / 1.5:
+            elif mean_baseline_kl_retention < self.baseline_kl_target / 1.5:
                 self.baseline_kl_scale = max(
                     self.baseline_kl_scale / self.baseline_kl_adaptation_rate,
                     self.baseline_kl_min_scale,
@@ -540,6 +628,9 @@ class PPOAMP(PPO):
             loss_dict["symmetry"] = mean_symmetry_loss
         if self.baseline_policy is not None:
             loss_dict["baseline_kl"] = mean_baseline_kl
+            loss_dict["baseline_kl_specialization"] = mean_baseline_kl_specialization
+            loss_dict["baseline_kl_retention"] = mean_baseline_kl_retention
+            loss_dict["baseline_kl_weighted"] = mean_baseline_kl_weighted
             loss_dict["baseline_kl_scale"] = self.baseline_kl_scale
         loss_dict["amp/disc_loss"] = mean_disc_loss
         loss_dict["amp/disc_grad_penalty"] = mean_disc_grad_penalty

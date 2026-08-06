@@ -160,6 +160,15 @@ G1_NAV2_TWO_GOAL_MODE_CONFIG_PATH = os.path.join(
     "nav2_behavior_50hz",
     "task_sampling_two_goal_config.json",
 )
+G1_NAV2_TWO_GOAL_STAGE2_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_two_goal_stage2_config.json",
+)
 G1_NAV2_BEHAVIOR_RECORDED_DATA_PATH = os.path.join(
     G1_PROJECT_ROOT_DIR,
     "legged_lab",
@@ -1826,8 +1835,8 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
         self.commands.base_velocity.window_duration_s = 6.0
         self.commands.base_velocity.rel_standing_envs = 0.0
         self.commands.base_velocity.hard_zero_stand = False
-        self.commands.base_velocity.mode_command_clip_min = (-0.02, -0.40, -0.50)
-        self.commands.base_velocity.mode_command_clip_max = (0.02, 0.40, 0.50)
+        self.commands.base_velocity.mode_command_clip_min = (-0.02, -0.45, -0.60)
+        self.commands.base_velocity.mode_command_clip_max = (0.02, 0.45, 0.60)
 
         # Remove the previous behavior-shaping terms that can reward stationary
         # single support or produce a large reset/transient stop penalty.
@@ -1848,34 +1857,74 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
 
         self.rewards.lateral_command_progress = RewTerm(
             func=mdp.lateral_command_progress,
-            weight=1.0,
-            params={"command_name": "base_velocity", "min_command": 0.10},
+            weight=4.0,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "asset_cfg": foot_asset_cfg,
+                "min_command": 0.10,
+                "target_displacement": 0.060,
+                "forward_leak_scale": 0.050,
+                "yaw_leak_scale": 0.100,
+                "min_clearance": 0.025,
+            },
         )
         self.rewards.pure_yaw_command_progress = RewTerm(
             func=mdp.pure_yaw_command_progress,
-            weight=1.0,
-            params={"command_name": "base_velocity", "min_command": 0.10},
+            weight=4.0,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "asset_cfg": foot_asset_cfg,
+                "min_command": 0.10,
+                "target_yaw_delta": 0.100,
+                "planar_drift_scale": 0.050,
+                "min_clearance": 0.025,
+            },
         )
         self.rewards.safe_alternating_touchdown_progress = RewTerm(
             func=mdp.safe_alternating_touchdown_progress,
-            weight=1.5,
+            weight=2.5,
             params={
                 "command_name": "base_velocity",
                 "sensor_cfg": foot_sensor_cfg,
                 "asset_cfg": foot_asset_cfg,
                 "min_lateral_command": 0.10,
                 "min_yaw_command": 0.10,
-                "lateral_progress_per_step": 0.035,
-                "yaw_progress_per_step": 0.060,
+                "lateral_progress_per_step": 0.060,
+                "yaw_progress_per_step": 0.100,
+                "minimum_productive_fraction": 0.20,
                 "min_clearance": 0.025,
                 "center_offset_x": 0.035,
                 "half_length": 0.090,
                 "half_width": 0.035,
             },
         )
+        self.rewards.safe_step_initiation = RewTerm(
+            func=mdp.safe_step_initiation,
+            weight=0.30,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "asset_cfg": foot_asset_cfg,
+                "min_air_time": 0.040,
+                "min_clearance": 0.025,
+            },
+        )
+        self.rewards.two_goal_response_shortfall = RewTerm(
+            func=mdp.two_goal_response_shortfall,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "target_fraction": 0.50,
+                "max_penalty": 1.0,
+                "min_lateral_command": 0.10,
+                "min_yaw_command": 0.10,
+            },
+        )
         self.rewards.pure_yaw_planar_drift_l2 = RewTerm(
             func=mdp.pure_yaw_planar_drift_l2,
-            weight=-0.35,
+            weight=-0.10,
             params={
                 "command_name": "base_velocity",
                 "min_yaw_command": 0.10,
@@ -1884,7 +1933,7 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
         )
         self.rewards.lateral_command_leak_l2 = RewTerm(
             func=mdp.lateral_command_leak_l2,
-            weight=-0.25,
+            weight=-0.08,
             params={
                 "command_name": "base_velocity",
                 "min_lateral_command": 0.10,
@@ -1892,9 +1941,9 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
                 "yaw_rate_scale": 0.15,
             },
         )
-        self.rewards.swept_oriented_footprint_proximity_l2 = RewTerm(
+        self.rewards.swept_oriented_footprint_soft_margin_l2 = RewTerm(
             func=mdp.swept_oriented_footprint_proximity_l2,
-            weight=-0.75,
+            weight=-0.50,
             params={
                 "command_name": "base_velocity",
                 "asset_cfg": foot_asset_cfg,
@@ -1903,23 +1952,65 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
                 "half_width": 0.035,
                 "soft_clearance": 0.040,
                 "hard_clearance": 0.025,
-                "hard_scale": 3.0,
-                "overlap_scale": 8.0,
+                "hard_scale": 1.0,
+                "overlap_scale": 2.0,
+                "component": "soft",
+                "interpolation_steps": 4,
+            },
+        )
+        self.rewards.swept_oriented_footprint_hard_barrier = RewTerm(
+            func=mdp.swept_oriented_footprint_proximity_l2,
+            weight=-4.0,
+            params={
+                "command_name": "base_velocity",
+                "asset_cfg": foot_asset_cfg,
+                "center_offset_x": 0.035,
+                "half_length": 0.090,
+                "half_width": 0.035,
+                "soft_clearance": 0.040,
+                "hard_clearance": 0.025,
+                "hard_scale": 1.0,
+                "overlap_scale": 2.0,
+                "component": "hard",
                 "interpolation_steps": 4,
             },
         )
 
         # Pure-yaw roll and excess cadence remain guards, not stepping rewards.
         self.rewards.pure_yaw_torso_roll_l2.weight = -0.30
-        self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.50
+        self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.15
         self.rewards.command_conditioned_footstep_cadence_l1.params.update(
             {"base_hz": 2.0, "linear_gain": 2.0, "yaw_gain": 1.5, "maximum_hz": 3.0}
         )
 
 
 @configclass
+class G1AmpNav2TwoGoalStage2FinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
+    """Second curriculum stage with smaller commands and restored quality guards."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = G1_NAV2_TWO_GOAL_STAGE2_MODE_CONFIG_PATH
+        self.commands.base_velocity.mode_command_clip_min = (-0.02, -0.40, -0.50)
+        self.commands.base_velocity.mode_command_clip_max = (0.02, 0.40, 0.50)
+        self.rewards.lateral_command_leak_l2.weight = -0.25
+        self.rewards.pure_yaw_planar_drift_l2.weight = -0.35
+        self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.50
+
+
+@configclass
 class G1AmpNav2TwoGoalFinetuneEnvCfg_PLAY(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Reduced-env replay configuration for two-goal refinement."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1AmpNav2TwoGoalStage2FinetuneEnvCfg_PLAY(G1AmpNav2TwoGoalStage2FinetuneEnvCfg):
+    """Reduced-env replay configuration for curriculum stage two."""
 
     def __post_init__(self):
         super().__post_init__()

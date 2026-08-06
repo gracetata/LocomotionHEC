@@ -87,11 +87,11 @@ def test_distribution_contains_only_balanced_lateral_and_pure_yaw_modes():
         if name.startswith("lateral"):
             assert mode["lin_vel_x"] == [0.0, 0.0]
             assert mode["ang_vel_z"] == [0.0, 0.0]
-            assert max(abs(value) for value in mode["lin_vel_y"]) >= 0.15
+            assert min(abs(value) for value in mode["lin_vel_y"]) >= 0.25
         else:
             assert mode["lin_vel_x"] == [0.0, 0.0]
             assert mode["lin_vel_y"] == [0.0, 0.0]
-            assert max(abs(value) for value in mode["ang_vel_z"]) >= 0.20
+            assert min(abs(value) for value in mode["ang_vel_z"]) >= 0.35
 
 
 def test_two_goal_masks_and_progress_have_no_stationary_credit():
@@ -140,7 +140,39 @@ def test_swept_sole_geometry_detects_between_frame_crossing():
     assert swept_clearance.item() < 0.0
 
 
-def test_task_is_isolated_and_optimization_is_conservative():
+def test_response_shortfall_penalizes_stillness_and_reverse_motion():
+    command = torch.tensor(
+        [[0.0, 0.25, 0.0], [0.0, 0.25, 0.0], [0.0, 0.0, -0.35]]
+    )
+    actual_xy = torch.tensor([[0.0, 0.0], [0.0, 0.15], [0.0, 0.0]])
+    actual_yaw = torch.tensor([0.0, 0.0, 0.10])
+    penalty = REWARD_MATH.two_goal_response_shortfall_l2(
+        command,
+        actual_xy,
+        actual_yaw,
+        target_fraction=0.5,
+        max_penalty=1.0,
+    )
+    torch.testing.assert_close(penalty[0], torch.tensor(0.25))
+    torch.testing.assert_close(penalty[1], torch.tensor(0.0))
+    assert penalty[2] > penalty[0]
+    assert penalty[2] <= 1.0
+
+
+def test_touchdown_progress_uses_saved_heading_and_wraps_yaw():
+    previous_xy = torch.tensor([[1.0, 2.0], [0.0, 0.0]])
+    current_xy = torch.tensor([[0.9, 2.2], [0.0, 0.0]])
+    previous_heading = torch.tensor([math.pi / 2.0, math.pi - 0.05])
+    current_heading = torch.tensor([math.pi / 2.0, -math.pi + 0.05])
+    forward, lateral, yaw = REWARD_MATH.touchdown_pose_progress(
+        previous_xy, previous_heading, current_xy, current_heading
+    )
+    torch.testing.assert_close(forward[0], torch.tensor(0.2), atol=1.0e-6, rtol=0.0)
+    torch.testing.assert_close(lateral[0], torch.tensor(0.1), atol=1.0e-6, rtol=0.0)
+    torch.testing.assert_close(yaw[1], torch.tensor(0.1), atol=1.0e-6, rtol=0.0)
+
+
+def test_task_is_isolated_and_optimization_allows_specialization():
     env_text = ENV_CFG_FILE.read_text()
     registry = REGISTRY_FILE.read_text()
     agent = AGENT_CFG_FILE.read_text()
@@ -161,15 +193,22 @@ def test_task_is_isolated_and_optimization_is_conservative():
         "lateral_command_progress",
         "pure_yaw_command_progress",
         "safe_alternating_touchdown_progress",
-        "swept_oriented_footprint_proximity_l2",
+        "safe_step_initiation",
+        "two_goal_response_shortfall",
+        "swept_oriented_footprint_soft_margin_l2",
+        "swept_oriented_footprint_hard_barrier",
     ):
         assert required in block
     assert "load_actor_amp_only = True" in agent
-    assert "freeze_actor_hidden_layers = 2" in agent
+    assert "freeze_actor_hidden_layers = 1" in agent
+    assert "actor_warmup_iterations = 10" in agent
     assert "freeze_discriminator = True" in agent
-    assert "learning_rate = 5.0e-6" in agent
-    assert "num_learning_epochs = 2" in agent
-    assert "hard_limit = 0.20" in agent
+    assert "learning_rate = 1.5e-5" in agent
+    assert "num_learning_epochs = 3" in agent
+    assert "specialization_scale = 0.005" in agent
+    assert "hard_limit = 0.15" in agent
+    assert 'weight=-4.0' in block
+    assert 'weight=-2.0' in block
     assert "RSI_ENABLE=False" in script
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "model_10990" not in script

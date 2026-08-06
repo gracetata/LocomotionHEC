@@ -129,28 +129,32 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
     load_policy_only = False
     reset_iteration_on_policy_only_load = True
     reset_amp_on_load = False
-    freeze_actor_hidden_layers = 2
-    save_interval = 20
+    freeze_actor_hidden_layers = 1
+    actor_warmup_iterations = 10
+    save_interval = 10
 
     def __post_init__(self):
         parent_post_init = getattr(super(), "__post_init__", None)
         if parent_post_init is not None:
             parent_post_init()
-        self.policy.init_noise_std = 0.25
-        self.algorithm.learning_rate = 5.0e-6
+        self.policy.init_noise_std = 0.35
+        self.algorithm.learning_rate = 1.5e-5
         self.algorithm.schedule = "fixed"
-        self.algorithm.desired_kl = 0.003
-        self.algorithm.clip_param = 0.10
-        self.algorithm.num_learning_epochs = 2
+        self.algorithm.desired_kl = 0.01
+        self.algorithm.clip_param = 0.15
+        self.algorithm.num_learning_epochs = 3
         self.algorithm.num_mini_batches = 4
-        self.algorithm.entropy_coef = 2.0e-4
+        self.algorithm.entropy_coef = 8.0e-4
         self.algorithm.max_grad_norm = 0.5
         self.algorithm.baseline_kl_cfg.mean_only = True
-        self.algorithm.baseline_kl_cfg.target = 0.05
-        self.algorithm.baseline_kl_cfg.min_scale = 0.01
-        self.algorithm.baseline_kl_cfg.max_scale = 0.50
+        self.algorithm.baseline_kl_cfg.command_conditioned = True
+        self.algorithm.baseline_kl_cfg.command_obs_start_index = 6
+        self.algorithm.baseline_kl_cfg.specialization_scale = 0.005
+        self.algorithm.baseline_kl_cfg.target = 0.0
+        self.algorithm.baseline_kl_cfg.min_scale = 0.08
+        self.algorithm.baseline_kl_cfg.max_scale = 0.08
         self.algorithm.baseline_kl_cfg.adaptation_rate = 1.5
-        self.algorithm.baseline_kl_cfg.hard_limit = 0.20
+        self.algorithm.baseline_kl_cfg.hard_limit = 0.15
         self.algorithm.amp_cfg.freeze_discriminator = True
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
         # In PPOAMP this is the task fraction: 0.85 task + 0.15 frozen style.
