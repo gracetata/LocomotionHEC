@@ -19,7 +19,7 @@ Inputs/outputs:
 Usage:
     python deploy/deploy_mujoco/deploy_mujoco_g1_amp.py deploy/deploy_mujoco/configs/g1_amp.yaml
     G1_AMP_USE_GLFW=False G1_AMP_SIMULATION_DURATION=5 python deploy/deploy_mujoco/deploy_mujoco_g1_amp.py deploy/deploy_mujoco/configs/g1_amp.yaml
-    G1_AMP_COMMAND_MODE=joystick G1_AMP_USE_GLFW=True python deploy/deploy_mujoco/deploy_mujoco_g1_amp.py deploy/deploy_mujoco/configs/g1_amp.yaml
+    G1_AMP_COMMAND_MODE=keyboard G1_AMP_USE_GLFW=True python deploy/deploy_mujoco/deploy_mujoco_g1_amp.py deploy/deploy_mujoco/configs/g1_amp.yaml
 """
 
 from __future__ import annotations
@@ -152,6 +152,17 @@ def load_config(config_path: str) -> dict:
     config["simulation_duration"] = float(os.environ.get("G1_AMP_SIMULATION_DURATION", config["simulation_duration"]))
     config["use_glfw"] = _env_bool("G1_AMP_USE_GLFW", bool(config.get("use_glfw", True)))
     config["real_time"] = _env_bool("G1_AMP_REAL_TIME", bool(config.get("real_time", True)))
+    config["render_fps"] = _env_float(
+        "G1_AMP_RENDER_FPS", float(config.get("render_fps", 60.0))
+    )
+    config["realtime_status_interval_s"] = _env_float(
+        "G1_AMP_REALTIME_STATUS_INTERVAL_S",
+        float(config.get("realtime_status_interval_s", 5.0)),
+    )
+    if config["render_fps"] <= 0.0:
+        raise ValueError("G1_AMP_RENDER_FPS must be positive.")
+    if config["realtime_status_interval_s"] < 0.0:
+        raise ValueError("G1_AMP_REALTIME_STATUS_INTERVAL_S must be non-negative.")
     config["add_floor"] = _env_bool("G1_AMP_ADD_FLOOR", bool(config.get("add_floor", True)))
     config["ensure_lighting"] = _env_bool("G1_AMP_ENSURE_LIGHTING", bool(config.get("ensure_lighting", True)))
     config["repair_missing_meshes"] = _env_bool(
@@ -307,6 +318,14 @@ def load_config(config_path: str) -> dict:
         "G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_SPACE_MAX_SWITCHES",
         int(config.get("armhack_stand_interactive_auto_space_max_switches", 0)),
     )
+    config["armhack_stand_ankle_diagnostics_enable"] = _env_bool(
+        "G1_AMP_ARMHACK_STAND_ANKLE_DIAGNOSTICS_ENABLE",
+        bool(config.get("armhack_stand_ankle_diagnostics_enable", True)),
+    )
+    config["armhack_stand_ankle_print_hz"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_ANKLE_PRINT_HZ",
+        float(config.get("armhack_stand_ankle_print_hz", 1.0)),
+    )
     config["armhack_walk_enable"] = _env_bool(
         "G1_AMP_ARMHACK_WALK_ENABLE", bool(config.get("armhack_walk_enable", False))
     )
@@ -367,6 +386,42 @@ def load_config(config_path: str) -> dict:
     config["extreme_stand_recovery_interactive_wrench_start_enabled"] = _env_bool(
         "G1_AMP_EXTREME_STAND_INTERACTIVE_WRENCH_START_ENABLED",
         bool(config.get("extreme_stand_recovery_interactive_wrench_start_enabled", False)),
+    )
+    config["extreme_stand_recovery_foot_spacing_start_random"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_FOOT_SPACING_START_RANDOM",
+        bool(config.get("extreme_stand_recovery_foot_spacing_start_random", False)),
+    )
+    config["extreme_stand_recovery_large_push_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_LARGE_PUSH_ENABLE",
+        bool(config.get("extreme_stand_recovery_large_push_enable", False)),
+    )
+    config["extreme_stand_recovery_large_push_body_name"] = os.environ.get(
+        "G1_AMP_EXTREME_STAND_LARGE_PUSH_BODY_NAME",
+        str(config.get("extreme_stand_recovery_large_push_body_name", "torso_link")),
+    )
+    config["extreme_stand_recovery_motion_trace_path"] = os.environ.get(
+        "G1_AMP_EXTREME_STAND_MOTION_TRACE_PATH",
+        str(config.get("extreme_stand_recovery_motion_trace_path", "")),
+    )
+    config["extreme_stand_recovery_interactive_log_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_LOG_ENABLE",
+        bool(config.get("extreme_stand_recovery_interactive_log_enable", False)),
+    )
+    config["extreme_stand_recovery_interactive_log_path"] = os.environ.get(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_LOG_PATH",
+        str(config.get("extreme_stand_recovery_interactive_log_path", "")),
+    )
+    config["extreme_stand_recovery_interactive_trials_dir"] = os.environ.get(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_TRIALS_DIR",
+        str(config.get("extreme_stand_recovery_interactive_trials_dir", "")),
+    )
+    config["extreme_stand_recovery_interactive_events_path"] = os.environ.get(
+        "G1_AMP_EXTREME_STAND_INTERACTIVE_EVENTS_PATH",
+        str(config.get("extreme_stand_recovery_interactive_events_path", "")),
+    )
+    config["extreme_stand_recovery_target_limiter_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_TARGET_LIMITER_ENABLE",
+        bool(config.get("extreme_stand_recovery_target_limiter_enable", False)),
     )
     for key, env_name, default in (
         ("extreme_stand_recovery_leg_noise_rad", "G1_AMP_EXTREME_STAND_LEG_NOISE_RAD", 0.20),
@@ -434,8 +489,101 @@ def load_config(config_path: str) -> dict:
             "G1_AMP_EXTREME_STAND_FINAL_WINDOW_S",
             1.0,
         ),
+        (
+            "extreme_stand_recovery_steady_start_s",
+            "G1_AMP_EXTREME_STAND_STEADY_START_S",
+            10.0,
+        ),
+        (
+            "extreme_stand_recovery_feet_gaussian_variance_m2",
+            "G1_AMP_EXTREME_STAND_FEET_GAUSSIAN_VARIANCE_M2",
+            1.0e-4,
+        ),
+        (
+            "extreme_stand_recovery_joint_jerk_reward_weight",
+            "G1_AMP_EXTREME_STAND_JOINT_JERK_REWARD_WEIGHT",
+            -1.0e-8,
+        ),
+        (
+            "extreme_stand_recovery_foot_spacing_min_delta_m",
+            "G1_AMP_EXTREME_STAND_FOOT_SPACING_MIN_DELTA_M",
+            0.05,
+        ),
+        (
+            "extreme_stand_recovery_foot_spacing_max_delta_m",
+            "G1_AMP_EXTREME_STAND_FOOT_SPACING_MAX_DELTA_M",
+            0.12,
+        ),
+        (
+            "extreme_stand_recovery_foot_spacing_max_roll_offset_rad",
+            "G1_AMP_EXTREME_STAND_FOOT_SPACING_MAX_ROLL_OFFSET_RAD",
+            0.35,
+        ),
+        (
+            "extreme_stand_recovery_foot_spacing_recovery_tolerance_m",
+            "G1_AMP_EXTREME_STAND_FOOT_SPACING_RECOVERY_TOLERANCE_M",
+            0.02,
+        ),
+        (
+            "extreme_stand_recovery_large_push_force_n",
+            "G1_AMP_EXTREME_STAND_LARGE_PUSH_FORCE_N",
+            120.0,
+        ),
+        (
+            "extreme_stand_recovery_large_push_duration_s",
+            "G1_AMP_EXTREME_STAND_LARGE_PUSH_DURATION_S",
+            0.20,
+        ),
+        (
+            "extreme_stand_recovery_large_push_time_s",
+            "G1_AMP_EXTREME_STAND_LARGE_PUSH_TIME_S",
+            5.0,
+        ),
+        (
+            "extreme_stand_recovery_post_push_settle_s",
+            "G1_AMP_EXTREME_STAND_POST_PUSH_SETTLE_S",
+            2.0,
+        ),
+        (
+            "extreme_stand_recovery_target_leg_velocity_limit_rad_s",
+            "G1_AMP_EXTREME_STAND_TARGET_LEG_VELOCITY_LIMIT_RAD_S",
+            25.0,
+        ),
+        (
+            "extreme_stand_recovery_target_waist_velocity_limit_rad_s",
+            "G1_AMP_EXTREME_STAND_TARGET_WAIST_VELOCITY_LIMIT_RAD_S",
+            10.0,
+        ),
+        (
+            "extreme_stand_recovery_target_arm_velocity_limit_rad_s",
+            "G1_AMP_EXTREME_STAND_TARGET_ARM_VELOCITY_LIMIT_RAD_S",
+            15.0,
+        ),
+        (
+            "extreme_stand_recovery_target_leg_acceleration_limit_rad_s2",
+            "G1_AMP_EXTREME_STAND_TARGET_LEG_ACCELERATION_LIMIT_RAD_S2",
+            600.0,
+        ),
+        (
+            "extreme_stand_recovery_target_waist_acceleration_limit_rad_s2",
+            "G1_AMP_EXTREME_STAND_TARGET_WAIST_ACCELERATION_LIMIT_RAD_S2",
+            250.0,
+        ),
+        (
+            "extreme_stand_recovery_target_arm_acceleration_limit_rad_s2",
+            "G1_AMP_EXTREME_STAND_TARGET_ARM_ACCELERATION_LIMIT_RAD_S2",
+            400.0,
+        ),
     ):
         config[key] = _env_float(env_name, float(config.get(key, default)))
+    config["extreme_stand_recovery_foot_spacing_search_samples"] = _env_int(
+        "G1_AMP_EXTREME_STAND_FOOT_SPACING_SEARCH_SAMPLES",
+        int(config.get("extreme_stand_recovery_foot_spacing_search_samples", 141)),
+    )
+    config["extreme_stand_recovery_large_push_direction_index"] = _env_int(
+        "G1_AMP_EXTREME_STAND_LARGE_PUSH_DIRECTION_INDEX",
+        int(config.get("extreme_stand_recovery_large_push_direction_index", -1)),
+    )
     config["sole_min_clearance_m"] = _env_float(
         "G1_AMP_SOLE_MIN_CLEARANCE_M", float(config.get("sole_min_clearance_m", 0.025))
     )
@@ -485,6 +633,12 @@ def load_config(config_path: str) -> dict:
     config["joystick_sign_yaw"] = _env_float("G1_AMP_JOYSTICK_SIGN_YAW", float(config.get("joystick_sign_yaw", -1.0)))
     config["joystick_axis_max"] = _env_float("G1_AMP_JOYSTICK_AXIS_MAX", float(config.get("joystick_axis_max", 32768.0)))
     config["joystick_deadzone"] = _env_float("G1_AMP_JOYSTICK_DEADZONE", float(config.get("joystick_deadzone", 0.05)))
+    config["keyboard_linear_step"] = _env_float(
+        "G1_AMP_KEYBOARD_LINEAR_STEP", float(config.get("keyboard_linear_step", 0.01))
+    )
+    config["keyboard_yaw_step"] = _env_float(
+        "G1_AMP_KEYBOARD_YAW_STEP", float(config.get("keyboard_yaw_step", 0.05))
+    )
     config["command_rel_low_speed"] = _env_float(
         "G1_AMP_CMD_REL_LOW_SPEED", float(config.get("command_rel_low_speed", 0.25))
     )
@@ -780,16 +934,26 @@ def torso_fixed_point_w(data: mujoco.MjData, torso_body_id: int, local_point: np
     return data.xpos[torso_body_id].copy() + torso_rotation @ local_point
 
 
-def update_follow_camera(viewer, data: mujoco.MjData, torso_body_id: int, config: dict) -> None:
-    if not bool(config.get("follow_camera_enable", True)):
+def update_follow_camera(
+    viewer,
+    data: mujoco.MjData,
+    torso_body_id: int,
+    config: dict,
+    *,
+    force_once: bool = False,
+) -> None:
+    if not force_once and not bool(config.get("follow_camera_enable", True)):
         return
     torso_pos_w = data.xpos[torso_body_id].copy().astype(np.float32)
     local_offset = np.asarray(config.get("follow_camera_lookat_local_offset", [-0.35, -0.20, 0.20]), dtype=np.float32)
     lookat_w = torso_pos_w + local_offset
     viewer.cam.lookat[:] = lookat_w.astype(np.float64)
-    viewer.cam.distance = float(config.get("follow_camera_distance", 3.2))
-    viewer.cam.azimuth = float(config.get("follow_camera_azimuth_deg", 145.0))
-    viewer.cam.elevation = float(config.get("follow_camera_elevation_deg", -20.0))
+    if force_once:
+        # Configure the opening view exactly once.  Continuous following only
+        # moves the look-at target, preserving mouse orbit and zoom afterwards.
+        viewer.cam.distance = float(config.get("follow_camera_distance", 3.2))
+        viewer.cam.azimuth = float(config.get("follow_camera_azimuth_deg", 145.0))
+        viewer.cam.elevation = float(config.get("follow_camera_elevation_deg", -20.0))
 
 
 def make_joint_address_maps(model: mujoco.MjModel, joint_names: list[str]) -> tuple[dict[str, int], dict[str, int]]:
@@ -1434,7 +1598,8 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
     task_tracking.update(
         {
             "command_mode": str(config.get("command_mode", "independent"))
-            if bool(config.get("random_commands", False)) or str(config.get("command_mode", "")).lower() in {"joystick", "nav2"}
+            if bool(config.get("random_commands", False))
+            or str(config.get("command_mode", "")).lower() in {"joystick", "keyboard", "nav2"}
             else "fixed",
             "command_ramp": bool(config.get("command_ramp", False)),
             "command_interval": float(config.get("command_interval", 0.0)),
@@ -1480,6 +1645,11 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
             "axis_yaw": int(config.get("joystick_axis_yaw", 3)),
             "ranges": config.get("joystick_ranges", {}),
             "deadzone": float(config.get("joystick_deadzone", 0.05)),
+        },
+        "keyboard": {
+            "enabled": str(config.get("command_mode", "")).lower() == "keyboard",
+            "linear_step": float(config.get("keyboard_linear_step", 0.01)),
+            "yaw_step": float(config.get("keyboard_yaw_step", 0.05)),
         },
         "scene": config.get("_scene_report", {}),
     }
@@ -1812,6 +1982,92 @@ class JoystickCommandReader:
         )
 
 
+class KeyboardCommandReader:
+    """Increment a velocity command from the generic MuJoCo GLFW key callback."""
+
+    def __init__(self, config: dict):
+        self.linear_step = max(float(config.get("keyboard_linear_step", 0.01)), 1.0e-6)
+        self.yaw_step = max(float(config.get("keyboard_yaw_step", 0.05)), 1.0e-6)
+        ranges = config.get("command_ranges", {})
+        self.command_min = np.asarray(
+            [
+                float(ranges.get("lin_vel_x", [-0.2, 1.0])[0]),
+                float(ranges.get("lin_vel_y", [-0.25, 0.25])[0]),
+                float(ranges.get("yaw_rate", [-0.6, 0.6])[0]),
+            ],
+            dtype=np.float32,
+        )
+        self.command_max = np.asarray(
+            [
+                float(ranges.get("lin_vel_x", [-0.2, 1.0])[1]),
+                float(ranges.get("lin_vel_y", [-0.25, 0.25])[1]),
+                float(ranges.get("yaw_rate", [-0.6, 0.6])[1]),
+            ],
+            dtype=np.float32,
+        )
+        self.command = np.clip(
+            np.asarray(config.get("cmd_init", [0.0, 0.0, 0.0]), dtype=np.float32),
+            self.command_min,
+            self.command_max,
+        )
+        print(
+            "[INFO] Keyboard command mode: W/S=vx, A/D=vy, Q/E=yaw, SPACE/0=zero; "
+            "presets 1=slow forward, 2=left, 3=pure yaw, 4=diagonal."
+        )
+        self._print_command("initial")
+
+    def _print_command(self, source: str) -> None:
+        print(
+            f"[KEYBOARD] {source}: target [vx, vy, wz] = "
+            f"[{self.command[0]:+.3f}, {self.command[1]:+.3f}, {self.command[2]:+.3f}]",
+            flush=True,
+        )
+
+    def _set(self, command: list[float], source: str) -> None:
+        self.command = np.clip(
+            np.asarray(command, dtype=np.float32), self.command_min, self.command_max
+        )
+        self._print_command(source)
+
+    def key_callback(self, keycode: int) -> None:
+        key = chr(keycode).upper() if 0 <= keycode < 128 else ""
+        delta = np.zeros(3, dtype=np.float32)
+        if key == "W":
+            delta[0] = self.linear_step
+        elif key == "S":
+            delta[0] = -self.linear_step
+        elif key == "A":
+            delta[1] = self.linear_step
+        elif key == "D":
+            delta[1] = -self.linear_step
+        elif key == "Q":
+            delta[2] = self.yaw_step
+        elif key == "E":
+            delta[2] = -self.yaw_step
+        elif keycode == 32 or key == "0":
+            self._set([0.0, 0.0, 0.0], "zero")
+            return
+        elif key == "1":
+            self._set([0.05, 0.0, 0.0], "slow-forward preset")
+            return
+        elif key == "2":
+            self._set([0.0, 0.12, 0.0], "left-strafe preset")
+            return
+        elif key == "3":
+            self._set([0.0, 0.0, 0.20], "pure-yaw preset")
+            return
+        elif key == "4":
+            self._set([0.10, 0.10, 0.0], "diagonal preset")
+            return
+        else:
+            return
+        self.command = np.clip(self.command + delta, self.command_min, self.command_max)
+        self._print_command(key)
+
+    def read_command(self) -> np.ndarray:
+        return self.command.copy()
+
+
 def sample_independent_random_command(rng: np.random.Generator, config: dict) -> np.ndarray:
     ranges = config["command_ranges"]
     return np.array(
@@ -2089,6 +2345,7 @@ def run_mujoco(config: dict) -> None:
     rng = np.random.default_rng(int(config.get("command_seed", 1)))
     command_mode = str(config.get("command_mode", "independent")).lower()
     joystick = JoystickCommandReader(config) if command_mode == "joystick" else None
+    keyboard = KeyboardCommandReader(config) if command_mode == "keyboard" else None
     nav2_replay = Nav2CommandReplay(config, rng) if command_mode == "nav2" else None
     target_command = (
         armhack_walk.current_target_command(0.0)
@@ -2098,6 +2355,8 @@ def run_mujoco(config: dict) -> None:
     nav2_segment_info = None
     if joystick is not None:
         target_command = joystick.read_command()
+    elif keyboard is not None:
+        target_command = keyboard.read_command()
     elif nav2_replay is not None:
         target_command, nav2_segment_info = nav2_replay.sample_window(0.0)
     elif bool(config.get("random_commands", False)):
@@ -2115,6 +2374,19 @@ def run_mujoco(config: dict) -> None:
     model.opt.timestep = float(config["simulation_dt"])
     qpos_addresses, qvel_addresses = make_joint_address_maps(model, actuator_joint_names)
     actuator_ids_by_joint = make_actuator_id_map(model, actuator_joint_names)
+    policy_actuator_ids = np.asarray(
+        [actuator_ids_by_joint[name] for name in policy_joint_names],
+        dtype=np.int32,
+    )
+    policy_actuator_torque_limits = np.asarray(
+        [
+            max(abs(float(model.actuator_ctrlrange[actuator_id, 0])), abs(float(model.actuator_ctrlrange[actuator_id, 1])))
+            if bool(model.actuator_ctrllimited[actuator_id])
+            else math.inf
+            for actuator_id in policy_actuator_ids
+        ],
+        dtype=np.float64,
+    )
     floor_geom_ids = find_floor_geom_ids(model)
     foot_body_ids = find_foot_body_ids(model)
     torso_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, str(config.get("torso_body_name", "torso_link")))
@@ -2141,7 +2413,7 @@ def run_mujoco(config: dict) -> None:
         data.qpos[qpos_addresses[joint_name]] = default_angle
     if extreme_stand_recovery is not None:
         extreme_stand_recovery.initialize_model_and_state(
-            model, data, qpos_addresses, qvel_addresses
+            model, data, qpos_addresses, qvel_addresses, foot_body_ids
         )
     if armhack_stand is not None:
         armhack_stand.initialize_model_and_state(mujoco, model, data, qpos_addresses, torso_body_id)
@@ -2245,12 +2517,15 @@ def run_mujoco(config: dict) -> None:
         nonlocal action, command, target_command, current_segment_id, current_adapter_segment_index, next_command_time
         counter = 0
         sim_time = 0.0
-        wall_start = time.time()
+        wall_start = time.perf_counter()
+        render_period = 1.0 / float(config.get("render_fps", 60.0))
+        next_render_time = 0.0
+        status_interval = float(config.get("realtime_status_interval_s", 5.0))
+        next_status_time = status_interval
         try:
             while sim_time < float(config["simulation_duration"]):
                 if viewer is not None and not viewer.is_running():
                     break
-                step_start = time.time()
                 if armhack_stand is not None and not armhack_stand.process_interaction_requests(sim_time):
                     print("[ArmHack Stand MuJoCo] Q stop requested.", flush=True)
                     break
@@ -2294,6 +2569,19 @@ def run_mujoco(config: dict) -> None:
                         )
                 elif joystick is not None:
                     target_command = joystick.read_command()
+                elif keyboard is not None:
+                    keyboard_command = keyboard.read_command()
+                    if not np.allclose(keyboard_command, target_command, rtol=0.0, atol=1.0e-8):
+                        target_command = keyboard_command
+                        current_segment_id += 1
+                        rollout_metrics["command_segments"].append(
+                            {
+                                "id": current_segment_id,
+                                "name": "keyboard",
+                                "start_time": float(sim_time),
+                                "command": [float(value) for value in target_command],
+                            }
+                        )
                 elif nav2_replay is not None:
                     target_command, nav2_segment_info = nav2_replay.update(float(model.opt.timestep), sim_time)
                     if nav2_segment_info is not None:
@@ -2313,9 +2601,13 @@ def run_mujoco(config: dict) -> None:
                     )
                     next_command_time += max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
                 hard_zero = (
-                    armhack_walk is not None
-                    and bool(config.get("armhack_walk_hard_zero_command", False))
-                    and float(np.linalg.norm(target_command))
+                    (
+                        armhack_walk is not None
+                        and bool(config.get("armhack_walk_hard_zero_command", False))
+                    )
+                    or keyboard is not None
+                ) and (
+                    float(np.linalg.norm(target_command))
                     <= float(config.get("armhack_walk_zero_epsilon", 1.0e-6))
                 )
                 command = (
@@ -2325,7 +2617,19 @@ def run_mujoco(config: dict) -> None:
                 )
                 control_step = counter % int(config["control_decimation"]) == 0
                 action = step_policy_if_needed(counter, sim_time)
-                target_policy = default_angles + action * float(config["action_scale"])
+                raw_target_policy = default_angles + action * float(config["action_scale"])
+                target_policy = (
+                    extreme_stand_recovery.limit_target_position(
+                        raw_target_policy,
+                        update=control_step,
+                        control_dt=(
+                            float(model.opt.timestep)
+                            * int(config["control_decimation"])
+                        ),
+                    )
+                    if extreme_stand_recovery is not None
+                    else raw_target_policy
+                )
                 target_by_joint = dict(zip(policy_joint_names, target_policy))
                 apply_pd_control(
                     data,
@@ -2343,11 +2647,25 @@ def run_mujoco(config: dict) -> None:
                 counter += 1
                 sim_time += model.opt.timestep
                 if extreme_stand_recovery is not None and control_step:
-                    extreme_stand_recovery.record_state(data, sim_time)
+                    extreme_stand_recovery.record_state(
+                        model,
+                        data,
+                        floor_geom_ids,
+                        sim_time,
+                        command,
+                        target_command,
+                        action,
+                        target_policy,
+                        np.asarray(data.ctrl[policy_actuator_ids], dtype=np.float64),
+                        np.asarray(data.actuator_force[policy_actuator_ids], dtype=np.float64),
+                        policy_actuator_torque_limits,
+                    )
                 if armhack_stand is not None and control_step:
                     armhack_stand.record_control_sample(
                         data,
                         qpos_addresses,
+                        actuator_ids_by_joint,
+                        action,
                         torso_body_id,
                         sim_time,
                     )
@@ -2365,7 +2683,7 @@ def run_mujoco(config: dict) -> None:
                     sim_time,
                     current_segment_id,
                 )
-                if viewer is not None:
+                if viewer is not None and sim_time + 1.0e-12 >= next_render_time:
                     update_follow_camera(viewer, data, torso_body_id, config)
                     draw_rollout_traces(viewer, rollout_metrics, config)
                     draw_extreme_stand_external_wrench(
@@ -2374,14 +2692,34 @@ def run_mujoco(config: dict) -> None:
                         extreme_stand_recovery,
                     )
                     viewer.sync()
+                    while next_render_time <= sim_time + 1.0e-12:
+                        next_render_time += render_period
                 if bool(config.get("real_time", True)):
-                    sleep_time = model.opt.timestep - (time.time() - step_start)
+                    # Pace against the accumulated wall-clock deadline.  If one render
+                    # frame overruns, subsequent physics steps can catch up instead of
+                    # permanently accumulating the delay.
+                    sleep_time = wall_start + sim_time - time.perf_counter()
                     if sleep_time > 0.0:
                         time.sleep(sleep_time)
+                if status_interval > 0.0 and sim_time + 1.0e-12 >= next_status_time:
+                    wall_elapsed = max(time.perf_counter() - wall_start, 1.0e-12)
+                    print(
+                        "[REALTIME] "
+                        f"sim={sim_time:.1f}s wall={wall_elapsed:.1f}s "
+                        f"RTF={sim_time / wall_elapsed:.3f} "
+                        f"render_target={float(config.get('render_fps', 60.0)):.1f}FPS",
+                        flush=True,
+                    )
+                    while next_status_time <= sim_time + 1.0e-12:
+                        next_status_time += status_interval
         finally:
             if joystick is not None:
                 joystick.close()
-        print(f"[INFO] MuJoCo rollout finished: sim_time={sim_time:.3f}s wall_time={time.time() - wall_start:.3f}s")
+        wall_elapsed = max(time.perf_counter() - wall_start, 1.0e-12)
+        print(
+            f"[INFO] MuJoCo rollout finished: sim_time={sim_time:.3f}s "
+            f"wall_time={wall_elapsed:.3f}s RTF={sim_time / wall_elapsed:.3f}"
+        )
         report = summarize_rollout_metrics(rollout_metrics, sim_time, command, config)
         trace_csv_path = write_torso_trace_csv(rollout_metrics, config)
         if trace_csv_path:
@@ -2398,10 +2736,24 @@ def run_mujoco(config: dict) -> None:
             print(f"[REPORT] ArmHack Stand MuJoCo report: {armhack_stand.report_path}")
             print(f"[REPORT] ArmHack Stand MuJoCo torso plot: {armhack_stand.plot_path}")
             print(f"[REPORT] ArmHack Stand MuJoCo trace: {armhack_stand.trace_path}")
+            if armhack_stand.ankle_diagnostics_enabled:
+                print(f"[REPORT] ArmHack Stand ankle CSV: {armhack_stand.ankle_trace_path}")
+                print(f"[REPORT] ArmHack Stand ankle plot: {armhack_stand.ankle_plot_path}")
+                print(f"[REPORT] ArmHack Stand ankle SVG: {armhack_stand.ankle_plot_svg_path}")
+                print(
+                    "[REPORT] ArmHack Stand ankle high-frequency SVG: "
+                    f"{armhack_stand.ankle_high_frequency_svg_path}"
+                )
         if armhack_walk is not None:
             report["armhack_walk"] = armhack_walk.summary()
         if extreme_stand_recovery is not None:
-            report["extreme_stand_recovery"] = extreme_stand_recovery.summary()
+            stand_report = extreme_stand_recovery.summary()
+            motion_trace_path = extreme_stand_recovery.write_motion_quality_trace_csv(
+                str(config.get("extreme_stand_recovery_motion_trace_path", ""))
+            )
+            if motion_trace_path:
+                stand_report["motion_quality"]["trace_csv_path"] = motion_trace_path
+            report["extreme_stand_recovery"] = stand_report
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:
@@ -2422,12 +2774,21 @@ def run_mujoco(config: dict) -> None:
                 else (
                     extreme_stand_recovery.key_callback
                     if extreme_stand_recovery is not None
-                    else None
+                    else keyboard.key_callback if keyboard is not None else None
                 )
             )
         )
         with mujoco_viewer.launch_passive(model, data, key_callback=key_callback) as active_viewer:
-            update_follow_camera(active_viewer, data, torso_body_id, config)
+            # Always start from the configured useful view.  When follow-camera is
+            # disabled this is the only write to viewer.cam, so mouse interaction
+            # remains fully under the operator's control afterwards.
+            update_follow_camera(
+                active_viewer,
+                data,
+                torso_body_id,
+                config,
+                force_once=True,
+            )
             simulate_loop(active_viewer)
     else:
         simulate_loop(None)

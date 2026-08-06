@@ -35,6 +35,13 @@ ARM_JOINT_NAMES = [
     "right_wrist_yaw_joint",
 ]
 
+ANKLE_JOINT_NAMES = [
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+]
+
 PAYLOAD_BODY_NAMES = ("left_wrist_yaw_link", "right_wrist_yaw_link")
 
 
@@ -137,9 +144,28 @@ class ArmHackStandReplay:
         self.report_path = Path(str(config["armhack_stand_report_path"])).expanduser().resolve()
         self.plot_path = self.report_path.with_name(f"{self.report_path.stem}__torso_world_6d.png")
         self.trace_path = self.report_path.with_name(f"{self.report_path.stem}__trace.csv")
+        self.ankle_trace_path = self.report_path.with_name(
+            f"{self.report_path.stem}__ankle_diagnostics.csv"
+        )
+        self.ankle_plot_path = self.report_path.with_name(
+            f"{self.report_path.stem}__ankle_comparison.png"
+        )
+        self.ankle_plot_svg_path = self.report_path.with_name(
+            f"{self.report_path.stem}__ankle_comparison.svg"
+        )
+        self.ankle_high_frequency_svg_path = self.report_path.with_name(
+            f"{self.report_path.stem}__ankle_high_frequency.svg"
+        )
         self.test_id = str(config.get("armhack_stand_test_id", "all"))
         self.payload_kg = float(config.get("armhack_stand_payload_kg", 0.0))
         self.interactive = bool(config.get("armhack_stand_interactive_enable", False))
+        self.ankle_diagnostics_enabled = bool(
+            config.get("armhack_stand_ankle_diagnostics_enable", True)
+        )
+        self.ankle_print_hz = float(config.get("armhack_stand_ankle_print_hz", 1.0))
+        if self.ankle_print_hz < 0.0:
+            raise ValueError("ArmHack Stand ankle print frequency must be >= 0 Hz.")
+        self.next_ankle_print_time_s = 0.0
         if not 0.0 <= self.payload_kg <= 3.0:
             raise ValueError("ArmHack Stand payload must be within [0, 3] kg per wrist.")
 
@@ -165,6 +191,12 @@ class ArmHackStandReplay:
             raise ValueError(f"ArmHack arm joints are absent from policy_joint_names: {missing_policy_joints}")
         self.arm_policy_indices = np.asarray(
             [self.policy_joint_names.index(name) for name in ARM_JOINT_NAMES], dtype=np.int64
+        )
+        missing_ankle_joints = sorted(set(ANKLE_JOINT_NAMES).difference(self.policy_joint_names))
+        if missing_ankle_joints:
+            raise ValueError(f"ArmHack ankle joints are absent from policy_joint_names: {missing_ankle_joints}")
+        self.ankle_policy_indices = np.asarray(
+            [self.policy_joint_names.index(name) for name in ANKLE_JOINT_NAMES], dtype=np.int64
         )
         self.balance_joint_names = [name for name in self.policy_joint_names if name not in set(ARM_JOINT_NAMES)]
 
@@ -214,6 +246,12 @@ class ArmHackStandReplay:
         self.joint_samples: list[np.ndarray] = []
         self.arm_target_samples: list[np.ndarray] = []
         self.torso_delta_samples: list[np.ndarray] = []
+        self.ankle_model_output_samples: list[np.ndarray] = []
+        self.ankle_torque_command_samples: list[np.ndarray] = []
+        self.ankle_actuator_torque_samples: list[np.ndarray] = []
+        self.ankle_angle_samples: list[np.ndarray] = []
+        self.ankle_target_angle_samples: list[np.ndarray] = []
+        self.ankle_policy_active_samples: list[bool] = []
         self.payload_report: dict[str, dict[str, float]] = {}
 
     def _load_interactive_contract(self) -> None:
@@ -596,6 +634,8 @@ class ArmHackStandReplay:
         self,
         data,
         qpos_addresses: dict[str, int],
+        actuator_ids_by_joint: dict[str, int],
+        action: np.ndarray,
         torso_body_id: int,
         time_s: float,
     ) -> None:
@@ -610,6 +650,65 @@ class ArmHackStandReplay:
         self.joint_samples.append(joint_position)
         self.arm_target_samples.append(self.last_target.copy())
         self.torso_delta_samples.append(torso_delta)
+        if not self.ankle_diagnostics_enabled:
+            return
+
+        model_output = np.asarray(action, dtype=np.float64)[self.ankle_policy_indices].copy()
+        torque_command = np.asarray(
+            [data.ctrl[actuator_ids_by_joint[name]] for name in ANKLE_JOINT_NAMES],
+            dtype=np.float64,
+        )
+        actuator_torque = np.asarray(
+            [data.actuator_force[actuator_ids_by_joint[name]] for name in ANKLE_JOINT_NAMES],
+            dtype=np.float64,
+        )
+        joint_angle = joint_position[self.ankle_policy_indices].copy()
+        target_angle = self.default_angles[self.ankle_policy_indices] + self.action_scale * model_output
+        policy_active = bool(self.policy_inference_enabled)
+        self.ankle_model_output_samples.append(model_output)
+        self.ankle_torque_command_samples.append(torque_command)
+        self.ankle_actuator_torque_samples.append(actuator_torque)
+        self.ankle_angle_samples.append(joint_angle)
+        self.ankle_target_angle_samples.append(target_angle)
+        self.ankle_policy_active_samples.append(policy_active)
+
+        if self.ankle_print_hz <= 0.0 or time_s + 1.0e-9 < self.next_ankle_print_time_s:
+            return
+        self.next_ankle_print_time_s = float(time_s) + 1.0 / self.ankle_print_hz
+        _, stage_label = self._stage_at(float(time_s))
+        values = {
+            name: {
+                "output": float(model_output[index]),
+                "torque": float(actuator_torque[index]),
+                "angle": float(joint_angle[index]),
+            }
+            for index, name in enumerate(ANKLE_JOINT_NAMES)
+        }
+        print(
+            f"[ANKLE] t={time_s:7.3f}s stage={stage_label} "
+            f"policy={'ON' if policy_active else 'OFF'}",
+            flush=True,
+        )
+        print(
+            "  pitch "
+            f"L(out={values['left_ankle_pitch_joint']['output']:+.4f}, "
+            f"tau={values['left_ankle_pitch_joint']['torque']:+.3f}Nm, "
+            f"q={values['left_ankle_pitch_joint']['angle']:+.4f}rad) | "
+            f"R(out={values['right_ankle_pitch_joint']['output']:+.4f}, "
+            f"tau={values['right_ankle_pitch_joint']['torque']:+.3f}Nm, "
+            f"q={values['right_ankle_pitch_joint']['angle']:+.4f}rad)",
+            flush=True,
+        )
+        print(
+            "  roll  "
+            f"L(out={values['left_ankle_roll_joint']['output']:+.4f}, "
+            f"tau={values['left_ankle_roll_joint']['torque']:+.3f}Nm, "
+            f"q={values['left_ankle_roll_joint']['angle']:+.4f}rad) | "
+            f"R(out={values['right_ankle_roll_joint']['output']:+.4f}, "
+            f"tau={values['right_ankle_roll_joint']['torque']:+.3f}Nm, "
+            f"q={values['right_ankle_roll_joint']['angle']:+.4f}rad)",
+            flush=True,
+        )
 
     @staticmethod
     def _stage_color(stage: dict[str, float | str]) -> str:
@@ -798,6 +897,307 @@ class ArmHackStandReplay:
         figure.savefig(self.plot_path, dpi=160, bbox_inches="tight")
         plt.close(figure)
 
+    def _write_ankle_trace(
+        self,
+        model_output: np.ndarray,
+        torque_command: np.ndarray,
+        actuator_torque: np.ndarray,
+        joint_angle: np.ndarray,
+        target_angle: np.ndarray,
+    ) -> None:
+        self.ankle_trace_path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = ["time_s", "stage_kind", "stage_label", "policy_active"]
+        for name in ANKLE_JOINT_NAMES:
+            fieldnames.extend(
+                [
+                    f"model_output_{name}",
+                    f"torque_command_nm_{name}",
+                    f"actuator_torque_nm_{name}",
+                    f"joint_angle_rad_{name}",
+                    f"target_angle_rad_{name}",
+                ]
+            )
+        with self.ankle_trace_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(fieldnames)
+            for sample_index, time_s in enumerate(self.sample_times):
+                stage_kind, stage_label = self._stage_at(time_s)
+                row: list[str | int] = [
+                    f"{time_s:.8f}",
+                    stage_kind,
+                    stage_label,
+                    int(self.ankle_policy_active_samples[sample_index]),
+                ]
+                for joint_index in range(len(ANKLE_JOINT_NAMES)):
+                    row.extend(
+                        [
+                            f"{model_output[sample_index, joint_index]:.9f}",
+                            f"{torque_command[sample_index, joint_index]:.9f}",
+                            f"{actuator_torque[sample_index, joint_index]:.9f}",
+                            f"{joint_angle[sample_index, joint_index]:.9f}",
+                            f"{target_angle[sample_index, joint_index]:.9f}",
+                        ]
+                    )
+                writer.writerow(row)
+
+    def _write_ankle_plot(
+        self,
+        model_output: np.ndarray,
+        actuator_torque: np.ndarray,
+        joint_angle: np.ndarray,
+        target_angle: np.ndarray,
+    ) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        times = np.asarray(self.sample_times, dtype=np.float64)
+        figure, axes = plt.subplots(
+            3,
+            2,
+            figsize=(18.0, 11.0),
+            sharex=True,
+            layout="constrained",
+        )
+        left_color = "#1F77B4"
+        right_color = "#D62728"
+        axis_groups = (
+            (
+                "Ankle pitch",
+                ANKLE_JOINT_NAMES.index("left_ankle_pitch_joint"),
+                ANKLE_JOINT_NAMES.index("right_ankle_pitch_joint"),
+            ),
+            (
+                "Ankle roll",
+                ANKLE_JOINT_NAMES.index("left_ankle_roll_joint"),
+                ANKLE_JOINT_NAMES.index("right_ankle_roll_joint"),
+            ),
+        )
+        for column, (title, left_index, right_index) in enumerate(axis_groups):
+            axes[0, column].plot(
+                times,
+                model_output[:, left_index],
+                color=left_color,
+                linewidth=1.0,
+                label="left model output",
+            )
+            axes[0, column].plot(
+                times,
+                model_output[:, right_index],
+                color=right_color,
+                linewidth=1.0,
+                label="right model output",
+            )
+            axes[1, column].plot(
+                times,
+                actuator_torque[:, left_index],
+                color=left_color,
+                linewidth=1.0,
+                label="left actuator torque",
+            )
+            axes[1, column].plot(
+                times,
+                actuator_torque[:, right_index],
+                color=right_color,
+                linewidth=1.0,
+                label="right actuator torque",
+            )
+            axes[2, column].plot(
+                times,
+                joint_angle[:, left_index],
+                color=left_color,
+                linewidth=1.1,
+                label="left actual angle",
+            )
+            axes[2, column].plot(
+                times,
+                target_angle[:, left_index],
+                color=left_color,
+                linewidth=0.9,
+                linestyle="--",
+                alpha=0.72,
+                label="left target angle",
+            )
+            axes[2, column].plot(
+                times,
+                joint_angle[:, right_index],
+                color=right_color,
+                linewidth=1.1,
+                label="right actual angle",
+            )
+            axes[2, column].plot(
+                times,
+                target_angle[:, right_index],
+                color=right_color,
+                linewidth=0.9,
+                linestyle="--",
+                alpha=0.72,
+                label="right target angle",
+            )
+            axes[0, column].set_title(title, fontweight="bold")
+
+        displayed_end = float(times[-1])
+        for stage in self.timeline:
+            start_s = float(stage["start_s"])
+            end_s = min(float(stage["end_s"]), displayed_end)
+            if end_s <= start_s:
+                continue
+            for axis in axes.flat:
+                axis.axvspan(
+                    start_s,
+                    end_s,
+                    color=self._stage_color(stage),
+                    alpha=0.045,
+                    linewidth=0.0,
+                )
+        for axis in axes.flat:
+            axis.axhline(0.0, color="#666666", linewidth=0.55)
+            axis.grid(True, alpha=0.22)
+            axis.legend(loc="upper right", fontsize=8)
+        axes[0, 0].set_ylabel("Model output (dimensionless)")
+        axes[1, 0].set_ylabel("MuJoCo actuator torque (N·m)")
+        axes[2, 0].set_ylabel("Joint angle (rad)")
+        axes[2, 0].set_xlabel("Simulation time (s)")
+        axes[2, 1].set_xlabel("Simulation time (s)")
+        figure.suptitle(
+            f"ArmHack Stand ankle diagnostics — left/right comparison — {self.test_id}",
+            fontsize=15,
+            fontweight="bold",
+        )
+        self.ankle_plot_path.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(self.ankle_plot_path, dpi=160, bbox_inches="tight")
+        figure.savefig(self.ankle_plot_svg_path, format="svg", bbox_inches="tight")
+        plt.close(figure)
+
+    @staticmethod
+    def _high_frequency_residual(
+        values: np.ndarray,
+        times: np.ndarray,
+        baseline_window_s: float = 0.2,
+    ) -> tuple[np.ndarray, float]:
+        if len(values) < 3:
+            return np.zeros_like(values), 0.0
+        dt_values = np.diff(times)
+        positive_dt = dt_values[dt_values > 0.0]
+        if not len(positive_dt):
+            return np.zeros_like(values), 0.0
+        dt = float(np.median(positive_dt))
+        window_samples = max(int(round(float(baseline_window_s) / dt)), 3)
+        if window_samples % 2 == 0:
+            window_samples += 1
+        if window_samples > len(values):
+            window_samples = len(values) if len(values) % 2 == 1 else len(values) - 1
+        if window_samples < 3:
+            return np.zeros_like(values), 0.0
+        half_window = window_samples // 2
+        kernel = np.ones(window_samples, dtype=np.float64) / float(window_samples)
+        baseline = np.empty_like(values, dtype=np.float64)
+        for column in range(values.shape[1]):
+            padded = np.pad(values[:, column], (half_window, half_window), mode="reflect")
+            baseline[:, column] = np.convolve(padded, kernel, mode="valid")
+        return np.asarray(values, dtype=np.float64) - baseline, (window_samples - 1) * dt
+
+    def _write_ankle_high_frequency_plot(
+        self,
+        model_output: np.ndarray,
+        actuator_torque: np.ndarray,
+        joint_angle: np.ndarray,
+    ) -> dict[str, Any]:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        times = np.asarray(self.sample_times, dtype=np.float64)
+        output_residual, actual_window_s = self._high_frequency_residual(model_output, times)
+        torque_residual, _ = self._high_frequency_residual(actuator_torque, times)
+        angle_residual, _ = self._high_frequency_residual(joint_angle, times)
+        settling_exclusion_s = min(1.0, 0.1 * float(times[-1])) if len(times) else 0.0
+        display_mask = times >= settling_exclusion_s
+        if int(np.count_nonzero(display_mask)) < 3:
+            display_mask = np.ones_like(times, dtype=bool)
+            settling_exclusion_s = 0.0
+        display_times = times[display_mask]
+
+        figure, axes = plt.subplots(
+            3,
+            2,
+            figsize=(18.0, 11.0),
+            sharex=True,
+            layout="constrained",
+        )
+        left_color = "#1F77B4"
+        right_color = "#D62728"
+        groups = (
+            (
+                "Ankle pitch high-frequency residual",
+                ANKLE_JOINT_NAMES.index("left_ankle_pitch_joint"),
+                ANKLE_JOINT_NAMES.index("right_ankle_pitch_joint"),
+            ),
+            (
+                "Ankle roll high-frequency residual",
+                ANKLE_JOINT_NAMES.index("left_ankle_roll_joint"),
+                ANKLE_JOINT_NAMES.index("right_ankle_roll_joint"),
+            ),
+        )
+        signals = (
+            (output_residual, "Model-output residual"),
+            (torque_residual, "Actuator-torque residual (N·m)"),
+            (angle_residual, "Joint-angle residual (rad)"),
+        )
+        for column, (title, left_index, right_index) in enumerate(groups):
+            axes[0, column].set_title(title, fontweight="bold")
+            for row, (signal, ylabel) in enumerate(signals):
+                axes[row, column].plot(
+                    display_times,
+                    signal[display_mask, left_index],
+                    color=left_color,
+                    linewidth=0.85,
+                    label="left",
+                )
+                axes[row, column].plot(
+                    display_times,
+                    signal[display_mask, right_index],
+                    color=right_color,
+                    linewidth=0.85,
+                    label="right",
+                )
+                axes[row, column].axhline(0.0, color="#666666", linewidth=0.5)
+                axes[row, column].grid(True, alpha=0.22)
+                axes[row, column].legend(loc="upper right", fontsize=8)
+                if column == 0:
+                    axes[row, column].set_ylabel(ylabel)
+        axes[2, 0].set_xlabel("Simulation time (s)")
+        axes[2, 1].set_xlabel("Simulation time (s)")
+        figure.suptitle(
+            "ArmHack Stand ankle small-scale/high-frequency diagnostic\n"
+            f"signal minus centered {actual_window_s:.3f}s moving-average baseline; "
+            f"display starts at {settling_exclusion_s:.3f}s",
+            fontsize=14,
+            fontweight="bold",
+        )
+        self.ankle_high_frequency_svg_path.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(self.ankle_high_frequency_svg_path, format="svg", bbox_inches="tight")
+        plt.close(figure)
+
+        stats: dict[str, dict[str, dict[str, float]]] = {}
+        for index, name in enumerate(ANKLE_JOINT_NAMES):
+            stats[name] = {
+                "model_output_residual": _component_stats(output_residual[display_mask, index]),
+                "actuator_torque_residual_nm": _component_stats(
+                    torque_residual[display_mask, index]
+                ),
+                "joint_angle_residual_rad": _component_stats(angle_residual[display_mask, index]),
+            }
+        return {
+            "method": "signal_minus_centered_moving_average",
+            "baseline_window_s": float(actual_window_s),
+            "settling_exclusion_s": float(settling_exclusion_s),
+            "statistics": stats,
+            "plot_path": str(self.ankle_high_frequency_svg_path),
+        }
+
     def finalize(self, generic_report: dict[str, Any], sim_time: float, control_dt: float) -> dict[str, Any]:
         if not self.joint_samples or not self.torso_delta_samples:
             raise RuntimeError("ArmHack Stand MuJoCo report has no control samples.")
@@ -834,6 +1234,56 @@ class ArmHackStandReplay:
             "rpy_displacement_norm": np.linalg.norm(torso_delta[:, 3:], axis=1),
         }
         torso_norm_statistics = {name: _norm_stats(values) for name, values in torso_norms.items()}
+        ankle_diagnostics: dict[str, Any] = {
+            "enabled": self.ankle_diagnostics_enabled,
+            "joint_order": ANKLE_JOINT_NAMES,
+            "print_hz": self.ankle_print_hz,
+            "trace_path": str(self.ankle_trace_path) if self.ankle_diagnostics_enabled else "",
+            "plot_path": str(self.ankle_plot_path) if self.ankle_diagnostics_enabled else "",
+            "plot_svg_path": str(self.ankle_plot_svg_path) if self.ankle_diagnostics_enabled else "",
+            "high_frequency_svg_path": (
+                str(self.ankle_high_frequency_svg_path) if self.ankle_diagnostics_enabled else ""
+            ),
+            "joint_statistics": {},
+            "high_frequency": {},
+        }
+        if self.ankle_diagnostics_enabled:
+            if not self.ankle_model_output_samples:
+                raise RuntimeError("ArmHack Stand ankle diagnostics has no control samples.")
+            ankle_model_output = np.stack(self.ankle_model_output_samples)
+            ankle_torque_command = np.stack(self.ankle_torque_command_samples)
+            ankle_actuator_torque = np.stack(self.ankle_actuator_torque_samples)
+            ankle_joint_angle = np.stack(self.ankle_angle_samples)
+            ankle_target_angle = np.stack(self.ankle_target_angle_samples)
+            for index, name in enumerate(ANKLE_JOINT_NAMES):
+                ankle_diagnostics["joint_statistics"][name] = {
+                    "model_output": _component_stats(ankle_model_output[:, index]),
+                    "torque_command_nm": _component_stats(ankle_torque_command[:, index]),
+                    "actuator_torque_nm": _component_stats(ankle_actuator_torque[:, index]),
+                    "joint_angle_rad": _component_stats(ankle_joint_angle[:, index]),
+                    "target_angle_rad": _component_stats(ankle_target_angle[:, index]),
+                    "tracking_error_rad": _component_stats(
+                        ankle_joint_angle[:, index] - ankle_target_angle[:, index]
+                    ),
+                }
+            self._write_ankle_trace(
+                ankle_model_output,
+                ankle_torque_command,
+                ankle_actuator_torque,
+                ankle_joint_angle,
+                ankle_target_angle,
+            )
+            self._write_ankle_plot(
+                ankle_model_output,
+                ankle_actuator_torque,
+                ankle_joint_angle,
+                ankle_target_angle,
+            )
+            ankle_diagnostics["high_frequency"] = self._write_ankle_high_frequency_plot(
+                ankle_model_output,
+                ankle_actuator_torque,
+                ankle_joint_angle,
+            )
         complete = self.last_target_time >= self.csv_duration_s - 0.5 * float(control_dt)
         healthy = bool(generic_report.get("health", {}).get("healthy", False))
         checkpoint_sha = self.checkpoint_sha256
@@ -873,10 +1323,15 @@ class ArmHackStandReplay:
             },
             "torso_world_6d": torso_statistics,
             "torso_world_norms": torso_norm_statistics,
+            "ankle_diagnostics": ankle_diagnostics,
             "timeline": self.timeline,
             "report_path": str(self.report_path),
             "plot_path": str(self.plot_path),
             "trace_path": str(self.trace_path),
+            "ankle_trace_path": ankle_diagnostics["trace_path"],
+            "ankle_plot_path": ankle_diagnostics["plot_path"],
+            "ankle_plot_svg_path": ankle_diagnostics["plot_svg_path"],
+            "ankle_high_frequency_svg_path": ankle_diagnostics["high_frequency_svg_path"],
         }
 
         self._write_trace(joint_samples, target_samples, torso_delta)
@@ -889,6 +1344,7 @@ class ArmHackStandReplay:
         important = generic_report.get("important_metrics", {})
         torso = result["torso_world_6d"]
         norms = result["torso_world_norms"]
+        ankle = result["ankle_diagnostics"]
         lines = [
             "# ArmHack Stand MuJoCo sim2sim 测试报告",
             "",
@@ -930,6 +1386,49 @@ class ArmHackStandReplay:
                 f"| `{name}` | {group} | {stats['mean_abs_step_delta_rad']:.8f} | "
                 f"{stats['mean']:.8f} | {stats['std']:.8f} | {stats['range']:.8f} |"
             )
+        if ankle["enabled"]:
+            lines += [
+                "",
+                "## 左右踝策略输出、力矩与角度",
+                "",
+                f"- 终端打印频率：`{float(ankle['print_hz']):.3f} Hz`。",
+                "- `model output` 是 29 维 actor 原始输出中的踝关节分量；`actuator torque` 是 MuJoCo `data.actuator_force` 的实际执行器力矩。",
+                "",
+                "| 关节 | 输出均值 | 输出标准差 | 输出最大绝对值 | 力矩 RMS N·m | 力矩最大绝对值 N·m | 角度均值 rad | 角度标准差 rad | 跟踪误差 RMS rad |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+            for name in ANKLE_JOINT_NAMES:
+                stats = ankle["joint_statistics"][name]
+                output = stats["model_output"]
+                torque = stats["actuator_torque_nm"]
+                angle = stats["joint_angle_rad"]
+                error = stats["tracking_error_rad"]
+                lines.append(
+                    f"| `{name}` | {output['mean']:.8f} | {output['std']:.8f} | "
+                    f"{output['max_abs']:.8f} | {torque['rms']:.8f} | "
+                    f"{torque['max_abs']:.8f} | {angle['mean']:.8f} | "
+                    f"{angle['std']:.8f} | {error['rms']:.8f} |"
+                )
+            lines += [
+                "",
+                "### 左右踝对比曲线",
+                "",
+                f"![ArmHack Stand MuJoCo ankle comparison]({self.ankle_plot_path.name})",
+                "",
+                f"- 完整对比矢量图：`{ankle['plot_svg_path']}`",
+                f"- 小尺度/高频残差矢量图：`{ankle['high_frequency_svg_path']}`",
+                f"- 高频残差定义：原信号减去居中的 `{float(ankle['high_frequency']['baseline_window_s']):.3f} s` 移动平均；绘图跳过最初 `{float(ankle['high_frequency']['settling_exclusion_s']):.3f} s` 启动段。",
+                "",
+                "| 关节 | 输出高频残差 RMS | 力矩高频残差 RMS N·m | 角度高频残差 RMS rad |",
+                "|---|---:|---:|---:|",
+            ]
+            for name in ANKLE_JOINT_NAMES:
+                high_frequency = ankle["high_frequency"]["statistics"][name]
+                lines.append(
+                    f"| `{name}` | {high_frequency['model_output_residual']['rms']:.8f} | "
+                    f"{high_frequency['actuator_torque_residual_nm']['rms']:.8f} | "
+                    f"{high_frequency['joint_angle_residual_rad']['rms']:.8f} |"
+                )
         lines += [
             "",
             "## 双臂目标跟踪误差",
@@ -987,6 +1486,10 @@ class ArmHackStandReplay:
             f"- JSON：`{self.config.get('metrics_path', '')}`",
             f"- 逐帧 CSV：`{self.trace_path}`",
             f"- 6D PNG：`{self.plot_path}`",
+            f"- 踝关节逐帧 CSV：`{ankle['trace_path']}`",
+            f"- 踝关节左右对比 PNG：`{ankle['plot_path']}`",
+            f"- 踝关节左右对比 SVG：`{ankle['plot_svg_path']}`",
+            f"- 踝关节小尺度/高频残差 SVG：`{ankle['high_frequency_svg_path']}`",
             "",
             "## 结论边界",
             "",

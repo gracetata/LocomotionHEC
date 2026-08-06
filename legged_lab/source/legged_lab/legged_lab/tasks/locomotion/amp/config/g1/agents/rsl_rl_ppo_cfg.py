@@ -91,4 +91,67 @@ class G1RslRlOnPolicyRunnerAmpCfg(RslRlOnPolicyRunnerCfg):
     )
 
 
+@configclass
+class G1Nav2BehaviorFinetuneRslRlOnPolicyRunnerAmpCfg(
+    G1RslRlOnPolicyRunnerAmpCfg
+):
+    """Actor-only continuation runner for generic full-body Nav2 behavior."""
 
+    experiment_name = "g1_amp_nav2_behavior"
+    checkpoint_output_dir = "Nav2BehaviorFinetune"
+    load_actor_only = True
+    load_policy_only = False
+    reset_iteration_on_policy_only_load = True
+    reset_amp_on_load = False
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        self.algorithm.learning_rate = 2.0e-5
+        self.algorithm.desired_kl = 0.008
+        self.algorithm.entropy_coef = 0.0015
+        self.algorithm.amp_cfg.grad_penalty_scale = 20.0
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.4
+
+
+@configclass
+class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
+    G1RslRlOnPolicyRunnerAmpCfg
+):
+    """Conservative actor refinement for lateral safety and in-place yaw."""
+
+    experiment_name = "g1_amp_nav2_two_goal"
+    checkpoint_output_dir = "Nav2TwoGoalFinetune"
+    load_actor_only = False
+    load_actor_amp_only = True
+    load_policy_only = False
+    reset_iteration_on_policy_only_load = True
+    reset_amp_on_load = False
+    freeze_actor_hidden_layers = 2
+    save_interval = 20
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        self.policy.init_noise_std = 0.25
+        self.algorithm.learning_rate = 5.0e-6
+        self.algorithm.schedule = "fixed"
+        self.algorithm.desired_kl = 0.003
+        self.algorithm.clip_param = 0.10
+        self.algorithm.num_learning_epochs = 2
+        self.algorithm.num_mini_batches = 4
+        self.algorithm.entropy_coef = 2.0e-4
+        self.algorithm.max_grad_norm = 0.5
+        self.algorithm.baseline_kl_cfg.mean_only = True
+        self.algorithm.baseline_kl_cfg.target = 0.05
+        self.algorithm.baseline_kl_cfg.min_scale = 0.01
+        self.algorithm.baseline_kl_cfg.max_scale = 0.50
+        self.algorithm.baseline_kl_cfg.adaptation_rate = 1.5
+        self.algorithm.baseline_kl_cfg.hard_limit = 0.20
+        self.algorithm.amp_cfg.freeze_discriminator = True
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
+        # In PPOAMP this is the task fraction: 0.85 task + 0.15 frozen style.
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85

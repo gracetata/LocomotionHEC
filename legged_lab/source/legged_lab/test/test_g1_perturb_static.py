@@ -86,6 +86,9 @@ STAND_ROBUST_TRAIN_SCRIPT_FILE = (
 STAND_DOWN_TO_DEFAULT_TRAIN_SCRIPT_FILE = (
     Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_down_to_default.sh"
 )
+STAND_LOW_ANKLE_TORQUE_TRAIN_SCRIPT_FILE = (
+    Path(__file__).resolve().parents[3] / "scripts" / "train_g1_armhack_stand_low_ankle_torque.sh"
+)
 STAND_RANDOM_DATA_BUILDER_FILE = (
     Path(__file__).resolve().parents[3]
     / "scripts"
@@ -306,6 +309,14 @@ def test_g1_perturb_cfgs_capture_disc_split_and_command_intent():
     assert 'func=mdp.double_support' in stand_text
     assert 'func=mdp.root_xy_position_l2' in stand_text
     assert 'self.rewards.termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)' in stand_text
+    assert "G1_ANKLE_ROLL_PITCH_JOINT_NAMES" in stand_text
+    assert "self.rewards.ankle_roll_pitch_torques_l2 = RewTerm(" in stand_text
+    assert "weight=-5.0e-5" in stand_text
+    assert 'func=mdp.joint_torques_l2' in stand_text
+    assert "STAND_WIDE_HIP_ROLL_RAD = 0.06" in stand_text
+    assert "STAND_WIDE_ANKLE_ROLL_RAD = 0.06" in stand_text
+    assert "STAND_FOOT_SEPARATION_TARGET_M = 0.30" in stand_text
+    assert "self.rewards.feet_planar_separation_l2 = RewTerm(" in stand_text
     assert 'if self.rewards.termination_penalty is not None' not in stand_text
 
     assert 'cfg.observations.disc.joint_pos.params = {"asset_cfg": lower_body_joint_cfg}' in walk_text
@@ -336,6 +347,8 @@ def test_g1_perturb_cfgs_capture_disc_split_and_command_intent():
     assert "self.rewards.torso_roll_pitch_l2.weight = -0.04" in walk_text
     assert "self.rewards.action_rate_l2.weight = -0.006" in walk_text
     assert "self.rewards.termination_penalty.weight = -200.0" in walk_text
+    assert "ankle_roll_pitch_torques_l2" not in walk_text
+    assert "feet_planar_separation_l2" not in walk_text
 
 
 def test_armhack_reference_data_is_repository_relative_and_valid():
@@ -694,6 +707,55 @@ def test_stand_down_to_default_continuation_contract():
     assert "LIFT_DURATION_MAX_S=${LIFT_DURATION_MAX_S:-9.0}" in train_text
     assert "agent.load_policy_only=True" in train_text
     assert "agent.reset_iteration_on_policy_only_load=True" in train_text
+    assert "g1_walk" not in train_text
+    assert "WalkPerturb" not in train_text
+
+
+def test_stand_low_ankle_torque_and_wide_stance_continuation_contract():
+    env_text = _read_text(ENV_FILE)
+    stand_text = _read_text(STAND_CFG_FILE)
+    walk_text = _read_text(WALK_CFG_FILE)
+    train_text = _read_text(STAND_LOW_ANKLE_TORQUE_TRAIN_SCRIPT_FILE)
+
+    for joint_name in (
+        "left_ankle_pitch_joint",
+        "right_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_ankle_roll_joint",
+    ):
+        assert joint_name in env_text
+    assert 'getattr(self.cfg.rewards, "ankle_roll_pitch_torques_l2", None)' in env_text
+    assert 'data.applied_torque[' in env_text
+    assert 'Important Metrics/ankle_roll_pitch_torque_abs_mean_nm' in env_text
+    assert 'Important Metrics/ankle_roll_pitch_torque_rms_nm' in env_text
+    assert 'Important Metrics/ankle_roll_pitch_torque_peak_mean_nm' in env_text
+    assert 'Important Metrics/lower_body_torque_rms_nm' in env_text
+    assert 'Important Metrics/feet_planar_separation_mean_m' in env_text
+
+    assert "G1_ANKLE_ROLL_PITCH_JOINT_NAMES" in stand_text
+    assert "self.rewards.ankle_roll_pitch_torques_l2 = RewTerm(" in stand_text
+    assert "func=mdp.joint_torques_l2" in stand_text
+    assert "weight=-5.0e-5" in stand_text
+    assert "STAND_WIDE_HIP_ROLL_RAD = 0.06" in stand_text
+    assert "STAND_WIDE_ANKLE_ROLL_RAD = 0.06" in stand_text
+    assert "STAND_FOOT_SEPARATION_TARGET_M = 0.30" in stand_text
+    assert '"left_hip_roll_joint": STAND_WIDE_HIP_ROLL_RAD' in stand_text
+    assert '"right_ankle_roll_joint": STAND_WIDE_ANKLE_ROLL_RAD' in stand_text
+    assert "self.rewards.feet_planar_separation_l2 = RewTerm(" in stand_text
+    assert "def feet_planar_separation_l2(" in _read_text(
+        PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "mdp" / "rewards.py"
+    )
+    assert "ankle_roll_pitch_torques_l2" not in walk_text
+    assert "feet_planar_separation_l2" not in walk_text
+
+    assert 'TASK="LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0"' in train_text
+    assert "model_1999.pt" in train_text
+    assert "9a54ac40985a56b13ba0327bfd9f1db8a6e65a59dfcf3e866041b85f344066bb" in train_text
+    assert "ANKLE_TORQUE_PENALTY=${ANKLE_TORQUE_PENALTY:-5.0e-5}" in train_text
+    assert 'env.rewards.ankle_roll_pitch_torques_l2.weight="-${ANKLE_TORQUE_PENALTY}"' in train_text
+    assert "pose_transition_curriculum_enabled=False" in train_text
+    assert "BASELINE_KL_ENABLE=True" in train_text
+    assert "agent.load_policy_only=True" in train_text
     assert "g1_walk" not in train_text
     assert "WalkPerturb" not in train_text
 

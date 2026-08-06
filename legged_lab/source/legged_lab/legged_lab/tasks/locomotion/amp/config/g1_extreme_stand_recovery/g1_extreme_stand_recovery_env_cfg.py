@@ -337,11 +337,26 @@ class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPrior
             weight=3.0,
             params={"std": 0.18, "asset_cfg": leg_joint_cfg},
         )
+        # Keep broad joint-space rewards for recovery from large disturbances,
+        # then add narrow Cartesian/foot-distance Gaussian peaks.  The latter
+        # deliberately pay a high reward only after the body geometry is very
+        # close to the cached asset-default pose.
+        # Retain the historical wide Pose V2 term at zero weight so the old
+        # launcher can still reproduce that experiment explicitly.
         self.rewards.default_key_body_pose_exp = RewTerm(
             func=recovery_rewards.default_key_body_pose_exp,
-            weight=2.5,
+            weight=0.0,
             params={
                 "std": 0.12,
+                "asset_cfg": cartesian_key_body_cfg,
+                "reference_attr": recovery_rewards.DEFAULT_CARTESIAN_REFERENCE_ATTR,
+            },
+        )
+        self.rewards.default_key_body_pose_gaussian = RewTerm(
+            func=recovery_rewards.default_key_body_pose_gaussian,
+            weight=8.0,
+            params={
+                "variance": 4.0e-4,
                 "asset_cfg": cartesian_key_body_cfg,
                 "reference_attr": recovery_rewards.DEFAULT_CARTESIAN_REFERENCE_ATTR,
             },
@@ -350,6 +365,15 @@ class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPrior
             func=recovery_rewards.default_feet_distance_l2,
             weight=-8.0,
             params={
+                "asset_cfg": foot_asset_cfg,
+                "reference_attr": recovery_rewards.DEFAULT_FEET_REFERENCE_ATTR,
+            },
+        )
+        self.rewards.default_feet_distance_gaussian = RewTerm(
+            func=recovery_rewards.default_feet_distance_gaussian,
+            weight=3.0,
+            params={
+                "variance": 1.0e-4,
                 "asset_cfg": foot_asset_cfg,
                 "reference_attr": recovery_rewards.DEFAULT_FEET_REFERENCE_ATTR,
             },
@@ -414,7 +438,25 @@ class G1ExtremeStandRecoveryEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPrior
             weight=-1.0e-7,
             params={"asset_cfg": full_joint_cfg},
         )
+        self.rewards.joint_jerk_l2 = RewTerm(
+            func=recovery_rewards.joint_jerk_l2,
+            weight=-1.0e-8,
+            params={"asset_cfg": full_joint_cfg},
+        )
         self.rewards.action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+        # Historical V3 launchers keep these at zero.  The Smooth-Torque V4
+        # launcher enables them explicitly so old experiments remain
+        # reproducible while the new policy learns to suppress the exact
+        # action/torque oscillation observed after a large MuJoCo push.
+        self.rewards.action_second_difference_l2 = RewTerm(
+            func=recovery_rewards.action_second_difference_l2,
+            weight=0.0,
+        )
+        self.rewards.joint_torque_rate_l2 = RewTerm(
+            func=recovery_rewards.joint_torque_rate_l2,
+            weight=0.0,
+            params={"asset_cfg": full_joint_cfg},
+        )
         self.rewards.joint_deviation_hip = None
         self.rewards.joint_deviation_waist = None
         self.rewards.joint_deviation_arms = None

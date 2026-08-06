@@ -9,7 +9,11 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
 import legged_lab.tasks.locomotion.amp.mdp as mdp
-from legged_lab.envs.g1_perturb_env import G1_UPPER_BODY_JOINT_NAMES, UpperBodyPerturbationCfg
+from legged_lab.envs.g1_perturb_env import (
+    G1_ANKLE_ROLL_PITCH_JOINT_NAMES,
+    G1_UPPER_BODY_JOINT_NAMES,
+    UpperBodyPerturbationCfg,
+)
 from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import (
     G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg,
     G1_FOOT_BODY_NAMES,
@@ -19,6 +23,9 @@ from .reference_data import STAND_ARM_MOTION_RELATIVE_PATH
 
 
 STAND_PERTURB_CSV_PATH = STAND_ARM_MOTION_RELATIVE_PATH.as_posix()
+STAND_WIDE_HIP_ROLL_RAD = 0.06
+STAND_WIDE_ANKLE_ROLL_RAD = 0.06
+STAND_FOOT_SEPARATION_TARGET_M = 0.30
 
 
 @configclass
@@ -49,6 +56,20 @@ class G1StandPerturbEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg
     def __post_init__(self):
         super().__post_init__()
         _configure_perturbation_common(self)
+
+        # Stand-only wide neutral posture.  Symmetric hip abduction opens the
+        # feet; equal-and-opposite ankle roll keeps both soles approximately
+        # level.  MuJoCo FK gives about 0.307 m between ankle-roll link centers,
+        # close to the explicit 0.30 m task target and slightly wider than the
+        # approximately 0.281 m shoulder-roll-link spacing.
+        self.scene.robot.init_state.joint_pos.update(
+            {
+                "left_hip_roll_joint": STAND_WIDE_HIP_ROLL_RAD,
+                "right_hip_roll_joint": -STAND_WIDE_HIP_ROLL_RAD,
+                "left_ankle_roll_joint": -STAND_WIDE_ANKLE_ROLL_RAD,
+                "right_ankle_roll_joint": STAND_WIDE_ANKLE_ROLL_RAD,
+            }
+        )
 
         self.commands.base_velocity = mdp.UniformVelocityCommandCfg(
             asset_name="robot",
@@ -91,6 +112,9 @@ class G1StandPerturbEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg
             "robot", joint_names=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"]
         )
         hip_cfg = SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])
+        ankle_roll_pitch_torque_cfg = SceneEntityCfg(
+            "robot", joint_names=G1_ANKLE_ROLL_PITCH_JOINT_NAMES, preserve_order=True
+        )
         waist_cfg = SceneEntityCfg("robot", joint_names="waist_.*_joint")
 
         self.rewards.track_lin_vel_xy_exp = None
@@ -169,6 +193,24 @@ class G1StandPerturbEnvCfg(G1AmpCommandBalancedDirectionalStrictArmPriorV3EnvCfg
             func=mdp.joint_deviation_l1,
             weight=-0.10,
             params={"asset_cfg": hip_cfg},
+        )
+        # This is a soft optimization objective, not a zero-torque constraint.
+        # Strong survival/orientation/support rewards and the -500 robust fall
+        # penalty remain active, so necessary ankle effort is always preferable
+        # to falling.  The policy can reduce only unnecessary effort by finding
+        # a better whole-body CoM placement inside the support polygon.
+        self.rewards.ankle_roll_pitch_torques_l2 = RewTerm(
+            func=mdp.joint_torques_l2,
+            weight=-5.0e-5,
+            params={"asset_cfg": ankle_roll_pitch_torque_cfg},
+        )
+        self.rewards.feet_planar_separation_l2 = RewTerm(
+            func=mdp.feet_planar_separation_l2,
+            weight=-10.0,
+            params={
+                "target_distance": STAND_FOOT_SEPARATION_TARGET_M,
+                "asset_cfg": foot_asset_cfg,
+            },
         )
         self.rewards.joint_deviation_waist = RewTerm(
             func=mdp.joint_deviation_l1,

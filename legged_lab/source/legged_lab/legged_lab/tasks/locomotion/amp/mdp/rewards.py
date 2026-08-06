@@ -24,10 +24,22 @@ import torch
 from typing import TYPE_CHECKING
 
 from isaaclab.envs import mdp
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import RewardTermCfg, SceneEntityCfg
+from isaaclab.managers.manager_base import ManagerTermBase
 from isaaclab.sensors import ContactSensor, RayCaster
 from isaaclab.assets import Articulation, RigidObject
 import isaaclab.utils.math as math_utils
+
+from .reward_math import (
+    allowed_footstep_cadence_hz,
+    convex_footprint_signed_clearance_xy,
+    nonzero_single_stance_command_scale,
+    relative_command_response_shortfall_l1,
+    signed_command_progress_ratio,
+    swept_convex_footprint_signed_clearance_xy,
+    two_goal_command_masks,
+    update_footstep_cadence_state,
+)
 
 
 if TYPE_CHECKING:
@@ -962,6 +974,27 @@ def feet_distance_y(
     return (torch.exp(-torch.abs(d_min) * 100) + torch.exp(-torch.abs(d_max) * 100)) / 2
 
 
+def feet_planar_separation_l2(
+    env: ManagerBasedRLEnv,
+    target_distance: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize squared error from a target planar foot-center separation.
+
+    The XY norm is invariant to robot yaw and keeps the Stand posture target
+    explicit.  It does not reward widening without bound and does not constrain
+    either foot to a fixed world coordinate.
+    """
+    if target_distance <= 0.0:
+        raise ValueError(f"target_distance must be positive, got {target_distance}")
+    if len(asset_cfg.body_ids) != 2:
+        raise ValueError("feet_planar_separation_l2 expects exactly two foot bodies.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    foot_pos_xy = asset.data.body_pos_w[:, asset_cfg.body_ids, :2]
+    distance = torch.linalg.vector_norm(foot_pos_xy[:, 0] - foot_pos_xy[:, 1], dim=1)
+    return torch.square(distance - target_distance)
+
+
 def feet_stumble(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
@@ -1110,8 +1143,13 @@ def nonzero_command_single_stance(
     sensor_cfg: SceneEntityCfg,
     epsilon: float = 1.0e-6,
     min_mode_time: float = 0.02,
+    micro_linear_speed_max: float = 0.15,
+    pure_yaw_translation_max: float = 0.005,
+    pure_yaw_min_command: float = 0.05,
+    micro_speed_bonus: float = 0.50,
+    pure_yaw_bonus: float = 0.75,
 ) -> torch.Tensor:
-    """Reward a real stepping phase for every nonzero command, including pure yaw and micro-speed."""
+    """Reward real stepping, with stronger micro-speed and pure-yaw incentives."""
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     in_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0.0
     mode_time = torch.where(
@@ -1122,8 +1160,16 @@ def nonzero_command_single_stance(
     single_stance = torch.sum(in_contact.int(), dim=1) == 1
     stable_mode = torch.min(mode_time, dim=1).values >= float(min_mode_time)
     command = env.command_manager.get_command(command_name)
-    active = torch.linalg.vector_norm(command, dim=1) > float(epsilon)
-    return single_stance.float() * stable_mode.float() * active.float() * _upright_scale(env)
+    command_scale = nonzero_single_stance_command_scale(
+        command,
+        epsilon=epsilon,
+        micro_linear_speed_max=micro_linear_speed_max,
+        pure_yaw_translation_max=pure_yaw_translation_max,
+        pure_yaw_min_command=pure_yaw_min_command,
+        micro_speed_bonus=micro_speed_bonus,
+        pure_yaw_bonus=pure_yaw_bonus,
+    )
+    return single_stance.float() * stable_mode.float() * command_scale * _upright_scale(env)
 
 
 def command_response_shortfall_l1(
@@ -1155,6 +1201,128 @@ def command_response_shortfall_l1(
         lin_shortfall / max(float(lin_scale), 1.0e-6)
         + yaw_shortfall / max(float(yaw_scale), 1.0e-6)
     ) * _upright_scale(env)
+
+
+def relative_command_response_shortfall_reward_l1(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    epsilon: float = 1.0e-6,
+    min_speed_fraction: float = 0.50,
+    min_lin_normalizer: float = 0.01,
+    min_yaw_normalizer: float = 0.05,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize fractional response shortfall without upright attenuation."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    return relative_command_response_shortfall_l1(
+        command=command,
+        actual_lin_vel_xy_b=asset.data.root_lin_vel_b[:, :2],
+        actual_yaw_rate_b=asset.data.root_ang_vel_b[:, 2],
+        epsilon=epsilon,
+        min_speed_fraction=min_speed_fraction,
+        min_lin_normalizer=min_lin_normalizer,
+        min_yaw_normalizer=min_yaw_normalizer,
+    )
+
+
+def pure_yaw_torso_roll_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    max_translation_command: float = 0.005,
+    min_yaw_command: float = 0.05,
+    std: float = 0.15,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
+) -> torch.Tensor:
+    """Penalize torso side-lean only for an in-place yaw command."""
+    if std <= 0.0:
+        raise ValueError("pure_yaw_torso_roll_l2 requires std > 0.")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    body_id = _single_body_id(asset_cfg)
+    roll, _, _ = math_utils.euler_xyz_from_quat(asset.data.body_quat_w[:, body_id, :])
+    command = env.command_manager.get_command(command_name)
+    pure_yaw = (
+        torch.linalg.vector_norm(command[:, :2], dim=1) <= float(max_translation_command)
+    ) & (torch.abs(command[:, 2]) >= float(min_yaw_command))
+    return (
+        torch.square(math_utils.wrap_to_pi(roll)) / float(std) ** 2
+    ) * pure_yaw.float()
+
+
+class command_conditioned_footstep_cadence_l1(ManagerTermBase):
+    """Penalize command-relative excess cadence using an EMA of touchdown intervals."""
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._elapsed_since_touchdown = torch.zeros(
+            env.num_envs, dtype=torch.float32, device=env.device
+        )
+        self._cadence_ema_hz = torch.zeros_like(self._elapsed_since_touchdown)
+        self._has_touchdown = torch.zeros(
+            env.num_envs, dtype=torch.bool, device=env.device
+        )
+        self._has_interval = torch.zeros_like(self._has_touchdown)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._elapsed_since_touchdown[env_ids] = 0.0
+        self._cadence_ema_hz[env_ids] = 0.0
+        self._has_touchdown[env_ids] = False
+        self._has_interval[env_ids] = False
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        epsilon: float = 1.0e-6,
+        ema_alpha: float = 0.5,
+        base_hz: float = 1.0,
+        linear_gain: float = 3.33,
+        yaw_gain: float = 1.5,
+        maximum_hz: float = 3.0,
+        max_penalty: float = 3.0,
+    ) -> torch.Tensor:
+        if not 0.0 < ema_alpha <= 1.0:
+            raise ValueError("ema_alpha must be in (0, 1].")
+        if env.step_dt <= 0.0:
+            raise ValueError("Cadence reward requires env.step_dt > 0.")
+        contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        touchdown = torch.any(
+            contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids],
+            dim=1,
+        )
+        (
+            self._elapsed_since_touchdown,
+            self._cadence_ema_hz,
+            self._has_touchdown,
+            self._has_interval,
+        ) = update_footstep_cadence_state(
+            self._elapsed_since_touchdown,
+            self._cadence_ema_hz,
+            self._has_touchdown,
+            self._has_interval,
+            touchdown,
+            step_dt=float(env.step_dt),
+            ema_alpha=ema_alpha,
+        )
+
+        command = env.command_manager.get_command(command_name)
+        allowed_hz = allowed_footstep_cadence_hz(
+            command,
+            base_hz=base_hz,
+            linear_gain=linear_gain,
+            yaw_gain=yaw_gain,
+            maximum_hz=maximum_hz,
+        )
+        active = torch.linalg.vector_norm(command, dim=1) > float(epsilon)
+        penalty = torch.clamp(
+            (self._cadence_ema_hz - allowed_hz) / allowed_hz,
+            min=0.0,
+            max=float(max_penalty),
+        )
+        return penalty * active.float() * self._has_interval.float()
 
 
 def rapid_footstep_l1(
@@ -1190,14 +1358,41 @@ def oriented_footprint_proximity_l2(
 ) -> torch.Tensor:
     """Penalize close/overlapping oriented sole rectangles using a 2-D SAT clearance.
 
-    S3 G1 contact points span approximately x=[-0.05, 0.12] and
-    y=[-0.03, 0.03] around each ankle-roll link.  The four projected corners
+    S3 G1 contact points use the conservative envelope x=[-0.055, 0.125] and
+    y=[-0.035, 0.035] around each ankle-roll link. The four projected corners
     therefore reflect sole length, width and yaw instead of using ankle-center
     distance, which misses toe/heel and crossing-foot intersections.
     """
     asset: RigidObject = env.scene[asset_cfg.name]
+    corners_xy = _oriented_footprint_corners_xy(
+        asset,
+        asset_cfg,
+        center_offset_x=center_offset_x,
+        half_length=half_length,
+        half_width=half_width,
+    )
+
+    # The torch-only helper evaluates SAT axis_separation on every edge normal.
+    signed_clearance = convex_footprint_signed_clearance_xy(
+        corners_xy[:, 0], corners_xy[:, 1]
+    )
+    violation = torch.clamp(float(min_clearance) - signed_clearance, min=0.0)
+    return torch.clamp(
+        torch.square(violation / max(float(std), 1.0e-6)), max=float(max_penalty)
+    )
+
+
+def _oriented_footprint_corners_xy(
+    asset: RigidObject,
+    asset_cfg: SceneEntityCfg,
+    *,
+    center_offset_x: float,
+    half_length: float,
+    half_width: float,
+) -> torch.Tensor:
+    """Transform two conservative sole rectangles into world-frame XY corners."""
     if len(asset_cfg.body_ids) != 2:
-        raise ValueError("oriented_footprint_proximity_l2 expects exactly two foot bodies.")
+        raise ValueError("Oriented footprint rewards expect exactly two foot bodies.")
 
     local_corners = torch.tensor(
         [
@@ -1216,26 +1411,237 @@ def oriented_footprint_proximity_l2(
     corner_vectors = local_corners.view(1, 1, 4, 3).expand(num_envs, 2, -1, -1)
     world_corners = math_utils.quat_apply(quaternions, corner_vectors.reshape(-1, 3))
     world_corners = world_corners.view(num_envs, 2, 4, 3) + foot_pos.unsqueeze(2)
-    corners_xy = world_corners[..., :2]
+    return world_corners[..., :2]
 
-    # Four candidate separating axes: length/width axes from both feet.
-    length_axes = corners_xy[:, :, 1, :] - corners_xy[:, :, 0, :]
-    width_axes = corners_xy[:, :, 3, :] - corners_xy[:, :, 0, :]
-    axes = torch.stack(
-        [length_axes[:, 0], width_axes[:, 0], length_axes[:, 1], width_axes[:, 1]],
-        dim=1,
+
+def lateral_command_progress(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_command: float = 0.10,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward signed lateral response; standing still receives no credit."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    lateral, _ = two_goal_command_masks(command, lateral_min_command=min_command)
+    progress = signed_command_progress_ratio(
+        command[:, 1], asset.data.root_lin_vel_b[:, 1], min_command=min_command
     )
-    axes = axes / torch.clamp(torch.linalg.vector_norm(axes, dim=2, keepdim=True), min=1.0e-8)
-    left_projection = torch.sum(corners_xy[:, 0].unsqueeze(1) * axes.unsqueeze(2), dim=3)
-    right_projection = torch.sum(corners_xy[:, 1].unsqueeze(1) * axes.unsqueeze(2), dim=3)
-    left_min, left_max = torch.min(left_projection, dim=2).values, torch.max(left_projection, dim=2).values
-    right_min, right_max = torch.min(right_projection, dim=2).values, torch.max(right_projection, dim=2).values
-    axis_separation = torch.maximum(right_min - left_max, left_min - right_max)
-    signed_clearance = torch.max(axis_separation, dim=1).values
-    violation = torch.clamp(float(min_clearance) - signed_clearance, min=0.0)
-    return torch.clamp(
-        torch.square(violation / max(float(std), 1.0e-6)), max=float(max_penalty)
+    return progress * lateral.float() * _upright_scale(env)
+
+
+def pure_yaw_command_progress(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_command: float = 0.10,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward actual signed yaw response for an exactly zero-translation command."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    _, pure_yaw = two_goal_command_masks(command, pure_yaw_min_command=min_command)
+    progress = signed_command_progress_ratio(
+        command[:, 2], asset.data.root_ang_vel_b[:, 2], min_command=min_command
     )
+    return progress * pure_yaw.float() * _upright_scale(env)
+
+
+def pure_yaw_planar_drift_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_yaw_command: float = 0.10,
+    velocity_scale: float = 0.08,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize translational drift only during an in-place turn command."""
+    if velocity_scale <= 0.0:
+        raise ValueError("velocity_scale must be positive.")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    _, pure_yaw = two_goal_command_masks(command, pure_yaw_min_command=min_yaw_command)
+    drift = torch.sum(torch.square(asset.data.root_lin_vel_b[:, :2]), dim=1)
+    return drift / float(velocity_scale) ** 2 * pure_yaw.float()
+
+
+def lateral_command_leak_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_lateral_command: float = 0.10,
+    forward_velocity_scale: float = 0.10,
+    yaw_rate_scale: float = 0.15,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize forward and yaw leakage during a pure lateral command."""
+    if forward_velocity_scale <= 0.0 or yaw_rate_scale <= 0.0:
+        raise ValueError("Lateral leakage scales must be positive.")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    lateral, _ = two_goal_command_masks(command, lateral_min_command=min_lateral_command)
+    leakage = torch.square(asset.data.root_lin_vel_b[:, 0]) / float(forward_velocity_scale) ** 2
+    leakage += torch.square(asset.data.root_ang_vel_b[:, 2]) / float(yaw_rate_scale) ** 2
+    return leakage * lateral.float()
+
+
+class safe_alternating_touchdown_progress(ManagerTermBase):
+    """Reward alternating touchdowns only after safe task-directed progress."""
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._lateral_progress = torch.zeros(env.num_envs, device=env.device)
+        self._yaw_progress = torch.zeros_like(self._lateral_progress)
+        self._last_foot = torch.full(
+            (env.num_envs,), -1, dtype=torch.long, device=env.device
+        )
+        self._last_mode = torch.zeros(env.num_envs, dtype=torch.int8, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._lateral_progress[env_ids] = 0.0
+        self._yaw_progress[env_ids] = 0.0
+        self._last_foot[env_ids] = -1
+        self._last_mode[env_ids] = 0
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        asset_cfg: SceneEntityCfg,
+        min_lateral_command: float = 0.10,
+        min_yaw_command: float = 0.10,
+        lateral_progress_per_step: float = 0.035,
+        yaw_progress_per_step: float = 0.060,
+        min_clearance: float = 0.025,
+        center_offset_x: float = 0.035,
+        half_length: float = 0.090,
+        half_width: float = 0.035,
+    ) -> torch.Tensor:
+        if lateral_progress_per_step <= 0.0 or yaw_progress_per_step <= 0.0:
+            raise ValueError("Touchdown progress targets must be positive.")
+        contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        asset: RigidObject = env.scene[asset_cfg.name]
+        command = env.command_manager.get_command(command_name)
+        lateral, pure_yaw = two_goal_command_masks(
+            command,
+            lateral_min_command=min_lateral_command,
+            pure_yaw_min_command=min_yaw_command,
+        )
+        mode = lateral.to(torch.int8) + 2 * pure_yaw.to(torch.int8)
+        mode_changed = mode != self._last_mode
+        self._lateral_progress[mode_changed] = 0.0
+        self._yaw_progress[mode_changed] = 0.0
+        self._last_foot[mode_changed] = -1
+        self._last_mode = mode
+
+        lateral_velocity = torch.sign(command[:, 1]) * asset.data.root_lin_vel_b[:, 1]
+        yaw_velocity = torch.sign(command[:, 2]) * asset.data.root_ang_vel_b[:, 2]
+        self._lateral_progress += (
+            torch.clamp(lateral_velocity, min=0.0) * float(env.step_dt) * lateral.float()
+        )
+        self._yaw_progress += (
+            torch.clamp(yaw_velocity, min=0.0) * float(env.step_dt) * pure_yaw.float()
+        )
+
+        first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
+        exactly_one_touchdown = torch.sum(first_contact.int(), dim=1) == 1
+        touchdown_foot = torch.argmax(first_contact.int(), dim=1)
+        alternating = (self._last_foot >= 0) & (touchdown_foot != self._last_foot)
+        corners = _oriented_footprint_corners_xy(
+            asset,
+            asset_cfg,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        clearance = convex_footprint_signed_clearance_xy(corners[:, 0], corners[:, 1])
+        safe = clearance >= float(min_clearance)
+        normalized_progress = torch.where(
+            lateral,
+            self._lateral_progress / float(lateral_progress_per_step),
+            self._yaw_progress / float(yaw_progress_per_step),
+        )
+        reward = (
+            torch.clamp(normalized_progress, min=0.0, max=1.0)
+            * exactly_one_touchdown.float()
+            * alternating.float()
+            * safe.float()
+            * (mode > 0).float()
+            * _upright_scale(env)
+        )
+        touchdown = exactly_one_touchdown & (mode > 0)
+        self._last_foot[touchdown] = touchdown_foot[touchdown]
+        self._lateral_progress[touchdown] = 0.0
+        self._yaw_progress[touchdown] = 0.0
+        return reward
+
+
+class swept_oriented_footprint_proximity_l2(ManagerTermBase):
+    """Shape-aware soft barrier with hard close/overlap costs over a swept step."""
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._previous_corners = torch.zeros(
+            env.num_envs, 2, 4, 2, dtype=torch.float32, device=env.device
+        )
+        self._has_previous = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._previous_corners[env_ids] = 0.0
+        self._has_previous[env_ids] = False
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        asset_cfg: SceneEntityCfg,
+        center_offset_x: float = 0.035,
+        half_length: float = 0.090,
+        half_width: float = 0.035,
+        soft_clearance: float = 0.040,
+        hard_clearance: float = 0.025,
+        hard_scale: float = 3.0,
+        overlap_scale: float = 8.0,
+        interpolation_steps: int = 4,
+    ) -> torch.Tensor:
+        if not 0.0 <= hard_clearance < soft_clearance:
+            raise ValueError("Footprint clearances require 0 <= hard < soft.")
+        asset: RigidObject = env.scene[asset_cfg.name]
+        current = _oriented_footprint_corners_xy(
+            asset,
+            asset_cfg,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        previous = torch.where(
+            self._has_previous.view(-1, 1, 1, 1), self._previous_corners, current
+        )
+        clearance = swept_convex_footprint_signed_clearance_xy(
+            previous[:, 0],
+            previous[:, 1],
+            current[:, 0],
+            current[:, 1],
+            interpolation_steps=interpolation_steps,
+        )
+        self._previous_corners.copy_(current)
+        self._has_previous.fill_(True)
+
+        command = env.command_manager.get_command(command_name)
+        lateral, pure_yaw = two_goal_command_masks(command)
+        active = lateral | pure_yaw
+        soft = torch.clamp(
+            (float(soft_clearance) - clearance)
+            / (float(soft_clearance) - float(hard_clearance)),
+            min=0.0,
+            max=1.0,
+        )
+        soft = torch.square(soft)
+        hard = (clearance < float(hard_clearance)).float() * float(hard_scale)
+        overlap = (clearance < 0.0).float() * float(overlap_scale)
+        return (soft + hard + overlap) * active.float()
 
 
 def feet_swing_clearance_band_l2(

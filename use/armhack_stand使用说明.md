@@ -82,7 +82,79 @@ INTERACTIVE_AUTO_ENTER_S=-1
 
 此时请在窗口启动后立即按 Enter。按 Enter 前 actor 没有运行，当前待机 PD 不能保证长时间站稳。
 
-### 3.2 无界面自动回归
+### 3.2 左右脚踝输出、力矩和角度诊断
+
+Stand 的 MuJoCo 入口默认开启左右脚踝诊断，覆盖以下四个关节：
+
+```text
+left_ankle_pitch_joint
+right_ankle_pitch_joint
+left_ankle_roll_joint
+right_ankle_roll_joint
+```
+
+运行期间，终端默认每秒打印一次：
+
+- `out`：actor 的原始踝关节模型输出，无量纲。
+- `tau`：MuJoCo `data.actuator_force` 的实际执行器力矩，单位 N·m。
+- `q`：MuJoCo 实际关节角度，单位 rad。
+
+模型输出不是力矩，也不是绝对角度，而是相对默认关节角的无量纲残差动作。踝关节控制链为：
+
+```text
+target_angle_rad = default_angle_rad + 0.25 × model_output
+torque_command_Nm = Kp × (target_angle_rad - actual_angle_rad) - Kd × actual_velocity_rad_s
+```
+
+这里的 `default_angle_rad` 是训练和部署共同使用的关节参考姿态，即残差动作的零点，不是当前实测角度。四个踝关节的默认值为：左/右 ankle pitch 均为 `-0.2 rad`（约 `-11.46°`），左/右 ankle roll 均为 `0 rad`。为了产生支撑重力所需的持续力矩，PD 目标角与实际角度可以长期存在偏差。
+
+MuJoCo 的 `actuator_force` 是执行器最终施加的力矩；CSV 同时保存 `torque_command_nm_*` 和 `actuator_torque_nm_*`，便于检查执行器约束是否使两者不同。
+
+左右模型输出不要求逐帧相同。策略分别观察左右关节角、关节速度和上一帧动作，左右脚接触、双臂扰动及躯干 roll/yaw 响应也不会完全一致；模型会主动产生左右差分来维持平衡。训练中的对称损失只是软约束，不会把左右动作强制绑定。正常的缓慢左右差异通常是平衡补偿；持续快速反号、力矩尖峰或角度高频摆动才更像震荡问题。
+
+推荐命令：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
+
+CHECKPOINT="$PWD/checkpoint/stand/model_2999.pt" \
+POLICY_PATH="$PWD/use/armhack_stand_model_2999.torchscript.pt" \
+MODE=interactive FORCE_EXPORT=False \
+USE_GLFW=True REAL_TIME=True \
+INTERACTIVE_AUTO_ENTER_S=0.0 \
+ANKLE_DIAGNOSTICS=True ANKLE_PRINT_HZ=1.0 \
+bash legged_lab/scripts/val_mujoco_g1_armhack_stand.sh
+```
+
+使用窗口的 `Q` 键退出，或直接关闭 MuJoCo 窗口。程序退出仿真循环后会自动生成：
+
+```text
+<报告文件名>__ankle_diagnostics.csv
+<报告文件名>__ankle_comparison.png
+<报告文件名>__ankle_comparison.svg
+<报告文件名>__ankle_high_frequency.svg
+```
+
+CSV 以 50 Hz 保存四个踝关节的模型输出、PD 力矩命令、实际执行器力矩、实际角度、目标角度、策略是否激活及当前双臂测试阶段。PNG 为 3 行 × 2 列对比图：
+
+- 左列：踝关节 pitch；右列：踝关节 roll。
+- 第一行：左右模型输出。
+- 第二行：左右实际执行器力矩。
+- 第三行：左右实际角度与目标角度。
+
+`__ankle_comparison.svg` 是上述完整曲线的矢量版本，可以任意放大查看。`__ankle_high_frequency.svg` 会先从每条信号中减去居中的 0.2 秒移动平均基线，再绘制剩余的小尺度快速分量，并自动跳过最初最多 1 秒的启动段；它适合观察高频噪声，但属于时域诊断，不等同于严格的频谱分析。
+
+PNG 和 CSV 与该次测试的 Markdown、JSON、躯干 6D 图片保存在同一个 `checkpoint/stand/Test Reports/StandArmOnlyMuJoCo/` 报告目录；退出时终端会打印绝对路径。
+
+调整终端打印频率，例如改为 5 Hz：
+
+```bash
+ANKLE_PRINT_HZ=5.0
+```
+
+设置 `ANKLE_PRINT_HZ=0` 可以停止终端周期打印，但仍会记录 CSV 并绘图；设置 `ANKLE_DIAGNOSTICS=False` 才会完全关闭该诊断。请使用 `Q` 或关闭窗口正常结束；直接强制杀死进程可能来不及执行退出后的 CSV 和 PNG 生成。
+
+### 3.3 无界面自动回归
 
 自动进入策略，完成初始化并自动切换两次双臂姿态：
 
@@ -102,7 +174,7 @@ bash legged_lab/scripts/val_mujoco_g1_armhack_stand.sh
 
 测试结束后，终端会打印报告、JSON、CSV 和躯干 6D 曲线的保存路径。
 
-### 3.3 全部固定姿态和轨迹
+### 3.4 全部固定姿态和轨迹
 
 ```bash
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
@@ -113,7 +185,7 @@ MODE=all FORCE_EXPORT=False USE_GLFW=False REAL_TIME=False \
 bash legged_lab/scripts/val_mujoco_g1_armhack_stand.sh
 ```
 
-### 3.4 自然下垂到双臂放平
+### 3.5 自然下垂到双臂放平
 
 ```bash
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
@@ -125,7 +197,7 @@ USE_GLFW=True REAL_TIME=True \
 bash legged_lab/scripts/val_mujoco_g1_armhack_stand.sh
 ```
 
-### 3.5 默认姿态、前伸、收回、自然下垂
+### 3.6 默认姿态、前伸、收回、自然下垂
 
 ```bash
 cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
@@ -137,7 +209,7 @@ USE_GLFW=True REAL_TIME=True \
 bash legged_lab/scripts/val_mujoco_g1_armhack_stand.sh
 ```
 
-### 3.6 运行时随机生成双臂轨迹
+### 3.7 运行时随机生成双臂轨迹
 
 随机轨迹只在训练双臂姿态范围内取点，再用 minimum-jerk 插值：
 

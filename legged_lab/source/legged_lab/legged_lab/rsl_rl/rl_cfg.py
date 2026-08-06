@@ -88,6 +88,24 @@ class RslRlPpoAmpAlgorithmCfg:
         min_std: float = 1.0e-4
         """Minimum standard deviation used in the analytic Gaussian KL."""
 
+        mean_only: bool = False
+        """Constrain actor means while allowing a fresh exploration standard deviation."""
+
+        target: float = 0.0
+        """Optional target used to adapt the baseline KL multiplier between updates."""
+
+        min_scale: float = 0.0
+        """Lower bound for adaptive baseline KL scaling."""
+
+        max_scale: float = 1.0
+        """Upper bound for adaptive baseline KL scaling."""
+
+        adaptation_rate: float = 1.5
+        """Multiplicative baseline KL scale adjustment when the target is missed."""
+
+        hard_limit: float = 0.0
+        """Abort an update when mean baseline-policy KL exceeds this positive limit."""
+
     baseline_kl_cfg: BaselineKLCfg = BaselineKLCfg()
     """Optional frozen baseline-policy KL regularizer configuration."""
 
@@ -98,5 +116,3 @@ class RslRlPpoAmpAlgorithmCfg:
 #########################
 # Runner configurations #
 #########################
-
-    

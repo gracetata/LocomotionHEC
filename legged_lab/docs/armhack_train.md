@@ -3470,3 +3470,103 @@ MuJoCo `smoke_walk_to_zero` 也完成了 checkpoint 导出、五组 ONNX/TorchSc
 测得 touchdown 频率约 `4.54 Hz`，因此新行为检查明确判为 FAIL；smoke 使用
 `ENFORCE_THRESHOLDS=False`，所以只把它作为旧模型问题基线，不把旧模型误报为已修复。正式续训前，这正是预期
 结果；只有新模型以 `ENFORCE_THRESHOLDS=True` 通过 core/full 才能宣称行为问题已解决。
+
+## 20. Stand 踝 roll/pitch 低力矩与略宽站姿续训（2026-08-05）
+
+### 20.1 目标与奖励设计
+
+目标不是让脚踝“不发力”。维持平衡所必需的踝力矩必须保留；要优化的是，在机器人仍能站稳、承受末端负载和外力、
+完成 AD 到 P0 双臂动作的前提下，让策略通过髋、膝、躯干与重心的细微调整，减少不必要的踝 pitch/roll 力矩。
+原有 `dof_torques_l2=-2e-6` 把 15 个腿腰关节混在一起统计，踝关节问题容易被总量掩盖，因此新增独立软惩罚：
+
+```text
+ankle_roll_pitch_torques_l2
+joint set = left/right ankle pitch + left/right ankle roll
+raw value = sum(applied_torque_i ** 2)
+weight = -5e-5
+```
+
+这里使用 Isaac `Articulation.data.applied_torque`，单位为 Nm，不是无量纲 actor 输出，也不是位置 action。
+四个目标踝关节仍同时包含原有全下肢力矩项；髋、膝、腰和 14 个脚本双臂关节不进入专项项。该项不是硬约束，
+`alive`、双脚支撑、躯干姿态/高度、足底防滑、根位置以及 robust task 的 `termination_penalty=-500` 同时保留。
+因此“少用必要力矩然后摔倒”会得到远差于“使用必要力矩保持直立”的回报。只有在稳定性不退化时继续减小踝力矩，
+才能说明策略找到了更好的全身重心放置方式。
+
+TensorBoard 输出不带奖励权重的物理量和脚距：
+
+```text
+Important Metrics/ankle_roll_pitch_torque_abs_mean_nm
+Important Metrics/ankle_roll_pitch_torque_rms_nm
+Important Metrics/ankle_roll_pitch_torque_peak_mean_nm
+Important Metrics/lower_body_torque_rms_nm
+Important Metrics/feet_planar_separation_mean_m
+```
+
+训练成功判据必须是：三个踝力矩 Nm 指标相对输入 `model_1999` 下降，同时 episode length 保持 20 s、
+`base_height/bad_orientation` 不上升、躯干 roll/pitch/速度不变差、双脚不滑、总腿腰力矩没有明显增加、双臂全流程和随机外力测试仍通过。
+只看总 reward 或踝力矩单项下降不能证明目标已经达到。
+
+### 20.2 新默认站姿
+
+S3 G1 当前默认脚中心距离约 `0.237 m`；以左右 `shoulder_roll_link` 中心计算的外侧肩宽约 `0.281 m`。
+新 Stand 默认姿态使用：
+
+```text
+left/right hip roll  = +0.06 / -0.06 rad
+left/right ankle roll = -0.06 / +0.06 rad
+feet planar separation target = 0.30 m
+```
+
+髋关节对称外展把双脚打开，踝关节等量反向补偿使脚掌近似保持水平。MuJoCo 正运动学得到初始脚中心间距约
+`0.307 m`，比肩宽多约 `0.026 m`，符合“比肩稍宽一点”。奖励 `feet_planar_separation_l2=-10` 围绕
+`0.30 m` 做双向平方约束，不允许策略为了降低踝力矩无限加宽站姿，也不把任一只脚锁死在世界坐标。
+
+### 20.3 续训入口
+
+入口从已经学会“自然下垂 AD 静止并以随机速度同步抬到 P0”的 `model_1999.pt` 继续，关闭旧课程的重新爬坡，
+直接保持完整随机延迟/速度轨迹以及既有末端负载、躯干外力、执行器增益、关节摩擦和 armature 随机化。使用较低
+`3e-5` 学习率和 baseline KL 防止遗忘已有稳定能力。
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion/legged_lab
+
+bash scripts/train_g1_armhack_stand_low_ankle_torque.sh
+```
+
+默认是 `4096 env × 1000 iteration`，专项权重可显式调整：
+
+```bash
+ANKLE_TORQUE_PENALTY=5.0e-5 \
+RUN_NAME=armhack_stand_low_ankle_roll_pitch_torque_wide_stance_from_model1999 \
+bash scripts/train_g1_armhack_stand_low_ankle_torque.sh
+```
+
+最小训练链 smoke：
+
+```bash
+NUM_ENVS=16 MAX_ITERATIONS=1 QUIET_TERMINAL=True \
+RUN_NAME=armhack_stand_low_ankle_torque_wide_stance_smoke \
+bash scripts/train_g1_armhack_stand_low_ankle_torque.sh
+```
+
+这个入口只使用 `LeggedLab-Isaac-AMP-G1-StandDownToDefault-v0` 和
+`logs/rsl_rl/g1_stand_perturb`，不会引用或修改 Walk task、Walk checkpoint 或 Walk 日志目录。
+
+### 20.4 Smoke 结果与“能否达到目的”的判定
+
+2026-08-05 已执行 `8 env × 1 iteration` 的真实 IsaacLab smoke。Reward Manager 创建了 23 个有效项，其中
+`ankle_roll_pitch_torques_l2=-5e-5`、`feet_planar_separation_l2=-10`；训练正确加载固定 SHA-256 的
+`model_1999.pt`，完成 192 个 rollout step、一次 PPO 更新、TensorBoard event 和 `model_0.pt` 保存。首批物理值为：
+
+```text
+feet_planar_separation_mean_m           0.3055 m
+ankle_roll_pitch_torque_abs_mean_nm     5.5021 Nm
+ankle_roll_pitch_torque_rms_nm          7.3381 Nm
+ankle_roll_pitch_torque_peak_mean_nm   11.0097 Nm
+lower_body_torque_rms_nm                5.1106 Nm
+```
+
+这证明新默认姿态、指定踝关节、实际力矩读取、奖励和优化链都在工作，也证明输入策略存在非零的踝力矩优化空间；
+它不能单独证明策略已经学会最优重心。正式结论必须用相同 seed、负载、外力和双臂轨迹分别评估输入
+`model_1999` 与续训最终模型。只有踝力矩均值/RMS/峰值显著下降，且 20 s 存活、终止率、躯干稳定、脚滑、脚距和
+任务成功率不退化，并且没有把力矩明显转移到髋、膝或腰，才判定达到了“最少必要踝力矩下保持站立和完成任务”的目标。

@@ -71,6 +71,10 @@ core.*
 # 发布用 Walk checkpoint 需要随仓库提供；当前单文件约 15 MB，低于 GitHub 100 MB 上限。
 !/checkpoint/walk/
 !/checkpoint/walk/**
+# Nav2 专项续训源模型单独按 SHA-256 在训练机之间同步，不进入 Git 历史。
+/checkpoint/nav2_behavior_model9996_source/
+/legged_lab/Nav2BehaviorFinetune/
+/legged_lab/Nav2TwoGoalFinetune/
 /legged_lab/ArmHack Checkpoints/**/*.pt
 /legged_lab/ArmHack Checkpoints/**/*.pth
 /legged_lab/ArmHack Checkpoints/**/*.ckpt

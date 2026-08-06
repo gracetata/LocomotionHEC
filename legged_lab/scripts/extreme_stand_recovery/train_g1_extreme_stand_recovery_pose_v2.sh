@@ -71,4 +71,9 @@ bash "${SCRIPT_DIR}/train_g1_extreme_stand_recovery.sh" \
   "env.rewards.default_key_body_pose_exp.weight=${DEFAULT_CARTESIAN_POSE_WEIGHT}" \
   "env.rewards.default_key_body_pose_exp.params.std=${DEFAULT_CARTESIAN_POSE_STD}" \
   "env.rewards.default_feet_distance_l2.weight=-${DEFAULT_FEET_DISTANCE_PENALTY}" \
+  env.rewards.default_key_body_pose_gaussian.weight=0.0 \
+  env.rewards.default_feet_distance_gaussian.weight=0.0 \
+  env.rewards.joint_jerk_l2.weight=0.0 \
+  env.rewards.action_second_difference_l2.weight=0.0 \
+  env.rewards.joint_torque_rate_l2.weight=0.0 \
   "$@"

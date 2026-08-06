@@ -142,6 +142,32 @@ G1_PROJECT_ROOT_DIR = os.path.abspath(os.path.join(LEGGED_LAB_ROOT_DIR, "..", ".
 G1_NAV2_AUGMENTED_CMD_DATA_PATH = os.path.join(
     G1_PROJECT_ROOT_DIR, "nav2_loopback_actual", "actual_augmented", "all_cmd_vel_augmented.csv"
 )
+G1_NAV2_BEHAVIOR_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_config.json",
+)
+G1_NAV2_TWO_GOAL_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_two_goal_config.json",
+)
+G1_NAV2_BEHAVIOR_RECORDED_DATA_PATH = os.path.join(
+    G1_PROJECT_ROOT_DIR,
+    "legged_lab",
+    "Reference Data",
+    "ArmHack",
+    "WalkPerturbFinetune",
+    "nav2_cmd_vel_raw_success.csv",
+)
 G1_ACCAD_G1USED_MOTION_WEIGHTS = {
     "B10_-__Walk_turn_left_45_stageii": 1.0,
     "B11_-__Walk_turn_left_135_stageii": 1.0,
@@ -1594,5 +1620,308 @@ class G1AmpNav2FinetuneEnvCfg_PLAY(G1AmpNav2FinetuneEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1AmpNav2BehaviorFinetuneEnvCfg(G1AmpNav2FinetuneEnvCfg):
+    """Full-body G1 Nav2 behavior refinement without scripted upper-body actions."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        foot_sensor_cfg = SceneEntityCfg(
+            "contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+        foot_asset_cfg = SceneEntityCfg(
+            "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+        locomotion_joint_cfg = SceneEntityCfg(
+            "robot", joint_names=G1_LOCOMOTION_JOINT_NAMES, preserve_order=True
+        )
+
+        # Recorded Nav2 windows retain realistic temporal correlations while
+        # named modes explicitly cover exact stand, micro-speed and pure yaw.
+        self.commands.base_velocity = mdp.HybridNav2ModeVelocityCommandCfg(
+            asset_name="robot",
+            resampling_time_range=(4.0, 4.0),
+            rel_standing_envs=0.02,
+            rel_heading_envs=0.0,
+            heading_command=False,
+            debug_vis=True,
+            data_path=G1_NAV2_BEHAVIOR_RECORDED_DATA_PATH,
+            augmentation_filter="none,mirror_lr",
+            dataset_sample_dt=0.05,
+            window_duration_s=4.0,
+            command_scale=(0.70, 0.55, 0.55),
+            command_clip_min=(-0.65, -0.45, -1.0),
+            command_clip_max=(1.05, 0.45, 1.0),
+            smoothing_time_constant=0.30,
+            max_linear_accel=0.60,
+            max_yaw_accel=0.80,
+            reset_command_to_zero=True,
+            sample_groups_uniformly=True,
+            scenario_family_weights={
+                "sample500_random": 1.0,
+                "sharp_turn": 2.4,
+                "hard_turn": 2.0,
+                "complex_turn": 1.6,
+                "moving_obstacle": 1.3,
+                "random_obstacle": 1.0,
+                "baseline": 0.7,
+                "large_success": 0.8,
+            },
+            controller_weights={"mppi": 1.15, "dwb": 1.0},
+            augmentation_weights={"none": 1.0, "mirror_lr": 1.0},
+            mode_sampling_config_path=G1_NAV2_BEHAVIOR_MODE_CONFIG_PATH,
+            mode_probability=0.60,
+            forced_mode="",
+            hard_zero_stand=True,
+            mode_command_scale=(1.0, 1.0, 1.0),
+            mode_command_clip_min=(-0.65, -0.45, -1.0),
+            mode_command_clip_max=(1.05, 0.45, 1.0),
+            ranges=mdp.HybridNav2ModeVelocityCommandCfg.Ranges(
+                lin_vel_x=(-0.65, 1.05),
+                lin_vel_y=(-0.45, 0.45),
+                ang_vel_z=(-1.0, 1.0),
+                heading=None,
+            ),
+        )
+
+        # The inherited air-time term has a translational 0.1 m/s gate and
+        # would recreate the exact micro-speed/pure-yaw dead zone being fixed.
+        self.rewards.feet_air_time = None
+        self.rewards.strict_zero_body_motion_l2 = RewTerm(
+            func=mdp.strict_zero_command_body_motion_l2,
+            weight=-4.0,
+            params={"command_name": "base_velocity", "epsilon": 1.0e-6},
+        )
+        self.rewards.strict_zero_feet_motion_l2 = RewTerm(
+            func=mdp.strict_zero_command_feet_motion_l2,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "asset_cfg": foot_asset_cfg,
+                "epsilon": 1.0e-6,
+            },
+        )
+        self.rewards.strict_zero_joint_vel_l2 = RewTerm(
+            func=mdp.strict_zero_command_joint_vel_l2,
+            weight=-0.03,
+            params={
+                "command_name": "base_velocity",
+                "asset_cfg": locomotion_joint_cfg,
+                "epsilon": 1.0e-6,
+            },
+        )
+        self.rewards.strict_zero_double_support = RewTerm(
+            func=mdp.strict_zero_command_double_support,
+            weight=2.0,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "epsilon": 1.0e-6,
+            },
+        )
+        self.rewards.nonzero_single_stance = RewTerm(
+            func=mdp.nonzero_command_single_stance,
+            weight=1.6,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "epsilon": 1.0e-6,
+                "min_mode_time": 0.02,
+                "micro_linear_speed_max": 0.15,
+                "pure_yaw_translation_max": 0.005,
+                "pure_yaw_min_command": 0.05,
+                "micro_speed_bonus": 0.50,
+                "pure_yaw_bonus": 0.75,
+            },
+        )
+        self.rewards.relative_command_response_shortfall_l1 = RewTerm(
+            func=mdp.relative_command_response_shortfall_reward_l1,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "epsilon": 1.0e-6,
+                "min_speed_fraction": 0.50,
+                "min_lin_normalizer": 0.01,
+                "min_yaw_normalizer": 0.05,
+            },
+        )
+        self.rewards.pure_yaw_torso_roll_l2 = RewTerm(
+            func=mdp.pure_yaw_torso_roll_l2,
+            weight=-0.5,
+            params={
+                "command_name": "base_velocity",
+                "max_translation_command": 0.005,
+                "min_yaw_command": 0.05,
+                "std": 0.15,
+                "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+            },
+        )
+        self.rewards.command_conditioned_footstep_cadence_l1 = RewTerm(
+            func=mdp.command_conditioned_footstep_cadence_l1,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "epsilon": 1.0e-6,
+                "ema_alpha": 0.5,
+                # Lift low-speed total touchdown cadence without raising the
+                # established 3 Hz normal-speed ceiling. At 0.6 m/s the new
+                # linear curve still reaches approximately the old 2.998 Hz.
+                "base_hz": 1.6,
+                "linear_gain": 2.33,
+                "yaw_gain": 1.5,
+                "maximum_hz": 3.0,
+                "max_penalty": 3.0,
+            },
+        )
+        self.rewards.oriented_footprint_proximity_l2 = RewTerm(
+            func=mdp.oriented_footprint_proximity_l2,
+            weight=-8.0,
+            params={
+                "asset_cfg": foot_asset_cfg,
+                "center_offset_x": 0.035,
+                "half_length": 0.090,
+                "half_width": 0.035,
+                "min_clearance": 0.025,
+                "std": 0.020,
+                "max_penalty": 25.0,
+            },
+        )
+
+
+@configclass
+class G1AmpNav2BehaviorFinetuneEnvCfg_PLAY(G1AmpNav2BehaviorFinetuneEnvCfg):
+    """Reduced-env full-body Nav2 behavior task for replay and diagnostics."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
+    """Conservative refinement for safe lateral stepping and zero-linear pure yaw."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        foot_sensor_cfg = SceneEntityCfg(
+            "contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+        foot_asset_cfg = SceneEntityCfg(
+            "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+
+        # Eighty percent of windows contain one of the two explicit goals. The
+        # recorded Nav2 remainder is a retention anchor, not a third target.
+        self.commands.base_velocity.mode_sampling_config_path = G1_NAV2_TWO_GOAL_MODE_CONFIG_PATH
+        self.commands.base_velocity.mode_probability = 0.80
+        self.commands.base_velocity.resampling_time_range = (6.0, 6.0)
+        self.commands.base_velocity.window_duration_s = 6.0
+        self.commands.base_velocity.rel_standing_envs = 0.0
+        self.commands.base_velocity.hard_zero_stand = False
+        self.commands.base_velocity.mode_command_clip_min = (-0.02, -0.40, -0.50)
+        self.commands.base_velocity.mode_command_clip_max = (0.02, 0.40, 0.50)
+
+        # Remove the previous behavior-shaping terms that can reward stationary
+        # single support or produce a large reset/transient stop penalty.
+        self.rewards.strict_zero_body_motion_l2 = None
+        self.rewards.strict_zero_feet_motion_l2 = None
+        self.rewards.strict_zero_joint_vel_l2 = None
+        self.rewards.strict_zero_double_support = None
+        self.rewards.nonzero_single_stance = None
+        self.rewards.relative_command_response_shortfall_l1 = None
+        self.rewards.oriented_footprint_proximity_l2 = None
+
+        # A tighter tracking kernel makes zero response unattractive for the
+        # moderate commands used in the first curriculum stage.
+        self.rewards.track_lin_vel_xy_exp.params["std"] = 0.20
+        self.rewards.track_ang_vel_z_exp.params["std"] = 0.20
+        self.rewards.track_torso_lin_vel_xy_exp.params["std"] = 0.20
+        self.rewards.track_torso_yaw_rate_exp.params["std"] = 0.20
+
+        self.rewards.lateral_command_progress = RewTerm(
+            func=mdp.lateral_command_progress,
+            weight=1.0,
+            params={"command_name": "base_velocity", "min_command": 0.10},
+        )
+        self.rewards.pure_yaw_command_progress = RewTerm(
+            func=mdp.pure_yaw_command_progress,
+            weight=1.0,
+            params={"command_name": "base_velocity", "min_command": 0.10},
+        )
+        self.rewards.safe_alternating_touchdown_progress = RewTerm(
+            func=mdp.safe_alternating_touchdown_progress,
+            weight=1.5,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "asset_cfg": foot_asset_cfg,
+                "min_lateral_command": 0.10,
+                "min_yaw_command": 0.10,
+                "lateral_progress_per_step": 0.035,
+                "yaw_progress_per_step": 0.060,
+                "min_clearance": 0.025,
+                "center_offset_x": 0.035,
+                "half_length": 0.090,
+                "half_width": 0.035,
+            },
+        )
+        self.rewards.pure_yaw_planar_drift_l2 = RewTerm(
+            func=mdp.pure_yaw_planar_drift_l2,
+            weight=-0.35,
+            params={
+                "command_name": "base_velocity",
+                "min_yaw_command": 0.10,
+                "velocity_scale": 0.08,
+            },
+        )
+        self.rewards.lateral_command_leak_l2 = RewTerm(
+            func=mdp.lateral_command_leak_l2,
+            weight=-0.25,
+            params={
+                "command_name": "base_velocity",
+                "min_lateral_command": 0.10,
+                "forward_velocity_scale": 0.10,
+                "yaw_rate_scale": 0.15,
+            },
+        )
+        self.rewards.swept_oriented_footprint_proximity_l2 = RewTerm(
+            func=mdp.swept_oriented_footprint_proximity_l2,
+            weight=-0.75,
+            params={
+                "command_name": "base_velocity",
+                "asset_cfg": foot_asset_cfg,
+                "center_offset_x": 0.035,
+                "half_length": 0.090,
+                "half_width": 0.035,
+                "soft_clearance": 0.040,
+                "hard_clearance": 0.025,
+                "hard_scale": 3.0,
+                "overlap_scale": 8.0,
+                "interpolation_steps": 4,
+            },
+        )
+
+        # Pure-yaw roll and excess cadence remain guards, not stepping rewards.
+        self.rewards.pure_yaw_torso_roll_l2.weight = -0.30
+        self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.50
+        self.rewards.command_conditioned_footstep_cadence_l1.params.update(
+            {"base_hz": 2.0, "linear_gain": 2.0, "yaw_gain": 1.5, "maximum_hz": 3.0}
+        )
+
+
+@configclass
+class G1AmpNav2TwoGoalFinetuneEnvCfg_PLAY(G1AmpNav2TwoGoalFinetuneEnvCfg):
+    """Reduced-env replay configuration for two-goal refinement."""
+
+    def __post_init__(self):
+        super().__post_init__()
         self.scene.num_envs = 48
         self.scene.env_spacing = 2.5

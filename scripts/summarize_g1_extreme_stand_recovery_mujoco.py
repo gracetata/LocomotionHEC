@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import statistics
@@ -11,7 +12,15 @@ from pathlib import Path
 from typing import Any
 
 
-PROFILE_ORDER = ("nominal", "pose_recovery", "recovery", "robust", "stress")
+PROFILE_ORDER = (
+    "nominal",
+    "pose_recovery",
+    "feet_distance_recovery",
+    "recovery",
+    "robust",
+    "stress",
+    "large_push",
+)
 
 
 def _mean(values: list[float]) -> float:
@@ -43,6 +52,24 @@ def _finite_float(value: Any) -> float:
     return result if math.isfinite(result) else math.nan
 
 
+def _file_metadata(path_value: str | None) -> dict[str, Any]:
+    if not path_value:
+        return {"path": "", "exists": False, "size_bytes": 0, "sha256": ""}
+    path = Path(path_value).expanduser().resolve()
+    if not path.is_file():
+        return {"path": str(path), "exists": False, "size_bytes": 0, "sha256": ""}
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": str(path),
+        "exists": True,
+        "size_bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
 def load_runs(results_root: Path) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     for metrics_path in sorted(results_root.glob("*/seed_*/metrics.json")):
@@ -55,6 +82,22 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
         tracking = report.get("task_tracking", {})
         score = report.get("score", {})
         pose_recovery = stand.get("default_pose_recovery", {})
+        motion_quality = stand.get("motion_quality", {})
+        jerk = motion_quality.get("joint_jerk_rad_s3", {})
+        high_frequency = motion_quality.get(
+            "joint_position_high_frequency_20_25hz_rms_rad", {}
+        )
+        feet_distance = motion_quality.get("feet_planar_distance_m", {})
+        feet_recovery = stand.get("foot_spacing_recovery", {})
+        large_push = stand.get("large_push", {})
+        push_diagnostics = large_push.get("post_push_diagnostics", {})
+        push_pre = push_diagnostics.get("pre_push", {})
+        push_post = push_diagnostics.get("post_push", {})
+        push_late = push_diagnostics.get("late_post_push", {})
+        push_ratios = push_diagnostics.get("post_over_pre", {})
+        push_late_ratios = push_diagnostics.get("late_post_over_pre", {})
+        push_flags = push_diagnostics.get("flags", {})
+        push_settling = push_diagnostics.get("actor_action_rate_settling", {})
         command = [
             _finite_float(tracking.get("mean_command_lin_vel_x", math.nan)),
             _finite_float(tracking.get("mean_command_lin_vel_y", math.nan)),
@@ -103,6 +146,205 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
                 "final_error_by_joint_rad": dict(
                     pose_recovery.get("final_mean_abs_error_by_joint_rad", {})
                 ),
+                "steady_start_s": _finite_float(
+                    motion_quality.get("steady_start_s", math.nan)
+                ),
+                "steady_sample_count": int(
+                    motion_quality.get("steady_sample_count", 0)
+                ),
+                "control_sample_rate_hz": _finite_float(
+                    motion_quality.get("control_sample_rate_hz", math.nan)
+                ),
+                "joint_jerk_rms_rad_s3": _finite_float(jerk.get("rms", math.nan)),
+                "joint_jerk_p95_abs_rad_s3": _finite_float(
+                    jerk.get("p95_abs", math.nan)
+                ),
+                "joint_jerk_max_abs_rad_s3": _finite_float(
+                    jerk.get("max_abs", math.nan)
+                ),
+                "joint_jerk_weighted_reward_equivalent": _finite_float(
+                    jerk.get("training_weighted_mean_reward_equivalent", math.nan)
+                ),
+                "joint_jerk_per_joint_rms_rad_s3": dict(
+                    jerk.get("per_joint_rms", {})
+                ),
+                "joint_position_hf_mean_rms_rad": _finite_float(
+                    high_frequency.get("mean_across_joints", math.nan)
+                ),
+                "joint_position_hf_max_rms_rad": _finite_float(
+                    high_frequency.get("max_across_joints", math.nan)
+                ),
+                "joint_position_hf_per_joint_rms_rad": dict(
+                    high_frequency.get("per_joint", {})
+                ),
+                "default_feet_distance_m": _finite_float(
+                    feet_distance.get("default", math.nan)
+                ),
+                "mean_feet_distance_m": _finite_float(
+                    feet_distance.get("mean", math.nan)
+                ),
+                "feet_distance_error_mean_abs_m": _finite_float(
+                    feet_distance.get("error_mean_abs", math.nan)
+                ),
+                "feet_distance_error_rms_m": _finite_float(
+                    feet_distance.get("error_rms", math.nan)
+                ),
+                "feet_distance_error_p95_abs_m": _finite_float(
+                    feet_distance.get("error_p95_abs", math.nan)
+                ),
+                "feet_distance_error_max_abs_m": _finite_float(
+                    feet_distance.get("error_max_abs", math.nan)
+                ),
+                "feet_distance_gaussian_mean": _finite_float(
+                    feet_distance.get("gaussian_mean", math.nan)
+                ),
+                "feet_distance_within_1cm_fraction": _finite_float(
+                    feet_distance.get("within_1cm_fraction", math.nan)
+                ),
+                "feet_distance_within_2cm_fraction": _finite_float(
+                    feet_distance.get("within_2cm_fraction", math.nan)
+                ),
+                "feet_recovery_tested": bool(feet_recovery.get("tested", False)),
+                "feet_perturbation_applied": bool(
+                    feet_recovery.get("perturbation_applied", False)
+                ),
+                "feet_distance_recovered": bool(
+                    feet_recovery.get("distance_recovered", False)
+                ),
+                "feet_initial_distance_m": _finite_float(
+                    feet_recovery.get("actual_initial_distance_m", 0.0)
+                ),
+                "feet_initial_error_m": _finite_float(
+                    feet_recovery.get("initial_error_m", 0.0)
+                ),
+                "feet_final_error_mean_abs_m": _finite_float(
+                    feet_recovery.get("final_error_mean_abs_m", 0.0)
+                ),
+                "feet_final_error_max_abs_m": _finite_float(
+                    feet_recovery.get("final_error_max_abs_m", 0.0)
+                ),
+                "feet_recovery_time_s": feet_recovery.get("recovery_time_s"),
+                "motion_trace_csv_path": str(
+                    motion_quality.get("trace_csv_path", "")
+                ),
+                "large_push_event_count": int(large_push.get("event_count", 0)),
+                "large_push_force_n": _finite_float(
+                    large_push.get("force_n", math.nan)
+                ),
+                "large_push_impulse_n_s": _finite_float(
+                    large_push.get("impulse_n_s", math.nan)
+                ),
+                "large_push_diagnosis": str(
+                    push_diagnostics.get("diagnosis", "")
+                ),
+                "large_push_persistent_joint_vibration": bool(
+                    push_flags.get("persistent_joint_vibration", False)
+                ),
+                "large_push_transient_joint_vibration": bool(
+                    push_flags.get("transient_joint_vibration", False)
+                ),
+                "large_push_policy_action_high_frequency": bool(
+                    push_flags.get("policy_action_high_frequency", False)
+                ),
+                "large_push_transient_policy_action_high_frequency": bool(
+                    push_flags.get(
+                        "transient_policy_action_high_frequency",
+                        False,
+                    )
+                ),
+                "large_push_pd_torque_saturation": bool(
+                    push_flags.get("pd_torque_saturation", False)
+                ),
+                "large_push_position_hf_ratio": _finite_float(
+                    push_ratios.get(
+                        "joint_position_hf_8_25hz_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_action_hf_ratio": _finite_float(
+                    push_ratios.get(
+                        "actor_action_hf_8_25hz_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_action_rate_ratio": _finite_float(
+                    push_ratios.get(
+                        "actor_action_delta_rate_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_torque_hf_ratio": _finite_float(
+                    push_ratios.get(
+                        "pd_torque_hf_8_25hz_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_pre_position_hf_rms_rad": _finite_float(
+                    push_pre.get(
+                        "joint_position_hf_8_25hz_rms_mean_rad",
+                        math.nan,
+                    )
+                ),
+                "large_push_post_position_hf_rms_rad": _finite_float(
+                    push_post.get(
+                        "joint_position_hf_8_25hz_rms_mean_rad",
+                        math.nan,
+                    )
+                ),
+                "large_push_pre_action_hf_rms": _finite_float(
+                    push_pre.get("actor_action_hf_8_25hz_rms_mean", math.nan)
+                ),
+                "large_push_post_action_hf_rms": _finite_float(
+                    push_post.get("actor_action_hf_8_25hz_rms_mean", math.nan)
+                ),
+                "large_push_post_torque_rms_nm": _finite_float(
+                    push_post.get("pd_torque_rms_nm", math.nan)
+                ),
+                "large_push_post_torque_max_abs_nm": _finite_float(
+                    push_post.get("pd_torque_max_abs_nm", math.nan)
+                ),
+                "large_push_post_torque_saturation_fraction": _finite_float(
+                    push_post.get("pd_torque_saturation_fraction", math.nan)
+                ),
+                "large_push_late_position_hf_ratio": _finite_float(
+                    push_late_ratios.get(
+                        "joint_position_hf_8_25hz_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_late_action_hf_ratio": _finite_float(
+                    push_late_ratios.get(
+                        "actor_action_hf_8_25hz_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_late_action_rate_ratio": _finite_float(
+                    push_late_ratios.get(
+                        "actor_action_delta_rate_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_late_torque_hf_ratio": _finite_float(
+                    push_late_ratios.get(
+                        "pd_torque_hf_8_25hz_rms_ratio",
+                        math.nan,
+                    )
+                ),
+                "large_push_late_position_hf_rms_rad": _finite_float(
+                    push_late.get(
+                        "joint_position_hf_8_25hz_rms_mean_rad",
+                        math.nan,
+                    )
+                ),
+                "large_push_late_action_hf_rms": _finite_float(
+                    push_late.get("actor_action_hf_8_25hz_rms_mean", math.nan)
+                ),
+                "large_push_action_rate_settling_time_s": _finite_float(
+                    push_settling.get(
+                        "settling_time_after_push_end_s",
+                        math.nan,
+                    )
+                ),
             }
         )
     if not runs:
@@ -132,6 +374,9 @@ def summarize_profile(profile: str, runs: list[dict[str, Any]]) -> dict[str, Any
         "maximum_abs_roll_rad": _maximum([run["max_abs_roll_rad"] for run in selected]),
         "maximum_abs_pitch_rad": _maximum([run["max_abs_pitch_rad"] for run in selected]),
         "total_wrench_events": sum(run["wrench_event_count"] for run in selected),
+        "total_large_push_events": sum(
+            run["large_push_event_count"] for run in selected
+        ),
         "total_initial_joint_limit_clips": sum(run["joint_limit_clip_count"] for run in selected),
         "pose_recovered_count": sum(int(run["pose_recovered"]) for run in selected),
         "pose_recovered_rate": (
@@ -145,23 +390,186 @@ def summarize_profile(profile: str, runs: list[dict[str, Any]]) -> dict[str, Any
             [run["final_joint_max_abs_error_rad"] for run in selected]
         ),
         "mean_joint_recovery_ratio": _mean([run["joint_recovery_ratio"] for run in selected]),
+        "mean_steady_sample_count": _mean(
+            [float(run["steady_sample_count"]) for run in selected]
+        ),
+        "mean_joint_jerk_rms_rad_s3": _mean(
+            [run["joint_jerk_rms_rad_s3"] for run in selected]
+        ),
+        "mean_joint_jerk_p95_abs_rad_s3": _mean(
+            [run["joint_jerk_p95_abs_rad_s3"] for run in selected]
+        ),
+        "maximum_joint_jerk_abs_rad_s3": _maximum(
+            [run["joint_jerk_max_abs_rad_s3"] for run in selected]
+        ),
+        "mean_joint_jerk_weighted_reward_equivalent": _mean(
+            [run["joint_jerk_weighted_reward_equivalent"] for run in selected]
+        ),
+        "mean_joint_position_hf_rms_rad": _mean(
+            [run["joint_position_hf_mean_rms_rad"] for run in selected]
+        ),
+        "maximum_joint_position_hf_rms_rad": _maximum(
+            [run["joint_position_hf_max_rms_rad"] for run in selected]
+        ),
+        "mean_default_feet_distance_m": _mean(
+            [run["default_feet_distance_m"] for run in selected]
+        ),
+        "mean_feet_distance_m": _mean(
+            [run["mean_feet_distance_m"] for run in selected]
+        ),
+        "mean_feet_distance_error_mean_abs_m": _mean(
+            [run["feet_distance_error_mean_abs_m"] for run in selected]
+        ),
+        "mean_feet_distance_error_rms_m": _mean(
+            [run["feet_distance_error_rms_m"] for run in selected]
+        ),
+        "mean_feet_distance_error_p95_abs_m": _mean(
+            [run["feet_distance_error_p95_abs_m"] for run in selected]
+        ),
+        "maximum_feet_distance_error_abs_m": _maximum(
+            [run["feet_distance_error_max_abs_m"] for run in selected]
+        ),
+        "mean_feet_distance_gaussian": _mean(
+            [run["feet_distance_gaussian_mean"] for run in selected]
+        ),
+        "mean_feet_distance_within_1cm_fraction": _mean(
+            [run["feet_distance_within_1cm_fraction"] for run in selected]
+        ),
+        "mean_feet_distance_within_2cm_fraction": _mean(
+            [run["feet_distance_within_2cm_fraction"] for run in selected]
+        ),
+        "feet_recovery_tested_count": sum(
+            int(run["feet_recovery_tested"]) for run in selected
+        ),
+        "feet_perturbation_applied_count": sum(
+            int(run["feet_perturbation_applied"]) for run in selected
+        ),
+        "feet_distance_recovered_count": sum(
+            int(run["feet_distance_recovered"]) for run in selected
+        ),
+        "feet_distance_recovered_rate": (
+            sum(int(run["feet_distance_recovered"]) for run in selected) / len(selected)
+            if selected
+            else 0.0
+        ),
+        "mean_feet_initial_distance_m": _mean(
+            [run["feet_initial_distance_m"] for run in selected]
+        ),
+        "mean_feet_initial_error_abs_m": _mean(
+            [abs(run["feet_initial_error_m"]) for run in selected]
+        ),
+        "mean_feet_final_error_abs_m": _mean(
+            [run["feet_final_error_mean_abs_m"] for run in selected]
+        ),
+        "maximum_feet_final_error_abs_m": _maximum(
+            [run["feet_final_error_max_abs_m"] for run in selected]
+        ),
+        "persistent_joint_vibration_count": sum(
+            int(run["large_push_persistent_joint_vibration"]) for run in selected
+        ),
+        "transient_joint_vibration_count": sum(
+            int(run["large_push_transient_joint_vibration"]) for run in selected
+        ),
+        "policy_action_high_frequency_count": sum(
+            int(run["large_push_policy_action_high_frequency"]) for run in selected
+        ),
+        "transient_policy_action_high_frequency_count": sum(
+            int(run["large_push_transient_policy_action_high_frequency"])
+            for run in selected
+        ),
+        "pd_torque_saturation_count": sum(
+            int(run["large_push_pd_torque_saturation"]) for run in selected
+        ),
+        "mean_large_push_position_hf_ratio": _mean(
+            [run["large_push_position_hf_ratio"] for run in selected]
+        ),
+        "mean_large_push_action_hf_ratio": _mean(
+            [run["large_push_action_hf_ratio"] for run in selected]
+        ),
+        "mean_large_push_action_rate_ratio": _mean(
+            [run["large_push_action_rate_ratio"] for run in selected]
+        ),
+        "mean_large_push_torque_hf_ratio": _mean(
+            [run["large_push_torque_hf_ratio"] for run in selected]
+        ),
+        "mean_large_push_post_torque_rms_nm": _mean(
+            [run["large_push_post_torque_rms_nm"] for run in selected]
+        ),
+        "maximum_large_push_post_torque_abs_nm": _maximum(
+            [run["large_push_post_torque_max_abs_nm"] for run in selected]
+        ),
+        "mean_large_push_post_torque_saturation_fraction": _mean(
+            [run["large_push_post_torque_saturation_fraction"] for run in selected]
+        ),
+        "mean_large_push_late_position_hf_ratio": _mean(
+            [run["large_push_late_position_hf_ratio"] for run in selected]
+        ),
+        "mean_large_push_late_action_hf_ratio": _mean(
+            [run["large_push_late_action_hf_ratio"] for run in selected]
+        ),
+        "mean_large_push_late_action_rate_ratio": _mean(
+            [run["large_push_late_action_rate_ratio"] for run in selected]
+        ),
+        "mean_large_push_late_torque_hf_ratio": _mean(
+            [run["large_push_late_torque_hf_ratio"] for run in selected]
+        ),
+        "mean_large_push_action_rate_settling_time_s": _mean(
+            [run["large_push_action_rate_settling_time_s"] for run in selected]
+        ),
     }
 
 
-def build_summary(results_root: Path) -> dict[str, Any]:
+def build_summary(
+    results_root: Path,
+    *,
+    model_label: str = "",
+    checkpoint: str | None = None,
+    policy: str | None = None,
+) -> dict[str, Any]:
     runs = load_runs(results_root)
     profiles = [summarize_profile(profile, runs) for profile in PROFILE_ORDER if any(run["profile"] == profile for run in runs)]
     profile_map = {profile["profile"]: profile for profile in profiles}
     profile_names = set(profile_map)
     pose_only = profile_names == {"pose_recovery"}
+    feet_only = profile_names == {"feet_distance_recovery"}
+    push_only = profile_names == {"large_push"}
     mandatory_profiles = ("nominal", "recovery", "robust")
-    required_present = pose_only or all(name in profile_map for name in mandatory_profiles)
+    required_present = (
+        pose_only
+        or feet_only
+        or push_only
+        or all(name in profile_map for name in mandatory_profiles)
+    )
     if pose_only:
         acceptance_pass = bool(
             profile_map["pose_recovery"]["healthy_rate"] == 1.0
             and profile_map["pose_recovery"]["pose_recovered_rate"] >= 0.8
             and profile_map["pose_recovery"]["all_zero_command"]
             and profile_map["pose_recovery"]["all_actor_outputs_unmodified"]
+        )
+    elif feet_only:
+        acceptance_pass = bool(
+            profile_map["feet_distance_recovery"]["healthy_rate"] == 1.0
+            and profile_map["feet_distance_recovery"][
+                "feet_perturbation_applied_count"
+            ]
+            == profile_map["feet_distance_recovery"]["run_count"]
+            and profile_map["feet_distance_recovery"][
+                "feet_distance_recovered_rate"
+            ]
+            >= 0.8
+            and profile_map["feet_distance_recovery"]["all_zero_command"]
+            and profile_map["feet_distance_recovery"][
+                "all_actor_outputs_unmodified"
+            ]
+        )
+    elif push_only:
+        acceptance_pass = bool(
+            profile_map["large_push"]["healthy_rate"] == 1.0
+            and profile_map["large_push"]["total_large_push_events"]
+            == profile_map["large_push"]["run_count"]
+            and profile_map["large_push"]["all_zero_command"]
+            and profile_map["large_push"]["all_actor_outputs_unmodified"]
         )
     else:
         acceptance_pass = bool(
@@ -178,10 +586,29 @@ def build_summary(results_root: Path) -> dict[str, Any]:
                     and profile_map["pose_recovery"]["pose_recovered_rate"] >= 2.0 / 3.0
                 )
             )
+            and (
+                "feet_distance_recovery" not in profile_map
+                or (
+                    profile_map["feet_distance_recovery"]["healthy_rate"] == 1.0
+                    and profile_map["feet_distance_recovery"][
+                        "feet_perturbation_applied_count"
+                    ]
+                    == profile_map["feet_distance_recovery"]["run_count"]
+                    and profile_map["feet_distance_recovery"][
+                        "feet_distance_recovered_rate"
+                    ]
+                    >= 2.0 / 3.0
+                )
+            )
         )
     return {
         "schema_version": 1,
         "results_root": str(results_root.resolve()),
+        "model": {
+            "label": model_label,
+            "checkpoint": _file_metadata(checkpoint),
+            "policy": _file_metadata(policy),
+        },
         "run_count": len(runs),
         "profiles": profiles,
         "runs": runs,
@@ -196,25 +623,49 @@ def build_summary(results_root: Path) -> dict[str, Any]:
                 "action_override_must_be_false": True,
                 "stress_profile_is_informational": True,
                 "pose_recovery_min_rate": 0.8 if pose_only else 2.0 / 3.0,
+                "feet_distance_recovery_min_rate": (
+                    0.8 if feet_only else 2.0 / 3.0
+                ),
             },
         },
     }
 
 
 def render_markdown(summary: dict[str, Any]) -> str:
-    pose_only = {profile["profile"] for profile in summary["profiles"]} == {
-        "pose_recovery"
-    }
+    profile_names = {profile["profile"] for profile in summary["profiles"]}
+    pose_only = profile_names == {"pose_recovery"}
+    feet_only = profile_names == {"feet_distance_recovery"}
+    push_only = profile_names == {"large_push"}
+    model = summary.get("model", {})
+    checkpoint = model.get("checkpoint", {})
+    policy = model.get("policy", {})
     lines = [
         "# G1 Extreme Stand Recovery MuJoCo 全面测试报告",
         "",
+        f"- 模型：`{model.get('label', '') or '未指定'}`",
+        (
+            f"- Checkpoint：`{checkpoint.get('path', '')}`"
+            f"（SHA-256 `{checkpoint.get('sha256', '')}`）"
+        ),
+        (
+            f"- 推理模型：`{policy.get('path', '')}`"
+            f"（SHA-256 `{policy.get('sha256', '')}`）"
+        ),
         f"- 测试目录：`{summary['results_root']}`",
         f"- 总运行数：{summary['run_count']}",
         f"- 基础验收：{'通过' if summary['acceptance']['pass'] else '未通过'}",
         (
             "- 本报告只验收随机关节初始姿态能否恢复到严格默认全身姿态。"
             if pose_only
-            else "- `stress` 是超训练分布压力测试，不计入基础验收。"
+            else (
+                "- 本报告只验收随机双脚初始间距能否恢复到资产默认距离。"
+                if feet_only
+                else (
+                    "- 本报告对固定躯干大推力后的长期抖动进行诊断；通过仅表示测试链路完整且未摔倒，不代表没有抖动。"
+                    if push_only
+                    else "- `stress` 和 `large_push` 是诊断场景，不计入基础验收。"
+                )
+            )
         ),
         "",
         "## 分场景汇总",
@@ -246,6 +697,138 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 f"{pose['mean_initial_joint_mae_rad']:.4f} | {pose['mean_final_joint_mae_rad']:.4f} | "
                 f"{pose['mean_final_joint_max_abs_error_rad']:.4f} | {pose['mean_joint_recovery_ratio']:.1%} |",
             ]
+        )
+    feet_profiles = [
+        profile
+        for profile in summary["profiles"]
+        if profile["profile"] == "feet_distance_recovery"
+    ]
+    if feet_profiles:
+        feet_profile = feet_profiles[0]
+        lines.extend(
+            [
+                "",
+                "## 随机双脚间距恢复汇总",
+                "",
+                "| 有效间距扰动 | 恢复成功 | 默认/初始足距 m | 初始偏差 cm | 最终 MAE/最大误差 cm |",
+                "| ---: | ---: | --- | ---: | --- |",
+                f"| {feet_profile['feet_perturbation_applied_count']}/{feet_profile['run_count']} | "
+                f"{feet_profile['feet_distance_recovered_count']}/{feet_profile['run_count']} | "
+                f"{feet_profile['mean_default_feet_distance_m']:.4f}/"
+                f"{feet_profile['mean_feet_initial_distance_m']:.4f} | "
+                f"{100.0 * feet_profile['mean_feet_initial_error_abs_m']:.2f} | "
+                f"{100.0 * feet_profile['mean_feet_final_error_abs_m']:.2f}/"
+                f"{100.0 * feet_profile['maximum_feet_final_error_abs_m']:.2f} |",
+            ]
+        )
+    push_profiles = [
+        profile
+        for profile in summary["profiles"]
+        if profile["profile"] == "large_push"
+    ]
+    if push_profiles:
+        push = push_profiles[0]
+        lines.extend(
+            [
+                "",
+                "## 躯干大推力后持续抖动诊断",
+                "",
+                "这里分别比较推力前 2 秒、推力结束并等待 `POST_PUSH_SETTLE_S` 后的恢复窗口，"
+                "以及测试最终 5 秒的长期稳态窗口。位置、策略 action 和 PD 力矩均统计 8–25 Hz；"
+                "力矩饱和按控制上限的 98% 判定。",
+                "",
+                "| 大推力事件 | 恢复段振动/Action 高频 | 最终稳态振动/Action 高频 | PD 力矩饱和 | 恢复段位置/Action/Action-rate/力矩比 | 最终稳态对应比 | Action-rate 稳定时间 s |",
+                "| ---: | --- | --- | ---: | --- | --- | ---: |",
+                f"| {push['total_large_push_events']} | "
+                f"{push['transient_joint_vibration_count']}/{push['run_count']} / "
+                f"{push['transient_policy_action_high_frequency_count']}/{push['run_count']} | "
+                f"{push['persistent_joint_vibration_count']}/{push['run_count']} / "
+                f"{push['policy_action_high_frequency_count']}/{push['run_count']} | "
+                f"{push['pd_torque_saturation_count']}/{push['run_count']} | "
+                f"{push['mean_large_push_position_hf_ratio']:.2f}/"
+                f"{push['mean_large_push_action_hf_ratio']:.2f}/"
+                f"{push['mean_large_push_action_rate_ratio']:.2f}/"
+                f"{push['mean_large_push_torque_hf_ratio']:.2f} | "
+                f"{push['mean_large_push_late_position_hf_ratio']:.2f}/"
+                f"{push['mean_large_push_late_action_hf_ratio']:.2f}/"
+                f"{push['mean_large_push_late_action_rate_ratio']:.2f}/"
+                f"{push['mean_large_push_late_torque_hf_ratio']:.2f} | "
+                f"{push['mean_large_push_action_rate_settling_time_s']:.2f} |",
+                "",
+                "### 单次诊断",
+                "",
+                "| seed | 诊断 | 恢复段振动/Action 高频 | 最终稳态振动/Action 高频 | 力矩饱和 | 位置 HF 前→恢复→最终 rad | Action HF 前→恢复→最终 | Action-rate 稳定 s |",
+                "| ---: | --- | --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for run in summary["runs"]:
+            if run["profile"] != "large_push":
+                continue
+            lines.append(
+                f"| {run['seed']} | `{run['large_push_diagnosis']}` | "
+                f"{'是' if run['large_push_transient_joint_vibration'] else '否'}/"
+                f"{'是' if run['large_push_transient_policy_action_high_frequency'] else '否'} | "
+                f"{'是' if run['large_push_persistent_joint_vibration'] else '否'}/"
+                f"{'是' if run['large_push_policy_action_high_frequency'] else '否'} | "
+                f"{'是' if run['large_push_pd_torque_saturation'] else '否'} | "
+                f"{run['large_push_pre_position_hf_rms_rad']:.6f}→"
+                f"{run['large_push_post_position_hf_rms_rad']:.6f}→"
+                f"{run['large_push_late_position_hf_rms_rad']:.6f} | "
+                f"{run['large_push_pre_action_hf_rms']:.6f}→"
+                f"{run['large_push_post_action_hf_rms']:.6f}→"
+                f"{run['large_push_late_action_hf_rms']:.6f} | "
+                f"{run['large_push_action_rate_settling_time_s']:.2f} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## 长期 jerk 与双脚距离",
+            "",
+            "以下指标按 50 Hz 控制步计算，并剔除 `STEADY_START_S` 指定的恢复段（长期测试默认前 10 秒）。"
+            "`jerk RMS` 来自关节速度二阶差分；`20–25 Hz` 是关节位置高频频带 RMS，"
+            "用于发现长期两帧振荡。双脚距离以资产默认姿态的左右足 body 平面距离为目标，"
+            "不是越近或越远越好。",
+            "",
+            "| 场景 | 稳态样本/次 | jerk RMS rad/s³ | jerk P95 rad/s³ | jerk 加权等价奖励 | 20–25 Hz 位置 RMS 平均/最大 rad | 默认/实际足距 m | 足距 MAE/RMS/P95/最大 cm | ±1 cm | 足距高斯均值 |",
+            "| --- | ---: | ---: | ---: | ---: | --- | --- | --- | ---: | ---: |",
+        ]
+    )
+    for profile in summary["profiles"]:
+        lines.append(
+            "| {profile} | {mean_steady_sample_count:.0f} | "
+            "{mean_joint_jerk_rms_rad_s3:.2f} | {mean_joint_jerk_p95_abs_rad_s3:.2f} | "
+            "{mean_joint_jerk_weighted_reward_equivalent:.4f} | "
+            "{mean_joint_position_hf_rms_rad:.6f}/{maximum_joint_position_hf_rms_rad:.6f} | "
+            "{mean_default_feet_distance_m:.4f}/{mean_feet_distance_m:.4f} | "
+            "{mae:.3f}/{rms:.3f}/{p95:.3f}/{maximum:.3f} | "
+            "{within:.1%} | {mean_feet_distance_gaussian:.4f} |".format(
+                **profile,
+                mae=100.0 * profile["mean_feet_distance_error_mean_abs_m"],
+                rms=100.0 * profile["mean_feet_distance_error_rms_m"],
+                p95=100.0 * profile["mean_feet_distance_error_p95_abs_m"],
+                maximum=100.0 * profile["maximum_feet_distance_error_abs_m"],
+                within=profile["mean_feet_distance_within_1cm_fraction"],
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "### 单次长期指标",
+            "",
+            "| 场景 | seed | jerk RMS | jerk P95 | jerk 最大值 | 20–25 Hz 平均/最大 | 足距 RMS/P95/最大 cm | ±1 cm / ±2 cm |",
+            "| --- | ---: | ---: | ---: | ---: | --- | --- | --- |",
+        ]
+    )
+    for run in summary["runs"]:
+        lines.append(
+            f"| {run['profile']} | {run['seed']} | {run['joint_jerk_rms_rad_s3']:.2f} | "
+            f"{run['joint_jerk_p95_abs_rad_s3']:.2f} | {run['joint_jerk_max_abs_rad_s3']:.2f} | "
+            f"{run['joint_position_hf_mean_rms_rad']:.6f}/{run['joint_position_hf_max_rms_rad']:.6f} | "
+            f"{100.0 * run['feet_distance_error_rms_m']:.3f}/"
+            f"{100.0 * run['feet_distance_error_p95_abs_m']:.3f}/"
+            f"{100.0 * run['feet_distance_error_max_abs_m']:.3f} | "
+            f"{run['feet_distance_within_1cm_fraction']:.1%}/"
+            f"{run['feet_distance_within_2cm_fraction']:.1%} |"
         )
     lines.extend(
         [
@@ -311,12 +894,76 @@ def render_markdown(summary: dict[str, Any]) -> str:
         )
         for joint_name, mean_error, max_error in worst_joints:
             lines.append(f"| `{joint_name}` | {mean_error:.4f} | {max_error:.4f} |")
+    feet_runs = [
+        run
+        for run in summary["runs"]
+        if run["profile"] == "feet_distance_recovery"
+    ]
+    if feet_runs:
+        lines.extend(
+            [
+                "",
+                "## 随机双脚间距恢复单次结果",
+                "",
+                "| seed | 存活 | 有效扰动 | 恢复默认距离 | 默认/初始足距 m | 初始偏差 cm | 最终 MAE/最大误差 cm | 首次持续进入 ±2 cm s |",
+                "| ---: | --- | --- | --- | --- | ---: | --- | ---: |",
+            ]
+        )
+        for run in feet_runs:
+            recovery_time = (
+                "-"
+                if run["feet_recovery_time_s"] is None
+                else f"{float(run['feet_recovery_time_s']):.3f}"
+            )
+            lines.append(
+                f"| {run['seed']} | {'是' if run['healthy'] else '否'} | "
+                f"{'是' if run['feet_perturbation_applied'] else '否'} | "
+                f"{'是' if run['feet_distance_recovered'] else '否'} | "
+                f"{run['default_feet_distance_m']:.4f}/{run['feet_initial_distance_m']:.4f} | "
+                f"{100.0 * abs(run['feet_initial_error_m']):.2f} | "
+                f"{100.0 * run['feet_final_error_mean_abs_m']:.2f}/"
+                f"{100.0 * run['feet_final_error_max_abs_m']:.2f} | "
+                f"{recovery_time} |"
+            )
+    jerk_by_joint: dict[str, list[float]] = {}
+    hf_by_joint: dict[str, list[float]] = {}
+    for run in summary["runs"]:
+        for joint_name, value in run["joint_jerk_per_joint_rms_rad_s3"].items():
+            if math.isfinite(float(value)):
+                jerk_by_joint.setdefault(joint_name, []).append(float(value))
+        for joint_name, value in run["joint_position_hf_per_joint_rms_rad"].items():
+            if math.isfinite(float(value)):
+                hf_by_joint.setdefault(joint_name, []).append(float(value))
+    highest_jerk_joints = sorted(
+        (
+            (
+                joint_name,
+                statistics.fmean(values),
+                statistics.fmean(hf_by_joint.get(joint_name, [math.nan])),
+            )
+            for joint_name, values in jerk_by_joint.items()
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:10]
+    if highest_jerk_joints:
+        lines.extend(
+            [
+                "",
+                "## 平均 jerk 最大的关节",
+                "",
+                "| 关节 | jerk RMS rad/s³ | 20–25 Hz 位置 RMS rad |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for joint_name, jerk_rms, hf_rms in highest_jerk_joints:
+            lines.append(f"| `{joint_name}` | {jerk_rms:.2f} | {hf_rms:.6f} |")
     lines.extend(
         [
             "",
             "## 合同检查",
             "",
-            "基础验收要求 nominal/recovery 全部健康、robust 至少 2/3 健康，所有基础场景速度指令必须恒为零，且 `action_override=false`。随机姿态恢复还要求最终全身关节 MAE 和任一关节最大误差同时进入配置阈值；压力测试结果只描述超训练分布余量，不代表真机允许施加同等扰动。",
+            "基础验收要求 nominal/recovery 全部健康、robust 至少 2/3 健康，所有基础场景速度指令必须恒为零，且 `action_override=false`。随机姿态恢复还要求最终全身关节 MAE 和任一关节最大误差同时进入配置阈值；随机双脚间距场景要求确实施加至少 5 cm 初始偏差，并在最终窗口持续恢复到默认距离 ±2 cm；压力测试结果只描述超训练分布余量，不代表真机允许施加同等扰动。",
             "",
         ]
     )
@@ -328,10 +975,18 @@ def main() -> None:
     parser.add_argument("--results-root", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-markdown", type=Path, required=True)
+    parser.add_argument("--model-label", default="")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--policy")
     parser.add_argument("--require-pass", action="store_true")
     args = parser.parse_args()
 
-    summary = build_summary(args.results_root)
+    summary = build_summary(
+        args.results_root,
+        model_label=args.model_label,
+        checkpoint=args.checkpoint,
+        policy=args.policy,
+    )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_markdown.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8")

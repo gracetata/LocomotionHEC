@@ -81,6 +81,16 @@ class PPOAMP(PPO):
         self.baseline_kl_cfg = baseline_kl_cfg or {}
         self.baseline_kl_scale = float(self.baseline_kl_cfg.get("scale", 0.0))
         self.baseline_kl_min_std = float(self.baseline_kl_cfg.get("min_std", 1.0e-4))
+        self.baseline_kl_mean_only = bool(self.baseline_kl_cfg.get("mean_only", False))
+        self.baseline_kl_target = float(self.baseline_kl_cfg.get("target", 0.0))
+        self.baseline_kl_min_scale = float(self.baseline_kl_cfg.get("min_scale", 0.0))
+        self.baseline_kl_max_scale = float(self.baseline_kl_cfg.get("max_scale", 1.0))
+        self.baseline_kl_adaptation_rate = float(self.baseline_kl_cfg.get("adaptation_rate", 1.5))
+        self.baseline_kl_hard_limit = float(self.baseline_kl_cfg.get("hard_limit", 0.0))
+        if self.baseline_kl_adaptation_rate <= 1.0:
+            raise ValueError("baseline KL adaptation_rate must be greater than one.")
+        if self.baseline_kl_max_scale < self.baseline_kl_min_scale:
+            raise ValueError("baseline KL scale bounds are invalid.")
         self.baseline_policy = None
         if bool(self.baseline_kl_cfg.get("enabled", False)) and self.baseline_kl_scale > 0.0:
             if self.policy.is_recurrent:
@@ -121,6 +131,7 @@ class PPOAMP(PPO):
             device=device,
             **self.amp_cfg.get("amp_discriminator", {})
         ).to(self.device)
+        self.freeze_amp_discriminator = bool(self.amp_cfg.get("freeze_discriminator", False))
         
         # optimizer for policy and discriminator
         params = [
@@ -141,12 +152,17 @@ class PPOAMP(PPO):
             lr=self.amp_cfg["disc_learning_rate"],
         )
         self.disc_max_grad_norm = self.amp_cfg.get("disc_max_grad_norm", 0.5)
+        if self.freeze_amp_discriminator:
+            for parameter in self.amp_discriminator.parameters():
+                parameter.requires_grad_(False)
         
         # Storage for AMP discriminator observations
         self.disc_obs_buffer: CircularBuffer = disc_obs_buffer
         self.disc_demo_obs_buffer: CircularBuffer = disc_demo_obs_buffer
 
     def _update_amp_normalizer(self, disc_obs_batch: torch.Tensor, disc_demo_obs_batch: torch.Tensor) -> None:
+        if self.freeze_amp_discriminator:
+            return
         if self.disc_normalizer_mode == "policy":
             self.amp_discriminator.update_normalization(disc_obs_batch)
         elif self.disc_normalizer_mode == "policy_demo":
@@ -318,15 +334,22 @@ class PPOAMP(PPO):
                 with torch.no_grad():
                     self.baseline_policy.act(baseline_obs_batch)
                     baseline_mu_batch = self.baseline_policy.action_mean.detach()
-                    baseline_sigma_batch = self.baseline_policy.action_std.detach().clamp_min(self.baseline_kl_min_std)
-                current_sigma_batch = sigma_batch.clamp_min(self.baseline_kl_min_std)
-                baseline_kl_loss = torch.sum(
-                    torch.log(baseline_sigma_batch / current_sigma_batch)
-                    + (torch.square(current_sigma_batch) + torch.square(mu_batch - baseline_mu_batch))
-                    / (2.0 * torch.square(baseline_sigma_batch))
-                    - 0.5,
-                    dim=-1,
-                ).mean()
+                baseline_sigma_batch = self.baseline_policy.action_std.detach().clamp_min(self.baseline_kl_min_std)
+                if self.baseline_kl_mean_only:
+                    baseline_kl_loss = torch.sum(
+                        torch.square(mu_batch - baseline_mu_batch)
+                        / (2.0 * torch.square(baseline_sigma_batch)),
+                        dim=-1,
+                    ).mean()
+                else:
+                    current_sigma_batch = sigma_batch.clamp_min(self.baseline_kl_min_std)
+                    baseline_kl_loss = torch.sum(
+                        torch.log(baseline_sigma_batch / current_sigma_batch)
+                        + (torch.square(current_sigma_batch) + torch.square(mu_batch - baseline_mu_batch))
+                        / (2.0 * torch.square(baseline_sigma_batch))
+                        - 0.5,
+                        dim=-1,
+                    ).mean()
                 loss = loss + self.baseline_kl_scale * baseline_kl_loss
             else:
                 baseline_kl_loss = torch.zeros((), device=self.device)
@@ -410,10 +433,13 @@ class PPOAMP(PPO):
             else: 
                 raise ValueError(f"Unknown AMP loss type: {self.loss_type}. Should be 'GAN', 'LSGAN', or 'WGAN'")
 
-            disc_grad_penalty = self.amp_discriminator.compute_grad_penalty(
-                demo_data=disc_demo_obs_batch_normed.reshape(mini_batch_size, -1),
-                scale=self.amp_cfg["grad_penalty_scale"]
-            )
+            if self.freeze_amp_discriminator:
+                disc_grad_penalty = torch.zeros((), device=self.device)
+            else:
+                disc_grad_penalty = self.amp_discriminator.compute_grad_penalty(
+                    demo_data=disc_demo_obs_batch_normed.reshape(mini_batch_size, -1),
+                    scale=self.amp_cfg["grad_penalty_scale"]
+                )
             disc_total_loss = disc_loss + disc_grad_penalty
 
             # Compute the gradients for PPO
@@ -424,8 +450,9 @@ class PPOAMP(PPO):
                 self.rnd_optimizer.zero_grad()
                 rnd_loss.backward()
             # Compute the gradients for AMP discriminator
-            self.disc_optimizer.zero_grad()
-            disc_total_loss.backward()
+            if not self.freeze_amp_discriminator:
+                self.disc_optimizer.zero_grad()
+                disc_total_loss.backward()
 
             # Collect gradients from all GPUs
             if self.is_multi_gpu:
@@ -438,7 +465,8 @@ class PPOAMP(PPO):
             if self.rnd_optimizer:
                 self.rnd_optimizer.step()
             # Apply the gradients for AMP discriminator
-            self.disc_optimizer.step()
+            if not self.freeze_amp_discriminator:
+                self.disc_optimizer.step()
             # Update the AMP normalizer
             self._update_amp_normalizer(disc_obs_batch, disc_demo_obs_batch)
 
@@ -474,6 +502,29 @@ class PPOAMP(PPO):
         mean_disc_demo_score /= num_updates
         mean_baseline_kl /= num_updates
 
+        if (
+            self.baseline_policy is not None
+            and self.baseline_kl_hard_limit > 0.0
+            and mean_baseline_kl > self.baseline_kl_hard_limit
+        ):
+            raise RuntimeError(
+                "Baseline-policy KL safety limit exceeded: "
+                f"{mean_baseline_kl:.6f} > {self.baseline_kl_hard_limit:.6f}. "
+                "Refusing to continue a degrading refinement run."
+            )
+
+        if self.baseline_policy is not None and self.baseline_kl_target > 0.0:
+            if mean_baseline_kl > self.baseline_kl_target * 1.5:
+                self.baseline_kl_scale = min(
+                    self.baseline_kl_scale * self.baseline_kl_adaptation_rate,
+                    self.baseline_kl_max_scale,
+                )
+            elif mean_baseline_kl < self.baseline_kl_target / 1.5:
+                self.baseline_kl_scale = max(
+                    self.baseline_kl_scale / self.baseline_kl_adaptation_rate,
+                    self.baseline_kl_min_scale,
+                )
+
         # Clear the storage
         self.storage.clear()
 
@@ -489,6 +540,7 @@ class PPOAMP(PPO):
             loss_dict["symmetry"] = mean_symmetry_loss
         if self.baseline_policy is not None:
             loss_dict["baseline_kl"] = mean_baseline_kl
+            loss_dict["baseline_kl_scale"] = self.baseline_kl_scale
         loss_dict["amp/disc_loss"] = mean_disc_loss
         loss_dict["amp/disc_grad_penalty"] = mean_disc_grad_penalty
         loss_dict["amp/disc_score"] = mean_disc_score

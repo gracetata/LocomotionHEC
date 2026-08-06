@@ -1,4 +1,4 @@
-"""Hybrid Nav2-window and mode-balanced velocity commands for Walk ArmHack.
+"""Hybrid Nav2-window and mode-balanced velocity commands for G1 locomotion.
 
 The policy-facing command remains ``[vx, vy, wz]``. The source selector and
 mode id are deliberately internal, so the policy receives neither a future command
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 class HybridNav2ModeVelocityCommand(Nav2RecordedVelocityCommand):
-    """Sample each command window from Nav2 data or an eight-mode envelope."""
+    """Sample each command window from Nav2 data or a named-mode envelope."""
 
     cfg: HybridNav2ModeVelocityCommandCfg
 

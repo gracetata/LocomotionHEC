@@ -293,3 +293,61 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1RslRlOnPolicyRunnerAmpCfg",
     },
 )
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-Nav2BehaviorFinetune-v0",
+    entry_point="legged_lab.envs:ManagerBasedAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_amp_env_cfg:G1AmpNav2BehaviorFinetuneEnvCfg",
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1Nav2BehaviorFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-Nav2BehaviorFinetune-Play-v0",
+    entry_point="legged_lab.envs:ManagerBasedAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_amp_env_cfg:G1AmpNav2BehaviorFinetuneEnvCfg_PLAY"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1Nav2BehaviorFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalFinetune-v0",
+    entry_point="legged_lab.envs:ManagerBasedAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_amp_env_cfg:G1AmpNav2TwoGoalFinetuneEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalFinetune-Play-v0",
+    entry_point="legged_lab.envs:ManagerBasedAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_amp_env_cfg:G1AmpNav2TwoGoalFinetuneEnvCfg_PLAY"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Export and verify the final Pose V2 96-observation -> 29-action Extreme Stand actor.
+# Export and verify the latest Smooth-Torque V4 96-observation -> 29-action actor.
 
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 LEGGED_LAB_DIR="${ROOT_DIR}/legged_lab"
 
-DEFAULT_CHECKPOINT="${LEGGED_LAB_DIR}/ExtremeStandRecovery Checkpoints/2026-07-20_12-30-10_g1_extreme_stand_recovery_pose_v2_from_model4999_full_20260720/model_2999.pt"
-EXPECTED_CHECKPOINT_SHA256=${EXPECTED_CHECKPOINT_SHA256:-ce7017ff810c5f24c533c1fac3b3fe8e539c712df8e64463076e557fb2df6264}
+DEFAULT_CHECKPOINT="${LEGGED_LAB_DIR}/ExtremeStandRecovery Checkpoints/2026-07-31_16-52-27_g1_extreme_stand_recovery_smooth_torque_v4_from_v3_model2999_full_20260731/model_2999.pt"
+EXPECTED_CHECKPOINT_SHA256=${EXPECTED_CHECKPOINT_SHA256:-e0addb8ce23153498d4f805c75f4e3ba19568198f890ffc980160fea7c3b7fff}
 VERIFY_CHECKPOINT_SHA256=${VERIFY_CHECKPOINT_SHA256:-True}
 ISAACLAB_PYTHON=${ISAACLAB_PYTHON:-"${HOME}/anaconda3/envs/env_isaaclab/bin/python"}
 CHECKPOINT=${CHECKPOINT:-${DEFAULT_CHECKPOINT}}

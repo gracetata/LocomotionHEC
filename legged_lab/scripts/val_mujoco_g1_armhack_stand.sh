@@ -65,6 +65,8 @@ INTERACTIVE_AUTO_ENTER_S=${INTERACTIVE_AUTO_ENTER_S:--1.0}
 INTERACTIVE_AUTO_SPACE_INTERVAL_S=${INTERACTIVE_AUTO_SPACE_INTERVAL_S:--1.0}
 INTERACTIVE_AUTO_SPACE_MAX_SWITCHES=${INTERACTIVE_AUTO_SPACE_MAX_SWITCHES:-0}
 INTERACTIVE_TRANSITION_S=${INTERACTIVE_TRANSITION_S:-7.5}
+ANKLE_DIAGNOSTICS=${ANKLE_DIAGNOSTICS:-True}
+ANKLE_PRINT_HZ=${ANKLE_PRINT_HZ:-1.0}
 
 bool_true() {
     case "${1:-}" in
@@ -92,6 +94,10 @@ if ! "${UNITREE_PYTHON}" -c 'import mujoco, torch, yaml, numpy, matplotlib' >/de
 fi
 if ! awk -v value="${PAYLOAD_KG}" 'BEGIN { exit !(value >= 0.0 && value <= 3.0) }'; then
     echo "Error: PAYLOAD_KG must be within [0, 3] kg per wrist." >&2
+    exit 1
+fi
+if ! awk -v value="${ANKLE_PRINT_HZ}" 'BEGIN { exit !(value >= 0.0) }'; then
+    echo "Error: ANKLE_PRINT_HZ must be >= 0 Hz." >&2
     exit 1
 fi
 
@@ -314,6 +320,7 @@ fi
 echo "Model SHA   : ${CHECKPOINT_SHA256}"
 echo "Policy      : ${POLICY_PATH}"
 echo "Payload     : ${PAYLOAD_KG} kg per wrist-yaw link"
+echo "Ankle diag  : ${ANKLE_DIAGNOSTICS}; terminal print=${ANKLE_PRINT_HZ} Hz; CSV/PNG after exit"
 echo "GLFW/RT     : ${USE_GLFW}/${REAL_TIME}"
 if [[ "${MODE}" == "interactive" ]]; then
     echo "Keys        : ENTER=policy/debug, SPACE=next arm pose after initialization, Q=stop"
@@ -336,6 +343,8 @@ export G1_AMP_ARMHACK_STAND_INTERACTIVE_TRANSITION_S="${INTERACTIVE_TRANSITION_S
 export G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_ENTER_S="${INTERACTIVE_AUTO_ENTER_S}"
 export G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_SPACE_INTERVAL_S="${INTERACTIVE_AUTO_SPACE_INTERVAL_S}"
 export G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_SPACE_MAX_SWITCHES="${INTERACTIVE_AUTO_SPACE_MAX_SWITCHES}"
+export G1_AMP_ARMHACK_STAND_ANKLE_DIAGNOSTICS_ENABLE="${ANKLE_DIAGNOSTICS}"
+export G1_AMP_ARMHACK_STAND_ANKLE_PRINT_HZ="${ANKLE_PRINT_HZ}"
 
 UNITREE_PYTHON="${UNITREE_PYTHON}" \
 OMP_NUM_THREADS="${MUJOCO_CPU_THREADS}" \

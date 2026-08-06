@@ -34,7 +34,7 @@
 #   TASK_TRACE_MAX_POINTS: Max recent GLFW task trajectory marker spheres (default: 300).
 #   CMD_INIT            : Three command values as YAML-like list string, e.g. '[0.5, 0.0, 0.0]'.
 #   RANDOM_COMMANDS     : True samples joystick-like commands during rollout (default: False).
-#   COMMAND_MODE        : independent, curvature, nav2, or joystick (default: independent).
+#   COMMAND_MODE        : independent, curvature, nav2, joystick, or keyboard (default: independent).
 #   COMMAND_RAMP        : True ramps the command visible to the policy toward each target command.
 #   COMMAND_INTERVAL    : Seconds between random command samples (default: 2.0).
 #   COMMAND_SEED        : Random command seed (default: 1).
@@ -54,6 +54,8 @@
 #   JOYSTICK_SIGN_*     : Axis sign multipliers; default lin_x=-1 makes left-stick-up forward.
 #   JOYSTICK_AXIS_MAX   : Raw absolute axis max, default 32768.
 #   JOYSTICK_DEADZONE   : Normalized axis deadzone, default 0.05.
+#   KEYBOARD_LINEAR_STEP: W/S and A/D increment in m/s (default: 0.01).
+#   KEYBOARD_YAW_STEP   : Q/E increment in rad/s (default: 0.05).
 #   EARLY_MOTION_ENABLE / EARLY_MOTION_WINDOW_S: First-step diagnostic output controls.
 # ============================================================
 : <<'BLOCK'
@@ -139,7 +141,7 @@ CMD_INIT=${CMD_INIT:-'[0.5, 0.0, 0.0]'}
 RANDOM_COMMANDS=${RANDOM_COMMANDS:-False}
 COMMAND_MODE=${COMMAND_MODE:-independent}
 if [[ -z "${COMMAND_RAMP+x}" ]]; then
-    if [[ "${COMMAND_MODE}" == "curvature" || "${COMMAND_MODE}" == "joystick" || "${COMMAND_MODE}" == "nav2" ]]; then
+    if [[ "${COMMAND_MODE}" == "curvature" || "${COMMAND_MODE}" == "joystick" || "${COMMAND_MODE}" == "keyboard" || "${COMMAND_MODE}" == "nav2" ]]; then
         COMMAND_RAMP=True
     else
         COMMAND_RAMP=False
@@ -200,6 +202,8 @@ JOYSTICK_DEADZONE=${JOYSTICK_DEADZONE:-0.05}
 JOYSTICK_LIN_X_RANGE=${JOYSTICK_LIN_X_RANGE:-${CMD_LIN_X_RANGE}}
 JOYSTICK_LIN_Y_RANGE=${JOYSTICK_LIN_Y_RANGE:-${CMD_LIN_Y_RANGE}}
 JOYSTICK_YAW_RANGE=${JOYSTICK_YAW_RANGE:-${CMD_YAW_RANGE}}
+KEYBOARD_LINEAR_STEP=${KEYBOARD_LINEAR_STEP:-0.01}
+KEYBOARD_YAW_STEP=${KEYBOARD_YAW_STEP:-0.05}
 
 case "${ROBOT_ASSET}" in
     s3_g1_29dof|s3|s3_g1_29dof_mjcf|s3_mjcf)
@@ -348,6 +352,8 @@ export G1_AMP_JOYSTICK_DEADZONE="${JOYSTICK_DEADZONE}"
 export G1_AMP_JOYSTICK_LIN_X_RANGE="${JOYSTICK_LIN_X_RANGE}"
 export G1_AMP_JOYSTICK_LIN_Y_RANGE="${JOYSTICK_LIN_Y_RANGE}"
 export G1_AMP_JOYSTICK_YAW_RANGE="${JOYSTICK_YAW_RANGE}"
+export G1_AMP_KEYBOARD_LINEAR_STEP="${KEYBOARD_LINEAR_STEP}"
+export G1_AMP_KEYBOARD_YAW_STEP="${KEYBOARD_YAW_STEP}"
 
 echo "====================================="
 echo "  MuJoCo G1 AMP Sim2Sim"
@@ -376,6 +382,7 @@ echo "Cmd Ranges  : x=${CMD_LIN_X_RANGE} y=${CMD_LIN_Y_RANGE} yaw=${CMD_YAW_RANG
 echo "Curvature   : kappa=${CMD_CURVATURE_RANGE} max=${CMD_MAX_CURVATURE} low_frac=${CMD_REL_LOW_SPEED} high_y=${CMD_HIGH_SPEED_LATERAL_VEL}"
 echo "Nav2 Replay : data=${NAV2_DATA_PATH} aug=${NAV2_AUGMENTATION_FILTER} scale=${NAV2_COMMAND_SCALE} window=${NAV2_WINDOW_DURATION_S}s"
 echo "Joystick    : device=${JOYSTICK_DEVICE} axes=(${JOYSTICK_AXIS_LIN_X},${JOYSTICK_AXIS_LIN_Y},${JOYSTICK_AXIS_YAW}) ranges=x${JOYSTICK_LIN_X_RANGE} y${JOYSTICK_LIN_Y_RANGE} yaw${JOYSTICK_YAW_RANGE} deadzone=${JOYSTICK_DEADZONE}"
+echo "Keyboard    : W/S=vx A/D=vy Q/E=yaw SPACE/0=zero steps=(${KEYBOARD_LINEAR_STEP} m/s, ${KEYBOARD_YAW_STEP} rad/s) presets=1/2/3/4"
 echo "Early Motion: ${EARLY_MOTION_ENABLE} window=${EARLY_MOTION_WINDOW_S}s"
 echo "====================================="
 

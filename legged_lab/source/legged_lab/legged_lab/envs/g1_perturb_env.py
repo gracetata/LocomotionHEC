@@ -117,6 +117,18 @@ G1_LOWER_BODY_JOINT_NAMES = [
     "right_ankle_roll_joint",
 ]
 
+# Stand-only low-ankle-torque training selects exactly these four joints. Keep
+# the list independent of the broader lower-body list so hips, knees, waist,
+# and scripted arm joints cannot silently enter the dedicated metric/reward.
+G1_ANKLE_ROLL_PITCH_JOINT_NAMES = [
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+]
+
+G1_STAND_FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+
 
 @configclass
 class UpperBodyPerturbationCfg:
@@ -195,6 +207,9 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._pose_transition_elapsed_s: torch.Tensor | None = None
         self._pose_transition_start_delay_s: torch.Tensor | None = None
         self._pose_transition_duration_s: torch.Tensor | None = None
+        self._ankle_roll_pitch_joint_ids: torch.Tensor | None = None
+        self._lower_body_joint_ids_for_metrics: torch.Tensor | None = None
+        self._stand_foot_body_ids: torch.Tensor | None = None
 
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
@@ -222,6 +237,34 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._pose_transition_start_delay_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._pose_transition_duration_s = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
 
+        # Only Stand configs define this dedicated reward.  Resolve the same
+        # joints once for physical-unit TensorBoard metrics; Walk therefore
+        # keeps both its reward set and runtime logging unchanged.
+        if getattr(self.cfg.rewards, "ankle_roll_pitch_torques_l2", None) is not None:
+            joint_ids, joint_names = self.scene["robot"].find_joints(
+                G1_ANKLE_ROLL_PITCH_JOINT_NAMES, preserve_order=True
+            )
+            if list(joint_names) != G1_ANKLE_ROLL_PITCH_JOINT_NAMES:
+                raise RuntimeError(
+                    "ArmHack Stand ankle torque joints resolved in an unexpected order: "
+                    f"{list(joint_names)}"
+                )
+            self._ankle_roll_pitch_joint_ids = torch.as_tensor(
+                joint_ids, dtype=torch.long, device=self.device
+            )
+            lower_body_joint_ids, _ = self.scene["robot"].find_joints(
+                G1_LOWER_BODY_JOINT_NAMES, preserve_order=True
+            )
+            self._lower_body_joint_ids_for_metrics = torch.as_tensor(
+                lower_body_joint_ids, dtype=torch.long, device=self.device
+            )
+            robot_body_names = list(self.scene["robot"].body_names)
+            self._stand_foot_body_ids = torch.tensor(
+                [robot_body_names.index(name) for name in G1_STAND_FOOT_BODY_NAMES],
+                dtype=torch.long,
+                device=self.device,
+            )
+
         self._perturbation_cfg = getattr(self.cfg, "upper_body_perturbation", None)
         if self._perturbation_cfg is not None and self._perturbation_cfg.enabled:
             self._initialize_upper_body_perturbation()
@@ -243,6 +286,33 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 self._advance_pose_transitions(motion_scale)
 
         step_result = super().step(action)
+        if self._ankle_roll_pitch_joint_ids is not None:
+            ankle_torque = self.scene["robot"].data.applied_torque[
+                :, self._ankle_roll_pitch_joint_ids
+            ]
+            ankle_torque_abs = torch.abs(ankle_torque)
+            log_extras = self.extras.setdefault("log", {})
+            log_extras["Important Metrics/ankle_roll_pitch_torque_abs_mean_nm"] = torch.mean(
+                ankle_torque_abs
+            )
+            log_extras["Important Metrics/ankle_roll_pitch_torque_rms_nm"] = torch.sqrt(
+                torch.mean(torch.square(ankle_torque))
+            )
+            log_extras["Important Metrics/ankle_roll_pitch_torque_peak_mean_nm"] = torch.mean(
+                torch.amax(ankle_torque_abs, dim=1)
+            )
+            assert self._lower_body_joint_ids_for_metrics is not None
+            lower_body_torque = self.scene["robot"].data.applied_torque[
+                :, self._lower_body_joint_ids_for_metrics
+            ]
+            log_extras["Important Metrics/lower_body_torque_rms_nm"] = torch.sqrt(
+                torch.mean(torch.square(lower_body_torque))
+            )
+            assert self._stand_foot_body_ids is not None
+            foot_pos_xy = self.scene["robot"].data.body_pos_w[:, self._stand_foot_body_ids, :2]
+            log_extras["Important Metrics/feet_planar_separation_mean_m"] = torch.mean(
+                torch.linalg.vector_norm(foot_pos_xy[:, 0] - foot_pos_xy[:, 1], dim=1)
+            )
         if motion_scale is not None:
             log_extras = self.extras.setdefault("log", {})
             source = self._perturbation_cfg.source

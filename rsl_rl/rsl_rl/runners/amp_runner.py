@@ -48,6 +48,25 @@ class AMPRunner(OnPolicyRunner):
             max_episode_length_s=(self.env.max_episode_length*self.env.unwrapped.step_dt),
         )
         self._initialize_static_demo_normalizer()
+        self._freeze_actor_hidden_layers()
+
+    def _freeze_actor_hidden_layers(self) -> None:
+        count = int(self.cfg.get("freeze_actor_hidden_layers", 0))
+        if count <= 0:
+            return
+        linear_layers = [
+            module for module in self.alg.policy.actor
+            if isinstance(module, torch.nn.Linear)
+        ]
+        hidden_layers = linear_layers[:-1]
+        if count > len(hidden_layers):
+            raise ValueError(
+                f"Cannot freeze {count} actor hidden layers; actor has {len(hidden_layers)}."
+            )
+        for layer in hidden_layers[:count]:
+            for parameter in layer.parameters():
+                parameter.requires_grad_(False)
+        print(f"Froze the first {count} actor hidden linear layers for conservative refinement.")
 
     def _initialize_static_demo_normalizer(self) -> None:
         amp_cfg = self.alg_cfg.get("amp_cfg", {})
@@ -199,7 +218,78 @@ class AMPRunner(OnPolicyRunner):
 
     def load(self, path: str, load_optimizer: bool = True, map_location: str | None = None) -> dict:
         loaded_dict = torch.load(path, weights_only=False, map_location=map_location)
+        load_actor_only = bool(self.cfg.get("load_actor_only", False))
+        load_actor_amp_only = bool(self.cfg.get("load_actor_amp_only", False))
         load_policy_only = bool(self.cfg.get("load_policy_only", False))
+        if sum((load_actor_only, load_actor_amp_only, load_policy_only)) > 1:
+            raise ValueError(
+                "load_actor_only, load_actor_amp_only, and load_policy_only are mutually exclusive."
+            )
+
+        if load_actor_only or load_actor_amp_only:
+            source_state = loaded_dict.get("model_state_dict")
+            if not isinstance(source_state, dict):
+                raise KeyError("Actor-only AMP checkpoint is missing model_state_dict.")
+            source_actor_state = {
+                key: value for key, value in source_state.items() if key.startswith("actor.")
+            }
+            target_actor_state = {
+                key: value
+                for key, value in self.alg.policy.state_dict().items()
+                if key.startswith("actor.")
+            }
+            if set(source_actor_state) != set(target_actor_state):
+                missing = sorted(set(target_actor_state) - set(source_actor_state))
+                unexpected = sorted(set(source_actor_state) - set(target_actor_state))
+                raise RuntimeError(
+                    "Actor-only AMP checkpoint is incompatible with the current actor: "
+                    f"missing={missing}, unexpected={unexpected}"
+                )
+            shape_mismatches = {
+                key: (tuple(source_actor_state[key].shape), tuple(target_actor_state[key].shape))
+                for key in target_actor_state
+                if source_actor_state[key].shape != target_actor_state[key].shape
+            }
+            if shape_mismatches:
+                raise RuntimeError(
+                    "Actor-only AMP checkpoint has incompatible actor tensor shapes: "
+                    f"{shape_mismatches}"
+                )
+            load_result = self.alg.policy.load_state_dict(source_actor_state, strict=False)
+            # Upstream torch modules return _IncompatibleKeys, while this
+            # repository's ActorCritic compatibility wrapper returns a bool.
+            # Exact actor key/shape validation above is authoritative in both cases.
+            if hasattr(load_result, "unexpected_keys"):
+                unexpected_non_actor = [
+                    key
+                    for key in load_result.unexpected_keys
+                    if not key.startswith("actor.")
+                ]
+                if unexpected_non_actor:
+                    raise RuntimeError(
+                        "Actor-only AMP load produced unexpected non-actor keys: "
+                        f"{unexpected_non_actor}"
+                    )
+            if load_actor_amp_only:
+                self.alg.amp_discriminator.load_state_dict(
+                    loaded_dict["amp_discriminator_state_dict"]
+                )
+                self.alg.amp_discriminator.disc_obs_normalizer.load_state_dict(
+                    loaded_dict["amp_discriminator_normalizer_state_dict"]
+                )
+            self.current_learning_iteration = 0
+            if load_actor_amp_only:
+                print(
+                    "Loaded actor and AMP discriminator/normalizer; critic, action noise, "
+                    f"PPO optimizer, and discriminator optimizer remain fresh: {path}"
+                )
+            else:
+                print(
+                    "Loaded actor-only AMP checkpoint; critic, action noise, PPO optimizer, "
+                    f"and AMP state remain freshly initialized: {path}"
+                )
+            return loaded_dict.get("infos", {})
+
         reset_amp_on_load = bool(self.cfg.get("reset_amp_on_load", False)) and not load_policy_only
         if reset_amp_on_load:
             # Keep actor, critic, PPO optimizer and iteration from a full-state
@@ -242,8 +332,12 @@ class AMPRunner(OnPolicyRunner):
 
     def train_mode(self):
         super().train_mode()
-        self.alg.amp_discriminator.train()
-        self.alg.amp_discriminator.disc_obs_normalizer.train()
+        if self.alg.freeze_amp_discriminator:
+            self.alg.amp_discriminator.eval()
+            self.alg.amp_discriminator.disc_obs_normalizer.eval()
+        else:
+            self.alg.amp_discriminator.train()
+            self.alg.amp_discriminator.disc_obs_normalizer.train()
         
     def eval_mode(self):
         super().eval_mode()

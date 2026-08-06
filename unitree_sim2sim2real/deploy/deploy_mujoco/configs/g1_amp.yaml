@@ -40,6 +40,8 @@ armhack_stand_checkpoint_sha256: ""
 armhack_stand_report_path: ""
 armhack_stand_test_id: all
 armhack_stand_payload_kg: 0.0
+armhack_stand_ankle_diagnostics_enable: true
+armhack_stand_ankle_print_hz: 1.0
 # Optional ArmHack Walk adapter.  The dedicated launcher supplies absolute
 # tracked data paths and keeps this disabled for generic locomotion/Stand runs.
 armhack_walk_enable: false
@@ -65,6 +67,23 @@ extreme_stand_recovery_joint_mae_threshold_rad: 0.12
 extreme_stand_recovery_joint_max_threshold_rad: 0.20
 extreme_stand_recovery_hold_time_s: 1.0
 extreme_stand_recovery_final_window_s: 1.0
+extreme_stand_recovery_steady_start_s: 10.0
+extreme_stand_recovery_feet_gaussian_variance_m2: 0.0001
+extreme_stand_recovery_joint_jerk_reward_weight: -0.00000001
+extreme_stand_recovery_foot_spacing_start_random: false
+extreme_stand_recovery_foot_spacing_min_delta_m: 0.05
+extreme_stand_recovery_foot_spacing_max_delta_m: 0.12
+extreme_stand_recovery_foot_spacing_max_roll_offset_rad: 0.35
+extreme_stand_recovery_foot_spacing_search_samples: 141
+extreme_stand_recovery_foot_spacing_recovery_tolerance_m: 0.02
+extreme_stand_recovery_large_push_enable: false
+extreme_stand_recovery_large_push_body_name: torso_link
+extreme_stand_recovery_large_push_force_n: 120.0
+extreme_stand_recovery_large_push_duration_s: 0.20
+extreme_stand_recovery_large_push_time_s: 5.0
+extreme_stand_recovery_large_push_direction_index: -1
+extreme_stand_recovery_post_push_settle_s: 2.0
+extreme_stand_recovery_motion_trace_path: ""
 extreme_stand_recovery_force_max_n: 35.0
 extreme_stand_recovery_torque_max_nm: 5.0
 extreme_stand_recovery_wrench_interval_s: 2.5
@@ -101,6 +120,8 @@ command_max_linear_accel: 1.2
 command_max_yaw_accel: 1.5
 command_seed: 1
 command_interval: 2.0
+keyboard_linear_step: 0.01
+keyboard_yaw_step: 0.05
 command_ranges:
   lin_vel_x: [-0.2, 1.0]
   lin_vel_y: [-0.25, 0.25]

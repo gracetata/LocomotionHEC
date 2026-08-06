@@ -26,6 +26,9 @@ class RslRlAmpCfg:
     disc_max_grad_norm: float = 1.0
     """Maximum gradient norm for the discriminator networks"""
 
+    freeze_discriminator: bool = False
+    """Keep a loaded discriminator and its normalizer fixed during task refinement."""
+
     normalizer_mode: Literal["policy", "policy_demo", "demo_static"] = "policy"
     """Discriminator input normalizer update mode.
 
