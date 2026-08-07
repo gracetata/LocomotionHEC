@@ -14,6 +14,7 @@ TRAIN_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model99
 ACCEPTANCE_SCRIPT = (
     LEGGED_LAB_ROOT / "scripts" / "test_g1_amp_nav2_two_goal_model9996_mujoco.sh"
 )
+MERGE_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "merge_g1_amp_nav2_two_goal_model9996.py"
 MODE_ROOT = (
     PACKAGE_ROOT
     / "data"
@@ -232,3 +233,15 @@ def test_mujoco_acceptance_is_strict_and_bidirectional():
     assert 'health["sole_clearance_violation_fraction"] != 0.0' in script
     assert 'health["min_signed_sole_clearance_m"] < 0.025' in script
     assert "forward retention degraded by more than 15%" in script
+
+
+def test_branch_composition_is_exact_and_model9996_protected():
+    script = MERGE_SCRIPT.read_text()
+    assert MODEL9996_SHA256 in script
+    assert "refusing to overwrite existing output" in script
+    assert 'require_equal_state("actor.", lateral_state, yaw_state)' in script
+    assert 'require_equal_state("actor.", lateral_state, base_state)' in script
+    assert 'float(bridge.item()) != 0.0' in script
+    assert 'key.startswith("lateral_command_residual.")' in script
+    assert 'key.startswith("pure_yaw_command_residual.")' in script
+    assert "two_goal_model9996_provenance" in script
