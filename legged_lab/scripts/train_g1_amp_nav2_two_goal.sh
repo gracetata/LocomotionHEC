@@ -39,6 +39,7 @@ SEED=${SEED:-44}
 HEADLESS=${HEADLESS:-True}
 QUIET_TERMINAL=${QUIET_TERMINAL:-True}
 BASELINE_KL_SCALE=${BASELINE_KL_SCALE:-0.08}
+COMMAND_BRIDGE_SCALE=${COMMAND_BRIDGE_SCALE:-0.20}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-"${LEGGED_LAB_DIR}/logs/rsl_rl/${EXPERIMENT_NAME}/train_${RUN_NAME}.log"}
 
 die() {
@@ -100,6 +101,7 @@ for arg in "$@"; do
         --run_name|--run_name=*|agent.experiment_name=*|agent.checkpoint_output_dir=*|\
         agent.load_actor_only=*|agent.load_actor_amp_only=*|agent.load_policy_only=*|\
         agent.freeze_actor_hidden_layers=*|agent.algorithm.amp_cfg.freeze_discriminator=*|\
+        agent.algorithm.command_bridge_cfg.enabled=*|agent.algorithm.command_bridge_cfg.scale=*|\
         env.commands.base_velocity.mode_sampling_config_path=*|\
         env.commands.base_velocity.mode_probability=*)
             die "Protected two-goal setting cannot be overridden: ${arg}"
@@ -120,7 +122,8 @@ else
     echo "Load contract     : full-state continuation from accepted prior curriculum stage"
 fi
 echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, actor first layer frozen"
-echo "Actor schedule    : fresh-load iterations 0-11 critic-only, then actor enabled"
+echo "Actor schedule    : fresh-load iterations 0-7 critic-only, then actor enabled"
+echo "Command bridge    : strict-goal carrier-teacher scale=${COMMAND_BRIDGE_SCALE}"
 echo "Baseline KL       : specialization=0.005, retention=${BASELINE_KL_SCALE}, hard=0.15"
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "Run               : ${RUN_NAME}"
@@ -160,6 +163,8 @@ bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
     agent.load_actor_amp_only="${LOAD_ACTOR_AMP_ONLY}" \
     agent.load_policy_only=False \
     agent.reset_iteration_on_policy_only_load=True \
+    agent.algorithm.command_bridge_cfg.enabled=True \
+    agent.algorithm.command_bridge_cfg.scale="${COMMAND_BRIDGE_SCALE}" \
     "$@"
 
 verify_source

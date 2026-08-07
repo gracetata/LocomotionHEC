@@ -130,7 +130,8 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
     reset_iteration_on_policy_only_load = True
     reset_amp_on_load = False
     freeze_actor_hidden_layers = 1
-    actor_warmup_iterations = 12
+    actor_warmup_iterations = 8
+    restore_configured_learning_rate_on_load = True
     save_interval = 10
 
     def __post_init__(self):
@@ -157,6 +158,14 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.baseline_kl_cfg.max_scale = 0.08
         self.algorithm.baseline_kl_cfg.adaptation_rate = 1.5
         self.algorithm.baseline_kl_cfg.hard_limit = 0.15
+        self.algorithm.command_bridge_cfg.enabled = True
+        self.algorithm.command_bridge_cfg.scale = 0.20
+        self.algorithm.command_bridge_cfg.command_obs_start_index = 6
+        self.algorithm.command_bridge_cfg.max_student_forward_command = 0.02
+        self.algorithm.command_bridge_cfg.max_student_pure_yaw_translation_command = 0.02
+        self.algorithm.command_bridge_cfg.lateral_teacher_forward_command = 0.20
+        self.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command = 0.15
+        self.algorithm.command_bridge_cfg.teacher_delta_fraction = 0.60
         self.algorithm.amp_cfg.freeze_discriminator = True
         self.algorithm.amp_cfg.command_conditioned_style_reward = True
         self.algorithm.amp_cfg.specialization_task_style_lerp = 1.0

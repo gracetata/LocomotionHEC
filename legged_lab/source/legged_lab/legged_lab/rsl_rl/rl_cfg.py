@@ -125,6 +125,25 @@ class RslRlPpoAmpAlgorithmCfg:
     baseline_kl_cfg: BaselineKLCfg = BaselineKLCfg()
     """Optional frozen baseline-policy KL regularizer configuration."""
 
+    @configclass
+    class CommandBridgeCfg:
+        """Counterfactual teacher used to cross the baseline gait-onset dead zone."""
+
+        enabled: bool = False
+        scale: float = 0.0
+        command_obs_start_index: int = 6
+        lateral_min_command: float = 0.10
+        pure_yaw_min_command: float = 0.10
+        max_student_forward_command: float = 0.02
+        max_lateral_yaw_command: float = 0.05
+        max_student_pure_yaw_translation_command: float = 0.02
+        lateral_teacher_forward_command: float = 0.20
+        pure_yaw_teacher_forward_command: float = 0.15
+        teacher_delta_fraction: float = 0.60
+
+    command_bridge_cfg: CommandBridgeCfg = CommandBridgeCfg()
+    """Optional carrier-command action teacher for strict two-goal samples."""
+
     amp_cfg: RslRlAmpCfg = RslRlAmpCfg()
     """Configuration for the AMP (Adversarial Motion Priors) in the training."""
 

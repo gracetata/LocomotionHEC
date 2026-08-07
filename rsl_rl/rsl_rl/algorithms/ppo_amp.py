@@ -45,6 +45,51 @@ def two_goal_specialization_mask_from_policy_obs(
     return lateral | pure_yaw
 
 
+def build_two_goal_carrier_teacher_obs(
+    policy_obs: torch.Tensor,
+    *,
+    command_obs_start_index: int = 6,
+    lateral_min_command: float = 0.10,
+    pure_yaw_min_command: float = 0.10,
+    max_student_forward_command: float = 0.02,
+    max_lateral_yaw_command: float = 0.05,
+    max_student_pure_yaw_translation_command: float = 0.02,
+    lateral_teacher_forward_command: float = 0.20,
+    pure_yaw_teacher_forward_command: float = 0.15,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Pair strict commands with baseline commands known to start the gait.
+
+    Only the command slice is changed.  The returned lateral and pure-yaw
+    masks are disjoint and let the caller apply an auxiliary loss exclusively
+    to the two new skills, never to Nav2 retention samples.
+    """
+    if policy_obs.ndim != 2:
+        raise ValueError("Flattened policy observations must have shape [batch, features].")
+    start = int(command_obs_start_index)
+    if start < 0 or start + 3 > policy_obs.shape[1]:
+        raise ValueError("Velocity-command observation slice is outside the policy input.")
+    if lateral_teacher_forward_command <= max_student_forward_command:
+        raise ValueError("Lateral teacher command must exceed the student dead-zone band.")
+    if pure_yaw_teacher_forward_command <= max_student_pure_yaw_translation_command:
+        raise ValueError("Pure-yaw teacher command must exceed the student dead-zone band.")
+
+    command = policy_obs[:, start : start + 3]
+    lateral = (
+        (torch.abs(command[:, 1]) >= float(lateral_min_command))
+        & (torch.abs(command[:, 0]) <= float(max_student_forward_command))
+        & (torch.abs(command[:, 2]) <= float(max_lateral_yaw_command))
+    )
+    pure_yaw = (
+        (torch.linalg.vector_norm(command[:, :2], dim=1)
+         <= float(max_student_pure_yaw_translation_command))
+        & (torch.abs(command[:, 2]) >= float(pure_yaw_min_command))
+    )
+    teacher_obs = policy_obs.detach().clone()
+    teacher_obs[lateral, start] = float(lateral_teacher_forward_command)
+    teacher_obs[pure_yaw, start] = float(pure_yaw_teacher_forward_command)
+    return teacher_obs, lateral, pure_yaw
+
+
 def command_conditioned_lerp_reward(
     task_reward: torch.Tensor,
     style_reward: torch.Tensor,
@@ -97,6 +142,8 @@ class PPOAMP(PPO):
         symmetry_cfg: dict | None = None,
         # Frozen baseline policy KL regularizer
         baseline_kl_cfg: dict | None = None,
+        # Counterfactual carrier-command action teacher
+        command_bridge_cfg: dict | None = None,
         # AMP parameters
         amp_cfg: dict | None = None,
         # Distributed training parameters
@@ -129,6 +176,7 @@ class PPOAMP(PPO):
             raise ValueError("AMP configuration must be provided for PPOAMP algorithm.")
 
         self.baseline_kl_cfg = baseline_kl_cfg or {}
+        self.command_bridge_cfg = command_bridge_cfg or {}
         self.baseline_kl_scale = float(self.baseline_kl_cfg.get("scale", 0.0))
         self.baseline_kl_min_std = float(self.baseline_kl_cfg.get("min_std", 1.0e-4))
         self.baseline_kl_mean_only = bool(self.baseline_kl_cfg.get("mean_only", False))
@@ -168,6 +216,18 @@ class PPOAMP(PPO):
             for parameter in self.baseline_policy.parameters():
                 parameter.requires_grad_(False)
             print(f"Loaded frozen baseline policy for KL regularization: {checkpoint_path}")
+
+        self.command_bridge_enabled = bool(self.command_bridge_cfg.get("enabled", False))
+        self.command_bridge_scale = float(self.command_bridge_cfg.get("scale", 0.0))
+        self.command_bridge_teacher_delta_fraction = float(
+            self.command_bridge_cfg.get("teacher_delta_fraction", 0.60)
+        )
+        if self.command_bridge_scale < 0.0:
+            raise ValueError("command bridge scale must be non-negative.")
+        if not 0.0 <= self.command_bridge_teacher_delta_fraction <= 1.0:
+            raise ValueError("command bridge teacher_delta_fraction must be in [0, 1].")
+        if self.command_bridge_enabled and self.baseline_policy is None:
+            raise ValueError("command bridge requires an enabled frozen baseline policy.")
 
         self.disc_normalizer_mode = self.amp_cfg.get("normalizer_mode", "policy")
         if self.disc_normalizer_mode not in {"policy", "policy_demo", "demo_static"}:
@@ -298,6 +358,7 @@ class PPOAMP(PPO):
         mean_baseline_kl_specialization = 0
         mean_baseline_kl_retention = 0
         mean_baseline_kl_weighted = 0
+        mean_command_bridge = 0
 
         # Get mini batch generator
         if self.policy.is_recurrent:
@@ -426,6 +487,7 @@ class PPOAMP(PPO):
 
             if self.baseline_policy is not None:
                 baseline_obs_batch = obs_batch[:original_batch_size]
+                actor_obs_batch = self.policy.get_actor_obs(baseline_obs_batch)
                 with torch.no_grad():
                     self.baseline_policy.act(baseline_obs_batch)
                     baseline_mu_batch = self.baseline_policy.action_mean.detach()
@@ -447,7 +509,6 @@ class PPOAMP(PPO):
                     )
                 baseline_kl_loss = baseline_kl_per_sample.mean()
                 if self.baseline_kl_command_conditioned:
-                    actor_obs_batch = self.policy.get_actor_obs(baseline_obs_batch)
                     specialization_mask = two_goal_specialization_mask_from_policy_obs(
                         actor_obs_batch,
                         command_obs_start_index=self.baseline_kl_command_obs_start_index,
@@ -481,11 +542,60 @@ class PPOAMP(PPO):
                     baseline_kl_retention = baseline_kl_loss
                     baseline_kl_weighted_loss = self.baseline_kl_scale * baseline_kl_loss
                 loss = loss + baseline_kl_weighted_loss
+
+                if self.command_bridge_enabled and self.command_bridge_scale > 0.0:
+                    teacher_obs, lateral_bridge, pure_yaw_bridge = build_two_goal_carrier_teacher_obs(
+                        actor_obs_batch,
+                        command_obs_start_index=int(
+                            self.command_bridge_cfg.get("command_obs_start_index", 6)
+                        ),
+                        lateral_min_command=float(
+                            self.command_bridge_cfg.get("lateral_min_command", 0.10)
+                        ),
+                        pure_yaw_min_command=float(
+                            self.command_bridge_cfg.get("pure_yaw_min_command", 0.10)
+                        ),
+                        max_student_forward_command=float(
+                            self.command_bridge_cfg.get("max_student_forward_command", 0.02)
+                        ),
+                        max_lateral_yaw_command=float(
+                            self.command_bridge_cfg.get("max_lateral_yaw_command", 0.05)
+                        ),
+                        max_student_pure_yaw_translation_command=float(
+                            self.command_bridge_cfg.get(
+                                "max_student_pure_yaw_translation_command", 0.02
+                            )
+                        ),
+                        lateral_teacher_forward_command=float(
+                            self.command_bridge_cfg.get("lateral_teacher_forward_command", 0.20)
+                        ),
+                        pure_yaw_teacher_forward_command=float(
+                            self.command_bridge_cfg.get("pure_yaw_teacher_forward_command", 0.15)
+                        ),
+                    )
+                    bridge_mask = lateral_bridge | pure_yaw_bridge
+                    with torch.no_grad():
+                        teacher_mu = self.baseline_policy.actor(
+                            self.baseline_policy.actor_obs_normalizer(teacher_obs)
+                        )
+                        target_mu = baseline_mu_batch + self.command_bridge_teacher_delta_fraction * (
+                            teacher_mu - baseline_mu_batch
+                        )
+                    per_sample_bridge_loss = torch.mean(torch.square(mu_batch - target_mu), dim=-1)
+                    command_bridge_loss = torch.where(
+                        bridge_mask,
+                        per_sample_bridge_loss,
+                        torch.zeros_like(per_sample_bridge_loss),
+                    ).sum() / torch.clamp(bridge_mask.sum(), min=1)
+                    loss = loss + self.command_bridge_scale * command_bridge_loss
+                else:
+                    command_bridge_loss = torch.zeros((), device=self.device)
             else:
                 baseline_kl_loss = torch.zeros((), device=self.device)
                 baseline_kl_specialization = torch.zeros((), device=self.device)
                 baseline_kl_retention = torch.zeros((), device=self.device)
                 baseline_kl_weighted_loss = torch.zeros((), device=self.device)
+                command_bridge_loss = torch.zeros((), device=self.device)
 
             # Symmetry loss
             if self.symmetry:
@@ -622,6 +732,7 @@ class PPOAMP(PPO):
             mean_baseline_kl_specialization += baseline_kl_specialization.item()
             mean_baseline_kl_retention += baseline_kl_retention.item()
             mean_baseline_kl_weighted += baseline_kl_weighted_loss.item()
+            mean_command_bridge += command_bridge_loss.item()
 
         # Divide the losses by the number of updates
         num_updates = self.num_learning_epochs * self.num_mini_batches
@@ -640,6 +751,7 @@ class PPOAMP(PPO):
         mean_baseline_kl_specialization /= num_updates
         mean_baseline_kl_retention /= num_updates
         mean_baseline_kl_weighted /= num_updates
+        mean_command_bridge /= num_updates
 
         if (
             self.baseline_policy is not None
@@ -683,6 +795,8 @@ class PPOAMP(PPO):
             loss_dict["baseline_kl_retention"] = mean_baseline_kl_retention
             loss_dict["baseline_kl_weighted"] = mean_baseline_kl_weighted
             loss_dict["baseline_kl_scale"] = self.baseline_kl_scale
+        if self.command_bridge_enabled:
+            loss_dict["command_bridge"] = mean_command_bridge
         loss_dict["amp/disc_loss"] = mean_disc_loss
         loss_dict["amp/disc_grad_penalty"] = mean_disc_grad_penalty
         loss_dict["amp/disc_score"] = mean_disc_score

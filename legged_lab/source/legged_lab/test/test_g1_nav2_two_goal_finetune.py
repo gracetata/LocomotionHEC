@@ -241,7 +241,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
         assert required in block
     assert "load_actor_amp_only = True" in agent
     assert "freeze_actor_hidden_layers = 1" in agent
-    assert "actor_warmup_iterations = 12" in agent
+    assert "actor_warmup_iterations = 8" in agent
     assert "freeze_discriminator = True" in agent
     assert "command_conditioned_style_reward = True" in agent
     assert "specialization_task_style_lerp = 1.0" in agent
@@ -250,6 +250,9 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "num_learning_epochs = 2" in agent
     assert "specialization_scale = 0.005" in agent
     assert "hard_limit = 0.15" in agent
+    assert "command_bridge_cfg.enabled = True" in agent
+    assert "command_bridge_cfg.scale = 0.20" in agent
+    assert "restore_configured_learning_rate_on_load = True" in agent
     assert 'weight=-4.0' in block
     assert 'weight=-2.0' in block
     assert '"max_penalty": 1.0' in block
@@ -257,6 +260,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "RSI_ENABLE=False" in script
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "model_10990" not in script
+    assert "COMMAND_BRIDGE_SCALE" in script
 
 
 def test_sweep_argument_validation():

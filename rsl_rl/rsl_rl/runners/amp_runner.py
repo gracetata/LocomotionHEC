@@ -353,6 +353,13 @@ class AMPRunner(OnPolicyRunner):
                 self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
             # AMP discriminator optimizer
             self.alg.disc_optimizer.load_state_dict(loaded_dict["amp_discriminator_optimizer_state_dict"])
+            if bool(self.cfg.get("restore_configured_learning_rate_on_load", False)):
+                for param_group in self.alg.optimizer.param_groups:
+                    param_group["lr"] = self.alg.learning_rate
+                print(
+                    "Restored configured PPO learning rate after optimizer load: "
+                    f"{self.alg.learning_rate:.3e}"
+                )
         if reset_amp_on_load:
             self.alg.amp_discriminator.load_state_dict(fresh_amp_state)
             self.alg.disc_optimizer.load_state_dict(fresh_disc_optimizer_state)

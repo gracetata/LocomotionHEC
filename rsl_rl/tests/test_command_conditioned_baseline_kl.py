@@ -1,9 +1,26 @@
 import torch
 
 from rsl_rl.algorithms.ppo_amp import (
+    build_two_goal_carrier_teacher_obs,
     command_conditioned_lerp_reward,
     two_goal_specialization_mask_from_policy_obs,
 )
+
+
+def test_carrier_teacher_changes_only_strict_two_goal_command_slice():
+    obs = torch.zeros(5, 96)
+    obs[0, 6:9] = torch.tensor([0.0, 0.30, 0.0])
+    obs[1, 6:9] = torch.tensor([0.0, -0.30, 0.0])
+    obs[2, 6:9] = torch.tensor([0.0, 0.0, 0.40])
+    obs[3, 6:9] = torch.tensor([0.0, 0.0, -0.40])
+    obs[4, 6:9] = torch.tensor([0.40, 0.0, 0.0])
+    teacher, lateral, pure_yaw = build_two_goal_carrier_teacher_obs(obs)
+    torch.testing.assert_close(lateral, torch.tensor([True, True, False, False, False]))
+    torch.testing.assert_close(pure_yaw, torch.tensor([False, False, True, True, False]))
+    torch.testing.assert_close(teacher[:2, 6], torch.full((2,), 0.20))
+    torch.testing.assert_close(teacher[2:4, 6], torch.full((2,), 0.15))
+    torch.testing.assert_close(teacher[:, 7:9], obs[:, 7:9])
+    torch.testing.assert_close(teacher[4], obs[4])
 
 
 def test_command_conditioned_mask_separates_specialization_and_retention():
