@@ -59,6 +59,14 @@ class AMPRunner(OnPolicyRunner):
                 parameter.requires_grad_(False)
                 self._permanently_frozen_actor_parameters.add(id(parameter))
             print("Froze the complete base actor; command residual adapters remain trainable.")
+        if bool(self.cfg.get("freeze_pure_yaw_residual", False)):
+            residual = getattr(self.alg.policy, "pure_yaw_command_residual", None)
+            if residual is None:
+                raise ValueError("freeze_pure_yaw_residual requires a pure-yaw residual module.")
+            for parameter in residual.parameters():
+                parameter.requires_grad_(False)
+                self._permanently_frozen_actor_parameters.add(id(parameter))
+            print("Froze the pure-yaw residual; exact carrier bridge remains active.")
         count = int(self.cfg.get("freeze_actor_hidden_layers", 0))
         if count <= 0:
             return

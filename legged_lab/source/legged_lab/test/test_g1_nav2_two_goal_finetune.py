@@ -244,6 +244,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "load_actor_amp_only = True" in agent
     assert "freeze_actor_hidden_layers = 0" in agent
     assert "freeze_base_actor = True" in agent
+    assert "freeze_pure_yaw_residual = True" in agent
     assert "RslRlPpoActorCriticCommandResidualCfg" in agent
     assert "fixed_command_bridge_fraction=1.0" in agent
     assert "actor_warmup_iterations = 8" in agent
@@ -263,7 +264,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert 'weight=-4.0' in block
     assert 'weight=-2.0' in block
     assert '"max_penalty": 1.0' in block
-    assert "command_conditioned_footstep_cadence_l1.weight = 0.0" in block
+    assert block.count("command_conditioned_footstep_cadence_l1.weight = 0.0") >= 2
     assert "RSI_ENABLE=False" in script
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "model_10990" not in script

@@ -2041,7 +2041,9 @@ class G1AmpNav2TwoGoalStage2FinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
         self.commands.base_velocity.mode_command_clip_max = (0.02, 0.40, 0.50)
         self.rewards.lateral_command_leak_l2.weight = -0.25
         self.rewards.pure_yaw_planar_drift_l2.weight = -0.35
-        self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.50
+        # Cadence is deliberately outside this two-goal curriculum.  It can
+        # suppress the carrier gait before lateral leak has been removed.
+        self.rewards.command_conditioned_footstep_cadence_l1.weight = 0.0
 
 
 @configclass

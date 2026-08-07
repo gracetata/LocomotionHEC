@@ -148,6 +148,7 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
     )
     freeze_actor_hidden_layers = 0
     freeze_base_actor = True
+    freeze_pure_yaw_residual = True
     actor_warmup_iterations = 8
     restore_configured_learning_rate_on_load = True
     save_interval = 10
