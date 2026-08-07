@@ -275,3 +275,17 @@ class G1Nav2TwoGoalModel9996CorrectiveRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.command_bridge_cfg.scale = 0.0
         self.algorithm.command_bridge_cfg.residual_learning_rate = 0.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
+
+
+@configclass
+class G1Nav2TwoGoalModel9996BarrierCorrectiveRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996CorrectiveRslRlOnPolicyRunnerAmpCfg
+):
+    """Small policy-only updates for the widened sole barrier stage."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 2.0e-5
+        self.algorithm.clip_param = 0.12
+        self.algorithm.num_learning_epochs = 4
+        self.algorithm.entropy_coef = 4.0e-4

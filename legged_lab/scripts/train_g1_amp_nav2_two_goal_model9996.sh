@@ -22,6 +22,7 @@ case "${STAGE}" in
         COMMAND_BRIDGE_ENABLE=True
         COMMAND_BRIDGE_SCALE=${COMMAND_BRIDGE_SCALE:-0.20}
         COMMAND_BRIDGE_RESIDUAL_LR=${COMMAND_BRIDGE_RESIDUAL_LR:-3.0e-4}
+        FOOT_BARRIER_DESCRIPTION="soft 0.040 m; hard 0.025 m; weight -12"
         MAX_ITERATIONS=${MAX_ITERATIONS:-20}
         ;;
     corrective)
@@ -38,10 +39,28 @@ case "${STAGE}" in
         COMMAND_BRIDGE_ENABLE=False
         COMMAND_BRIDGE_SCALE=0.0
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FOOT_BARRIER_DESCRIPTION="soft 0.040 m; hard 0.025 m; weight -12"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-30}
+        ;;
+    barrier_corrective)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996BarrierCorrective-v0"
+        : "${SOURCE_CHECKPOINT:?barrier_corrective requires an accepted moving policy}"
+        : "${SOURCE_SIZE:?barrier_corrective requires SOURCE_SIZE}"
+        : "${SOURCE_SHA256:?barrier_corrective requires SOURCE_SHA256}"
+        [[ "${SOURCE_CHECKPOINT}" != "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: barrier_corrective must load a residual-policy checkpoint." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=False
+        LOAD_POLICY_ONLY=True
+        COMMAND_BRIDGE_ENABLE=False
+        COMMAND_BRIDGE_SCALE=0.0
+        COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FOOT_BARRIER_DESCRIPTION="soft 0.080 m; hard 0.040 m; weight -50; accept 0.025 m"
         MAX_ITERATIONS=${MAX_ITERATIONS:-30}
         ;;
     *)
-        echo "Error: STAGE must be bootstrap or corrective." >&2
+        echo "Error: STAGE must be bootstrap, corrective, or barrier_corrective." >&2
         exit 1
         ;;
 esac
@@ -137,7 +156,7 @@ echo "Distribution      : 80% balanced goals + 20% Nav2 retention"
 echo "Base actor        : frozen model_9996, strict residual gates"
 echo "Deployed carrier  : disabled (fixed fraction is exactly zero)"
 echo "Teacher carrier   : ${COMMAND_BRIDGE_ENABLE}, training loss only"
-echo "Foot barrier      : soft 0.040 m; hard 0.025 m; weight -12"
+echo "Foot barrier      : ${FOOT_BARRIER_DESCRIPTION}"
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "Run               : ${RUN_NAME}"
 echo "Output            : ${OUTPUT_DIR}"

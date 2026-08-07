@@ -2104,6 +2104,62 @@ class G1AmpNav2TwoGoalModel9996CorrectiveEnvCfg(G1AmpNav2TwoGoalStage2FinetuneEn
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg(
+    G1AmpNav2TwoGoalModel9996CorrectiveEnvCfg
+):
+    """Keep true motion preferable while making unsafe foot proximity nonviable.
+
+    The first corrective probe showed the relevant trade-off directly: a
+    moving turn paid a saturated drift cost of 2 while a stationary response
+    paid only 1.69, and a crossing lateral gait could trade the finite sole
+    barrier against progress.  This stage reverses both inequalities.  The
+    response shortfall makes stillness more expensive than a moving-but-drifting
+    skill, while a wide differentiable sole margin guides the policy away from
+    the much larger hard/overlap barrier before contact becomes unsafe.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.lateral_command_progress.weight = 10.0
+        self.rewards.pure_yaw_command_progress.weight = 12.0
+        self.rewards.dense_root_pose_command_progress.weight = 10.0
+        self.rewards.safe_alternating_touchdown_progress.weight = 4.0
+        self.rewards.safe_alternating_swing_progress.weight = 3.0
+
+        self.rewards.two_goal_response_shortfall.weight = -12.0
+        self.rewards.two_goal_response_shortfall.params.update(
+            {"target_fraction": 0.75, "max_penalty": 1.0}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -5.0
+        self.rewards.lateral_command_leak_l2.params.update(
+            {"forward_velocity_scale": 0.040, "yaw_rate_scale": 0.080, "max_penalty": 1.0}
+        )
+        self.rewards.pure_yaw_planar_drift_l2.weight = -3.0
+        self.rewards.pure_yaw_planar_drift_l2.params.update(
+            {"velocity_scale": 0.035, "max_penalty": 1.0}
+        )
+
+        # A 0.08 m soft onset supplies a gradient before the 0.04 m training
+        # barrier.  Acceptance remains stricter than collision at 0.025 m.
+        for term in (
+            self.rewards.swept_oriented_footprint_soft_margin_l2,
+            self.rewards.swept_oriented_footprint_hard_barrier,
+        ):
+            term.params.update(
+                {
+                    "soft_clearance": 0.080,
+                    "hard_clearance": 0.040,
+                    "hard_scale": 1.0,
+                    "overlap_scale": 8.0,
+                    "interpolation_steps": 8,
+                }
+            )
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -4.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -50.0
+        self.rewards.pure_yaw_torso_roll_l2.weight = -0.8
+
+
+@configclass
 class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Bootstrap the two target skills from the existing forward gait cycle."""
 

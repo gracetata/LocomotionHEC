@@ -84,6 +84,11 @@ def test_tasks_are_manager_amp_and_model9996_specific():
             "G1AmpNav2TwoGoalModel9996CorrectiveEnvCfg",
             "G1Nav2TwoGoalModel9996CorrectiveRslRlOnPolicyRunnerAmpCfg",
         ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996BarrierCorrective-v0",
+            "G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg",
+            "G1Nav2TwoGoalModel9996BarrierCorrectiveRslRlOnPolicyRunnerAmpCfg",
+        ),
     ):
         assert f'id="{task}"' in registry
         task_block = registry[registry.index(f'id="{task}"') :]
@@ -131,11 +136,22 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
     assert '"hard_clearance": 0.025' in env_text
     assert '"soft_clearance": 0.040' in env_text
 
+    barrier_start = env_text.index("class G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg")
+    barrier = env_text[barrier_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
+    assert "two_goal_response_shortfall.weight = -12.0" in barrier
+    assert "lateral_command_leak_l2.weight = -5.0" in barrier
+    assert "pure_yaw_planar_drift_l2.weight = -3.0" in barrier
+    assert '"soft_clearance": 0.080' in barrier
+    assert '"hard_clearance": 0.040' in barrier
+    assert "swept_oriented_footprint_soft_margin_l2.weight = -4.0" in barrier
+    assert "swept_oriented_footprint_hard_barrier.weight = -50.0" in barrier
+
 
 def test_training_script_separates_bootstrap_and_corrective_contracts():
     script = TRAIN_SCRIPT.read_text()
     assert "load_actor_amp_only=\"${LOAD_ACTOR_AMP_ONLY}\"" in script
     assert "load_policy_only=\"${LOAD_POLICY_ONLY}\"" in script
+    assert "barrier_corrective" in script
     assert "agent.policy.fixed_command_bridge_fraction=0.0" in script
     assert "BASELINE_KL_CHECKPOINT=\"${PROTECTED_MODEL9996}\"" in script
     assert "RSI_ENABLE=False" in script
