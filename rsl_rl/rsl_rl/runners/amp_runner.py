@@ -16,6 +16,7 @@ from rsl_rl.algorithms import PPO, PPOAMP
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
+    ActorCriticCommandResidual,
     ActorCriticCNN,
     ActorCriticRecurrent,
     resolve_rnd_config,
@@ -53,6 +54,11 @@ class AMPRunner(OnPolicyRunner):
         self._freeze_actor_hidden_layers()
 
     def _freeze_actor_hidden_layers(self) -> None:
+        if bool(self.cfg.get("freeze_base_actor", False)):
+            for parameter in self.alg.policy.actor.parameters():
+                parameter.requires_grad_(False)
+                self._permanently_frozen_actor_parameters.add(id(parameter))
+            print("Froze the complete base actor; command residual adapters remain trainable.")
         count = int(self.cfg.get("freeze_actor_hidden_layers", 0))
         if count <= 0:
             return
@@ -79,7 +85,12 @@ class AMPRunner(OnPolicyRunner):
             return
 
         for name, parameter in self.alg.policy.named_parameters():
-            is_actor_parameter = name.startswith("actor.") or name in {"std", "log_std"}
+            is_actor_parameter = (
+                name.startswith("actor.")
+                or name.startswith("lateral_command_residual.")
+                or name.startswith("pure_yaw_command_residual.")
+                or name in {"std", "log_std"}
+            )
             if not is_actor_parameter:
                 continue
             if warmup_active or id(parameter) in self._permanently_frozen_actor_parameters:

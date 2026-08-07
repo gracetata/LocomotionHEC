@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+from typing import Any
+
+import torch
+import torch.nn as nn
+from tensordict import TensorDict
+from torch.distributions import Normal
+
+from .actor_critic import ActorCritic
+
+
+def _activation(name: str) -> nn.Module:
+    normalized = name.lower()
+    if normalized == "elu":
+        return nn.ELU()
+    if normalized == "relu":
+        return nn.ReLU()
+    if normalized == "tanh":
+        return nn.Tanh()
+    raise ValueError(f"Unsupported command-residual activation: {name}")
+
+
+class ActorCriticCommandResidual(ActorCritic):
+    """Baseline actor plus disjoint strict-lateral and pure-yaw residuals.
+
+    Both residual output layers start at exactly zero.  Commands outside the
+    two strict specialization families are hard-gated to the unchanged base
+    actor, which makes retention structural instead of relying only on KL.
+    """
+
+    def __init__(
+        self,
+        obs: TensorDict,
+        obs_groups: dict[str, list[str]],
+        num_actions: int,
+        command_residual_hidden_dim: int = 64,
+        command_obs_start_index: int = 6,
+        lateral_min_command: float = 0.10,
+        pure_yaw_min_command: float = 0.10,
+        max_lateral_forward_command: float = 0.02,
+        max_lateral_yaw_command: float = 0.05,
+        max_pure_yaw_translation_command: float = 0.02,
+        activation: str = "elu",
+        state_dependent_std: bool = False,
+        **kwargs: dict[str, Any],
+    ) -> None:
+        if state_dependent_std:
+            raise NotImplementedError("Command residual actor currently requires scalar action noise.")
+        super().__init__(
+            obs,
+            obs_groups,
+            num_actions,
+            activation=activation,
+            state_dependent_std=False,
+            **kwargs,
+        )
+        num_actor_obs = sum(obs[group].shape[-1] for group in obs_groups["policy"])
+        hidden_dim = int(command_residual_hidden_dim)
+        if hidden_dim <= 0:
+            raise ValueError("command_residual_hidden_dim must be positive.")
+        self.command_obs_start_index = int(command_obs_start_index)
+        self.lateral_min_command = float(lateral_min_command)
+        self.pure_yaw_min_command = float(pure_yaw_min_command)
+        self.max_lateral_forward_command = float(max_lateral_forward_command)
+        self.max_lateral_yaw_command = float(max_lateral_yaw_command)
+        self.max_pure_yaw_translation_command = float(max_pure_yaw_translation_command)
+
+        def make_residual() -> nn.Sequential:
+            module = nn.Sequential(
+                nn.Linear(num_actor_obs, hidden_dim),
+                _activation(activation),
+                nn.Linear(hidden_dim, num_actions),
+            )
+            nn.init.zeros_(module[-1].weight)
+            nn.init.zeros_(module[-1].bias)
+            return module
+
+        self.lateral_command_residual = make_residual()
+        self.pure_yaw_command_residual = make_residual()
+        print(
+            "Command residual actor: strict lateral and pure-yaw adapters "
+            f"({num_actor_obs}->{hidden_dim}->{num_actions}), zero initialized."
+        )
+
+    def command_masks(self, actor_obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        start = self.command_obs_start_index
+        command = actor_obs[..., start : start + 3]
+        lateral = (
+            (torch.abs(command[..., 1]) >= self.lateral_min_command)
+            & (torch.abs(command[..., 0]) <= self.max_lateral_forward_command)
+            & (torch.abs(command[..., 2]) <= self.max_lateral_yaw_command)
+        )
+        pure_yaw = (
+            (torch.linalg.vector_norm(command[..., :2], dim=-1)
+             <= self.max_pure_yaw_translation_command)
+            & (torch.abs(command[..., 2]) >= self.pure_yaw_min_command)
+        )
+        return lateral, pure_yaw
+
+    def actor_mean_from_flat_obs(self, actor_obs: torch.Tensor) -> torch.Tensor:
+        normalized_obs = self.actor_obs_normalizer(actor_obs)
+        mean = self.actor(normalized_obs)
+        lateral, pure_yaw = self.command_masks(actor_obs)
+        mean = mean + lateral.unsqueeze(-1).to(mean.dtype) * self.lateral_command_residual(normalized_obs)
+        mean = mean + pure_yaw.unsqueeze(-1).to(mean.dtype) * self.pure_yaw_command_residual(normalized_obs)
+        return mean
+
+    def act(self, obs: TensorDict, **kwargs: dict[str, Any]) -> torch.Tensor:
+        actor_obs = self.get_actor_obs(obs)
+        mean = self.actor_mean_from_flat_obs(actor_obs)
+        if self.noise_std_type == "scalar":
+            std = self.std.expand_as(mean)
+        else:
+            std = torch.exp(self.log_std).expand_as(mean)
+        self.distribution = Normal(mean, std)
+        return self.distribution.sample()
+
+    def act_inference(self, obs: TensorDict) -> torch.Tensor:
+        return self.actor_mean_from_flat_obs(self.get_actor_obs(obs))

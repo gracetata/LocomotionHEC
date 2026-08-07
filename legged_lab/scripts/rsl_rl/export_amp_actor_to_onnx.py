@@ -246,9 +246,39 @@ class AmpActorExporter(torch.nn.Module):
         self.actor = build_actor(model_state, activation_name)
         normalizer = build_actor_normalizer(model_state)
         self.normalizer = normalizer if normalizer is not None else torch.nn.Identity()
+        self.has_command_residual = (
+            "lateral_command_residual.0.weight" in model_state
+            and "pure_yaw_command_residual.0.weight" in model_state
+        )
+        if self.has_command_residual:
+            self.lateral_command_residual = build_named_mlp(
+                model_state, "lateral_command_residual", activation_name
+            )
+            self.pure_yaw_command_residual = build_named_mlp(
+                model_state, "pure_yaw_command_residual", activation_name
+            )
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.actor(self.normalizer(obs))
+        normalized_obs = self.normalizer(obs)
+        actions = self.actor(normalized_obs)
+        if self.has_command_residual:
+            command = obs[..., 6:9]
+            lateral = (
+                (torch.abs(command[..., 1]) >= 0.10)
+                & (torch.abs(command[..., 0]) <= 0.02)
+                & (torch.abs(command[..., 2]) <= 0.05)
+            )
+            pure_yaw = (
+                (torch.sqrt(torch.sum(torch.square(command[..., :2]), dim=-1)) <= 0.02)
+                & (torch.abs(command[..., 2]) >= 0.10)
+            )
+            actions = actions + lateral.unsqueeze(-1).to(actions.dtype) * self.lateral_command_residual(
+                normalized_obs
+            )
+            actions = actions + pure_yaw.unsqueeze(-1).to(actions.dtype) * self.pure_yaw_command_residual(
+                normalized_obs
+            )
+        return actions
 
 
 class FixedNormalizer(torch.nn.Module):
@@ -264,19 +294,25 @@ class FixedNormalizer(torch.nn.Module):
 
 
 def build_actor(model_state: Dict[str, torch.Tensor], activation_name: str) -> torch.nn.Sequential:
+    return build_named_mlp(model_state, "actor", activation_name)
+
+
+def build_named_mlp(
+    model_state: Dict[str, torch.Tensor], prefix: str, activation_name: str
+) -> torch.nn.Sequential:
     linear_indices = sorted(
         int(key.split(".")[1])
         for key in model_state
-        if key.startswith("actor.") and key.endswith(".weight")
+        if key.startswith(f"{prefix}.") and key.endswith(".weight")
     )
     if not linear_indices:
-        raise ValueError("No actor.*.weight tensors found in checkpoint model_state_dict.")
+        raise ValueError(f"No {prefix}.*.weight tensors found in checkpoint model_state_dict.")
 
     activation_cls = activation_from_name(activation_name)
     layers: List[torch.nn.Module] = []
     for position, layer_index in enumerate(linear_indices):
-        weight = model_state[f"actor.{layer_index}.weight"].float()
-        bias = model_state[f"actor.{layer_index}.bias"].float()
+        weight = model_state[f"{prefix}.{layer_index}.weight"].float()
+        bias = model_state[f"{prefix}.{layer_index}.bias"].float()
         layer = torch.nn.Linear(weight.shape[1], weight.shape[0])
         with torch.no_grad():
             layer.weight.copy_(weight)

@@ -12,9 +12,13 @@ and zero-linear-velocity in-place yaw. The 96/297/29 policy interface and the
 - Baseline-policy KL uses scale `0.005` on the two specialization command
   families and `0.08` on retention samples. Only retention KL is subject to the
   `0.15` hard limit.
-- The first actor hidden layer and AMP discriminator/normalizer stay frozen.
-  Iterations 0-7 update only the fresh critic; remaining actor layers and action
-  noise become trainable at iteration 8. Actor updates use `7.5e-6`, two PPO
+- The complete baseline actor and AMP discriminator/normalizer stay frozen.
+  Two zero-initialized `96→64→29` residual adapters are gated separately for
+  strict lateral and strict pure-yaw commands. The gate is exactly zero for
+  forward/general Nav2 commands, so their deterministic actor output is
+  structurally identical to `model_12995`, not merely encouraged by KL.
+  Iterations 0-7 update only the fresh critic; the residual adapters and action
+  noise become trainable at iteration 8. Adapter updates use `7.5e-6`, two PPO
   epochs, and clip `0.12` so the retention KL guard is approached gradually.
 - AMP style reward remains at 15% on retention samples, but is disabled on the
   two specialization modes because the frozen forward-walking discriminator
@@ -58,7 +62,8 @@ evaluated with the measured carrier command (`vx=0.20` for lateral and
 baseline strict-command action toward that carrier action. This bounded
 counterfactual teacher applies only to the 80% specialization samples; the 20%
 Nav2 retention samples remain governed only by their baseline KL and frozen AMP
-style anchor. Task rewards and drift/clearance guards still determine whether
+style anchor. The teacher loss trains only the matching residual adapter; it
+cannot alter the frozen base actor. Task rewards and drift/clearance guards still determine whether
 the transferred gait becomes true lateral motion or true root-yaw motion.
 
 Carrier stage uses `vx=0.15-0.20` for lateral and `vx=0.10-0.15` for yaw:
@@ -85,14 +90,19 @@ Stage 1 is the authoritative restart. It uses `|vy|=0.25-0.45 m/s` and
 leak/drift/cadence penalties so the policy can initiate motion:
 
 ```bash
-STAGE=1 COMMAND_BRIDGE_SCALE=0.20 MAX_ITERATIONS=20 \
-RUN_NAME=nav2_two_goal_stage1_bridge_teacher \
+STAGE=1 COMMAND_BRIDGE_SCALE=20.0 MAX_ITERATIONS=4 \
+RUN_NAME=nav2_two_goal_stage1_residual_bootstrap \
   bash legged_lab/scripts/train_g1_amp_nav2_two_goal.sh
 ```
 
-Evaluate deterministic MuJoCo at iteration 10 and 20. If neither strict
-response improves, stop rather than adding iterations; change the bridge
-strength or reward balance and restart from `model_12995.pt`.
+For the bootstrap diagnostic, pass
+`agent.actor_warmup_iterations=0 agent.save_interval=1
+agent.algorithm.command_bridge_cfg.teacher_delta_fraction=1.0` and evaluate
+every checkpoint. Once both modes step, continue from the accepted checkpoint
+with `COMMAND_BRIDGE_SCALE=0` so real displacement, heading, drift, and sole
+clearance—not imitation—determine the final behavior. If neither strict
+response improves within four bootstrap updates, stop rather than adding
+iterations.
 
 Stage 2 uses `|vy|=0.10-0.40 m/s` and `|wz|=0.20-0.50 rad/s` and restores the
 quality guards. It must start from an accepted stage-1 full-state checkpoint:

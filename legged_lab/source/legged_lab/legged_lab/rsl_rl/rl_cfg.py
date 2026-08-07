@@ -44,6 +44,20 @@ class RslRlPpoActorCriticConv2dCfg(RslRlPpoActorCriticCfg):
     conv_linear_output_size: int = 16
     """Output size of the linear layer after the convolutional features are flattened."""
 
+
+@configclass
+class RslRlPpoActorCriticCommandResidualCfg(RslRlPpoActorCriticCfg):
+    """Feed-forward actor with zero-initialized two-goal residual adapters."""
+
+    class_name: str = "ActorCriticCommandResidual"
+    command_residual_hidden_dim: int = 64
+    command_obs_start_index: int = 6
+    lateral_min_command: float = 0.10
+    pure_yaw_min_command: float = 0.10
+    max_lateral_forward_command: float = 0.02
+    max_lateral_yaw_command: float = 0.05
+    max_pure_yaw_translation_command: float = 0.02
+
 ############################
 # Algorithm configurations #
 ############################

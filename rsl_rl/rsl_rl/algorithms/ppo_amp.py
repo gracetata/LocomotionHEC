@@ -211,7 +211,22 @@ class PPOAMP(PPO):
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
             state_dict = checkpoint.get("model_state_dict", checkpoint)
             self.baseline_policy = copy.deepcopy(self.policy).to(self.device)
-            self.baseline_policy.load_state_dict(state_dict)
+            baseline_load = self.baseline_policy.load_state_dict(state_dict, strict=False)
+            allowed_missing_prefixes = (
+                "lateral_command_residual.",
+                "pure_yaw_command_residual.",
+            )
+            unexpected = list(getattr(baseline_load, "unexpected_keys", []))
+            missing = [
+                key
+                for key in getattr(baseline_load, "missing_keys", [])
+                if not key.startswith(allowed_missing_prefixes)
+            ]
+            if unexpected or missing:
+                raise RuntimeError(
+                    "Frozen baseline policy is incompatible with command-residual policy: "
+                    f"missing={missing}, unexpected={unexpected}"
+                )
             self.baseline_policy.eval()
             for parameter in self.baseline_policy.parameters():
                 parameter.requires_grad_(False)

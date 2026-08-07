@@ -240,7 +240,9 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     ):
         assert required in block
     assert "load_actor_amp_only = True" in agent
-    assert "freeze_actor_hidden_layers = 1" in agent
+    assert "freeze_actor_hidden_layers = 0" in agent
+    assert "freeze_base_actor = True" in agent
+    assert "RslRlPpoActorCriticCommandResidualCfg" in agent
     assert "actor_warmup_iterations = 8" in agent
     assert "freeze_discriminator = True" in agent
     assert "command_conditioned_style_reward = True" in agent

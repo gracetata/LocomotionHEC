@@ -121,7 +121,8 @@ if [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_BASELINE}" ]]; then
 else
     echo "Load contract     : full-state continuation from accepted prior curriculum stage"
 fi
-echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, actor first layer frozen"
+echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, base actor frozen"
+echo "Trainable policy  : separate lateral/yaw residual adapters + action noise"
 echo "Actor schedule    : fresh-load iterations 0-7 critic-only, then actor enabled"
 echo "Command bridge    : strict-goal carrier-teacher scale=${COMMAND_BRIDGE_SCALE}"
 echo "Baseline KL       : specialization=0.005, retention=${BASELINE_KL_SCALE}, hard=0.15"

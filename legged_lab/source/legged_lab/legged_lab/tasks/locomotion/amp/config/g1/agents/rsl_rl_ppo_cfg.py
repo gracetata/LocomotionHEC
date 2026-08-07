@@ -19,7 +19,12 @@ import os
 from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlSymmetryCfg
-from legged_lab.rsl_rl import RslRlPpoAmpAlgorithmCfg, RslRlAmpCfg, RslRlPpoActorCriticConv2dCfg
+from legged_lab.rsl_rl import (
+    RslRlAmpCfg,
+    RslRlPpoActorCriticCommandResidualCfg,
+    RslRlPpoActorCriticConv2dCfg,
+    RslRlPpoAmpAlgorithmCfg,
+)
 from legged_lab import LEGGED_LAB_ROOT_DIR
 from legged_lab.tasks.locomotion.amp.mdp.symmetry import g1
 
@@ -129,7 +134,17 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
     load_policy_only = False
     reset_iteration_on_policy_only_load = True
     reset_amp_on_load = False
-    freeze_actor_hidden_layers = 1
+    policy = RslRlPpoActorCriticCommandResidualCfg(
+        init_noise_std=0.35,
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        actor_obs_normalization=False,
+        critic_obs_normalization=False,
+        activation="elu",
+        command_residual_hidden_dim=64,
+    )
+    freeze_actor_hidden_layers = 0
+    freeze_base_actor = True
     actor_warmup_iterations = 8
     restore_configured_learning_rate_on_load = True
     save_interval = 10
