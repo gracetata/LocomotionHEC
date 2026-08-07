@@ -278,6 +278,38 @@ class AmpActorExporter(torch.nn.Module):
             model_state.get("lateral_teacher_opposite_yaw_abs", torch.tensor(0.0)).float(),
         )
         self.register_buffer(
+            "lateral_teacher_mixture_enabled",
+            model_state.get("lateral_teacher_mixture_enabled", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_secondary_forward_command",
+            model_state.get("lateral_teacher_secondary_forward_command", torch.tensor(-0.60)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_secondary_same_yaw_abs",
+            model_state.get("lateral_teacher_secondary_same_yaw_abs", torch.tensor(0.80)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_tertiary_forward_command",
+            model_state.get("lateral_teacher_tertiary_forward_command", torch.tensor(0.60)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_tertiary_same_yaw_abs",
+            model_state.get("lateral_teacher_tertiary_same_yaw_abs", torch.tensor(0.80)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_primary_weight",
+            model_state.get("lateral_teacher_primary_weight", torch.tensor(0.44)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_secondary_weight",
+            model_state.get("lateral_teacher_secondary_weight", torch.tensor(0.412)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_tertiary_weight",
+            model_state.get("lateral_teacher_tertiary_weight", torch.tensor(0.148)).float(),
+        )
+        self.register_buffer(
             "pure_yaw_teacher_forward_command",
             model_state.get("pure_yaw_teacher_forward_command", torch.tensor(0.15)).float(),
         )
@@ -393,6 +425,45 @@ class AmpActorExporter(torch.nn.Module):
                 teacher_yaw,
             )
             teacher_actions = self.actor(self.normalizer(teacher_obs))
+            secondary_obs = obs.clone()
+            secondary_obs[..., 6] = torch.where(
+                lateral,
+                self.lateral_teacher_secondary_forward_command.to(secondary_obs.dtype),
+                secondary_obs[..., 6],
+            )
+            secondary_obs[..., 7] = torch.where(
+                lateral,
+                torch.where(teacher_y >= 0.0, teacher_lateral_magnitude, -teacher_lateral_magnitude),
+                secondary_obs[..., 7],
+            )
+            same_yaw_sign = torch.where(teacher_y >= 0.0, 1.0, -1.0).to(secondary_obs.dtype)
+            secondary_obs[..., 8] = torch.where(
+                lateral,
+                same_yaw_sign * self.lateral_teacher_secondary_same_yaw_abs.to(secondary_obs.dtype),
+                secondary_obs[..., 8],
+            )
+            tertiary_obs = secondary_obs.clone()
+            tertiary_obs[..., 6] = torch.where(
+                lateral,
+                self.lateral_teacher_tertiary_forward_command.to(tertiary_obs.dtype),
+                tertiary_obs[..., 6],
+            )
+            tertiary_obs[..., 8] = torch.where(
+                lateral,
+                same_yaw_sign * self.lateral_teacher_tertiary_same_yaw_abs.to(tertiary_obs.dtype),
+                tertiary_obs[..., 8],
+            )
+            mixture_actions = (
+                self.lateral_teacher_primary_weight.to(teacher_actions.dtype) * teacher_actions
+                + self.lateral_teacher_secondary_weight.to(teacher_actions.dtype)
+                * self.actor(self.normalizer(secondary_obs))
+                + self.lateral_teacher_tertiary_weight.to(teacher_actions.dtype)
+                * self.actor(self.normalizer(tertiary_obs))
+            )
+            mixture_mask = (
+                lateral & (self.lateral_teacher_mixture_enabled.to(lateral.dtype) > 0)
+            ).unsqueeze(-1)
+            teacher_actions = torch.where(mixture_mask, mixture_actions, teacher_actions)
             bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(actions.dtype)
             bridge_fraction = self.fixed_command_bridge_fraction.to(actions.dtype)
             blended_actions = actions + bridge_mask * bridge_fraction * (
