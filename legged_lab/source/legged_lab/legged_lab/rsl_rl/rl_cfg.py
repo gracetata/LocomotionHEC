@@ -57,6 +57,9 @@ class RslRlPpoActorCriticCommandResidualCfg(RslRlPpoActorCriticCfg):
     max_lateral_forward_command: float = 0.02
     max_lateral_yaw_command: float = 0.05
     max_pure_yaw_translation_command: float = 0.02
+    fixed_command_bridge_fraction: float = 0.0
+    lateral_teacher_forward_command: float = 0.20
+    pure_yaw_teacher_forward_command: float = 0.15
 
 ############################
 # Algorithm configurations #

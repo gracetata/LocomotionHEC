@@ -41,6 +41,9 @@ class ActorCriticCommandResidual(ActorCritic):
         max_lateral_forward_command: float = 0.02,
         max_lateral_yaw_command: float = 0.05,
         max_pure_yaw_translation_command: float = 0.02,
+        fixed_command_bridge_fraction: float = 0.0,
+        lateral_teacher_forward_command: float = 0.20,
+        pure_yaw_teacher_forward_command: float = 0.15,
         activation: str = "elu",
         state_dependent_std: bool = False,
         **kwargs: dict[str, Any],
@@ -65,6 +68,26 @@ class ActorCriticCommandResidual(ActorCritic):
         self.max_lateral_forward_command = float(max_lateral_forward_command)
         self.max_lateral_yaw_command = float(max_lateral_yaw_command)
         self.max_pure_yaw_translation_command = float(max_pure_yaw_translation_command)
+        if not 0.0 <= float(fixed_command_bridge_fraction) <= 1.0:
+            raise ValueError("fixed_command_bridge_fraction must be in [0, 1].")
+        if float(lateral_teacher_forward_command) <= self.max_lateral_forward_command:
+            raise ValueError("lateral teacher command must exceed the strict forward band.")
+        if float(pure_yaw_teacher_forward_command) <= self.max_pure_yaw_translation_command:
+            raise ValueError("pure-yaw teacher command must exceed the strict translation band.")
+        # Buffers make the deployed analytical bridge self-describing in a
+        # checkpoint without adding trainable parameters.
+        self.register_buffer(
+            "fixed_command_bridge_fraction",
+            torch.tensor(float(fixed_command_bridge_fraction)),
+        )
+        self.register_buffer(
+            "lateral_teacher_forward_command",
+            torch.tensor(float(lateral_teacher_forward_command)),
+        )
+        self.register_buffer(
+            "pure_yaw_teacher_forward_command",
+            torch.tensor(float(pure_yaw_teacher_forward_command)),
+        )
 
         def make_residual() -> nn.Sequential:
             module = nn.Sequential(
@@ -102,6 +125,24 @@ class ActorCriticCommandResidual(ActorCritic):
         normalized_obs = self.actor_obs_normalizer(actor_obs)
         mean = self.actor(normalized_obs)
         lateral, pure_yaw = self.command_masks(actor_obs)
+        teacher_obs = actor_obs.clone()
+        command_x = teacher_obs[..., self.command_obs_start_index]
+        command_x = torch.where(
+            lateral,
+            self.lateral_teacher_forward_command.to(command_x.dtype),
+            command_x,
+        )
+        command_x = torch.where(
+            pure_yaw,
+            self.pure_yaw_teacher_forward_command.to(command_x.dtype),
+            command_x,
+        )
+        teacher_obs[..., self.command_obs_start_index] = command_x
+        teacher_mean = self.actor(self.actor_obs_normalizer(teacher_obs))
+        bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(mean.dtype)
+        mean = mean + bridge_mask * self.fixed_command_bridge_fraction.to(mean.dtype) * (
+            teacher_mean - mean
+        )
         mean = mean + lateral.unsqueeze(-1).to(mean.dtype) * self.lateral_command_residual(normalized_obs)
         mean = mean + pure_yaw.unsqueeze(-1).to(mean.dtype) * self.pure_yaw_command_residual(normalized_obs)
         return mean

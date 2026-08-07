@@ -245,6 +245,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "freeze_actor_hidden_layers = 0" in agent
     assert "freeze_base_actor = True" in agent
     assert "RslRlPpoActorCriticCommandResidualCfg" in agent
+    assert "fixed_command_bridge_fraction=1.0" in agent
     assert "actor_warmup_iterations = 8" in agent
     assert "freeze_discriminator = True" in agent
     assert "command_conditioned_style_reward = True" in agent

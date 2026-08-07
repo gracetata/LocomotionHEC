@@ -126,7 +126,7 @@ else
     echo "Load contract     : full-state continuation from accepted prior curriculum stage"
 fi
 echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, base actor frozen"
-echo "Trainable policy  : separate lateral/yaw residual adapters + action noise"
+echo "Trainable policy  : exact carrier bridge + separate lateral/yaw residual adapters"
 echo "Actor schedule    : fresh-load iterations 0-7 critic-only, then actor enabled"
 echo "Command bridge    : strict-goal carrier-teacher scale=${COMMAND_BRIDGE_SCALE}"
 echo "Bridge optimizer  : residual_lr=${COMMAND_BRIDGE_RESIDUAL_LR}, updates/batch=${COMMAND_BRIDGE_RESIDUAL_UPDATES}"

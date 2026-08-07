@@ -261,6 +261,18 @@ class AmpActorExporter(torch.nn.Module):
             "lateral_command_residual.0.weight" in model_state
             and "pure_yaw_command_residual.0.weight" in model_state
         )
+        self.register_buffer(
+            "fixed_command_bridge_fraction",
+            model_state.get("fixed_command_bridge_fraction", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "lateral_teacher_forward_command",
+            model_state.get("lateral_teacher_forward_command", torch.tensor(0.20)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_teacher_forward_command",
+            model_state.get("pure_yaw_teacher_forward_command", torch.tensor(0.15)).float(),
+        )
         if self.has_command_residual:
             self.lateral_command_residual = build_named_mlp(
                 model_state, "lateral_command_residual", activation_name
@@ -287,6 +299,24 @@ class AmpActorExporter(torch.nn.Module):
             pure_yaw = (
                 (torch.sqrt(torch.sum(torch.square(command[..., :2]), dim=-1)) <= 0.02)
                 & (torch.abs(command[..., 2]) >= 0.10)
+            )
+            teacher_obs = obs.clone()
+            teacher_x = teacher_obs[..., 6]
+            teacher_x = torch.where(
+                lateral,
+                self.lateral_teacher_forward_command.to(teacher_x.dtype),
+                teacher_x,
+            )
+            teacher_x = torch.where(
+                pure_yaw,
+                self.pure_yaw_teacher_forward_command.to(teacher_x.dtype),
+                teacher_x,
+            )
+            teacher_obs[..., 6] = teacher_x
+            teacher_actions = self.actor(self.normalizer(teacher_obs))
+            bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(actions.dtype)
+            actions = actions + bridge_mask * self.fixed_command_bridge_fraction.to(actions.dtype) * (
+                teacher_actions - actions
             )
             actions = actions + lateral.unsqueeze(-1).to(actions.dtype) * self.lateral_command_residual(
                 normalized_obs

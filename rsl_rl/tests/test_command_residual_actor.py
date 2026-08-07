@@ -53,3 +53,27 @@ def test_residual_gates_never_change_forward_retention_commands():
     torch.testing.assert_close(actual[0], base[0] + 1.0)
     torch.testing.assert_close(actual[1], base[1] + 2.0)
     torch.testing.assert_close(actual[2:], base[2:], rtol=0.0, atol=0.0)
+
+
+def test_fixed_bridge_is_exact_carrier_actor_only_for_strict_commands():
+    obs = _observations()
+    obs["policy"][0, 6:9] = torch.tensor([0.0, 0.25, 0.0])
+    obs["policy"][1, 6:9] = torch.tensor([0.0, 0.0, 0.35])
+    obs["policy"][2, 6:9] = torch.tensor([0.5, 0.0, 0.0])
+    obs["policy"][3, 6:9] = torch.tensor([0.20, 0.25, 0.0])
+    model = ActorCriticCommandResidual(
+        obs,
+        {"policy": ["policy"], "critic": ["critic"]},
+        29,
+        actor_hidden_dims=[32, 16],
+        critic_hidden_dims=[32, 16],
+        command_residual_hidden_dim=8,
+        fixed_command_bridge_fraction=1.0,
+    ).eval()
+    teacher_obs = obs["policy"].clone()
+    teacher_obs[0, 6] = 0.20
+    teacher_obs[1, 6] = 0.15
+    expected = model.actor(teacher_obs)
+    actual = model.act_inference(obs)
+    torch.testing.assert_close(actual[:2], expected[:2], rtol=0.0, atol=0.0)
+    torch.testing.assert_close(actual[2:], model.actor(obs["policy"])[2:], rtol=0.0, atol=0.0)

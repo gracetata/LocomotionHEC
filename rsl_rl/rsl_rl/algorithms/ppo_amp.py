@@ -215,6 +215,9 @@ class PPOAMP(PPO):
             allowed_missing_prefixes = (
                 "lateral_command_residual.",
                 "pure_yaw_command_residual.",
+                "fixed_command_bridge_fraction",
+                "lateral_teacher_forward_command",
+                "pure_yaw_teacher_forward_command",
             )
             unexpected = list(getattr(baseline_load, "unexpected_keys", []))
             missing = [
@@ -230,6 +233,10 @@ class PPOAMP(PPO):
             self.baseline_policy.eval()
             for parameter in self.baseline_policy.parameters():
                 parameter.requires_grad_(False)
+            # The KL/teacher baseline is always the original actor.  A fixed
+            # carrier bridge belongs only to the trainable specialization policy.
+            if hasattr(self.baseline_policy, "fixed_command_bridge_fraction"):
+                self.baseline_policy.fixed_command_bridge_fraction.zero_()
             print(f"Loaded frozen baseline policy for KL regularization: {checkpoint_path}")
 
         self.command_bridge_enabled = bool(self.command_bridge_cfg.get("enabled", False))

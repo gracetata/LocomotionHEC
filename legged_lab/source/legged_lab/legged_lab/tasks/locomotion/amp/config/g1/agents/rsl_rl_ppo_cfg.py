@@ -142,6 +142,9 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         critic_obs_normalization=False,
         activation="elu",
         command_residual_hidden_dim=64,
+        fixed_command_bridge_fraction=1.0,
+        lateral_teacher_forward_command=0.20,
+        pure_yaw_teacher_forward_command=0.15,
     )
     freeze_actor_hidden_layers = 0
     freeze_base_actor = True
