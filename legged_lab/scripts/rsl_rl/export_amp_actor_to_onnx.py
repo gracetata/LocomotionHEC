@@ -348,7 +348,7 @@ class AmpActorExporter(torch.nn.Module):
             )
             teacher_obs[..., 7] = torch.where(
                 lateral,
-                torch.copysign(teacher_lateral_magnitude, teacher_y),
+                torch.where(teacher_y >= 0.0, teacher_lateral_magnitude, -teacher_lateral_magnitude),
                 teacher_y,
             )
             teacher_yaw = teacher_obs[..., 8]
@@ -367,13 +367,15 @@ class AmpActorExporter(torch.nn.Module):
                 self.pure_yaw_positive_teacher_yaw_max.to(teacher_yaw.dtype),
                 self.pure_yaw_negative_teacher_yaw_max.to(teacher_yaw.dtype),
             )
-            bounded_teacher_yaw = torch.copysign(
-                torch.clamp(
-                    torch.abs(teacher_yaw) * teacher_yaw_scale,
-                    teacher_yaw_min,
-                    teacher_yaw_max,
-                ),
-                teacher_yaw,
+            bounded_teacher_yaw_magnitude = torch.clamp(
+                torch.abs(teacher_yaw) * teacher_yaw_scale,
+                teacher_yaw_min,
+                teacher_yaw_max,
+            )
+            bounded_teacher_yaw = torch.where(
+                teacher_yaw >= 0.0,
+                bounded_teacher_yaw_magnitude,
+                -bounded_teacher_yaw_magnitude,
             )
             teacher_obs[..., 8] = torch.where(
                 pure_yaw,

@@ -194,7 +194,7 @@ class ActorCriticCommandResidual(ActorCritic):
         )
         teacher_obs[..., self.command_obs_start_index + 1] = torch.where(
             lateral,
-            torch.copysign(teacher_lateral_magnitude, command_y),
+            torch.where(command_y >= 0.0, teacher_lateral_magnitude, -teacher_lateral_magnitude),
             command_y,
         )
         command_yaw = teacher_obs[..., self.command_obs_start_index + 2]
@@ -213,7 +213,8 @@ class ActorCriticCommandResidual(ActorCritic):
             self.pure_yaw_positive_teacher_yaw_max.to(command_yaw.dtype),
             self.pure_yaw_negative_teacher_yaw_max.to(command_yaw.dtype),
         )
-        teacher_yaw = torch.copysign(torch.clamp(torch.abs(command_yaw) * yaw_scale, yaw_min, yaw_max), command_yaw)
+        teacher_yaw_magnitude = torch.clamp(torch.abs(command_yaw) * yaw_scale, yaw_min, yaw_max)
+        teacher_yaw = torch.where(command_yaw >= 0.0, teacher_yaw_magnitude, -teacher_yaw_magnitude)
         teacher_obs[..., self.command_obs_start_index + 2] = torch.where(
             pure_yaw,
             teacher_yaw,

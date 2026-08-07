@@ -99,8 +99,10 @@ def build_two_goal_carrier_teacher_obs(
         torch.abs(teacher_obs[:, start + 1]),
         torch.tensor(float(lateral_teacher_min_abs_command), device=teacher_obs.device),
     )
-    teacher_obs[lateral, start + 1] = torch.copysign(
-        lateral_magnitude[lateral], teacher_obs[lateral, start + 1]
+    teacher_obs[lateral, start + 1] = torch.where(
+        teacher_obs[lateral, start + 1] >= 0.0,
+        lateral_magnitude[lateral],
+        -lateral_magnitude[lateral],
     )
     teacher_obs[pure_yaw, start] = float(pure_yaw_teacher_forward_command)
     yaw_scale = torch.where(
@@ -118,9 +120,15 @@ def build_two_goal_carrier_teacher_obs(
         float(pure_yaw_positive_teacher_yaw_max),
         float(pure_yaw_negative_teacher_yaw_max),
     )
-    bounded_yaw = torch.copysign(
-        torch.clamp(torch.abs(teacher_obs[:, start + 2]) * yaw_scale, yaw_min, yaw_max),
-        teacher_obs[:, start + 2],
+    bounded_yaw_magnitude = torch.clamp(
+        torch.abs(teacher_obs[:, start + 2]) * yaw_scale,
+        yaw_min,
+        yaw_max,
+    )
+    bounded_yaw = torch.where(
+        teacher_obs[:, start + 2] >= 0.0,
+        bounded_yaw_magnitude,
+        -bounded_yaw_magnitude,
     )
     teacher_obs[pure_yaw, start + 2] = bounded_yaw[pure_yaw]
     return teacher_obs, lateral, pure_yaw
