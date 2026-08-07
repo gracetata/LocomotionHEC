@@ -2198,12 +2198,12 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
         self.commands.base_velocity.mode_command_clip_max = (0.0, 0.35, 0.0)
         self.rewards.two_goal_signed_root_response = RewTerm(
             func=mdp.two_goal_signed_root_response,
-            weight=12.0,
+            weight=20.0,
             params={"command_name": "base_velocity", "min_lateral_command": 0.10},
         )
-        self.rewards.two_goal_response_shortfall.weight = -80.0
+        self.rewards.two_goal_response_shortfall.weight = -150.0
         self.rewards.two_goal_response_shortfall.params.update(
-            {"target_fraction": 0.75, "max_penalty": 1.0}
+            {"target_fraction": 0.80, "max_penalty": 1.0}
         )
         self.rewards.lateral_command_leak_l2.weight = -0.50
         self.rewards.lateral_command_leak_l2.params.update(
@@ -2222,7 +2222,7 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
         # escape from the unsafe model_9996 gait.
         self.rewards.lateral_foot_ordering_l2 = RewTerm(
             func=mdp.lateral_foot_ordering_l2,
-            weight=-6.0,
+            weight=-8.0,
             params={
                 "command_name": "base_velocity",
                 "asset_cfg": SceneEntityCfg(
@@ -2248,7 +2248,7 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
                     "interpolation_steps": 10,
                 }
             )
-        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -4.0
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -8.0
         self.rewards.swept_oriented_footprint_hard_barrier.weight = -1.0
 
 
