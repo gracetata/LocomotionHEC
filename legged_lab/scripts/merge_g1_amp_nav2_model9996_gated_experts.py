@@ -87,7 +87,7 @@ def main() -> None:
     state["fixed_command_bridge_fraction"] = torch.tensor(0.0)
     state["lateral_expert_forward_command"] = torch.tensor(float(args.lateral_forward))
     state["lateral_expert_same_yaw_abs"] = torch.tensor(float(args.lateral_yaw_abs))
-    merged["infos"] = dict(merged.get("infos", {}))
+    merged["infos"] = dict(merged.get("infos") or {})
     merged["infos"].update(
         {
             "gated_expert_model9996_sha256": MODEL9996_SHA256,
