@@ -132,6 +132,11 @@ def test_tasks_are_manager_amp_and_model9996_specific():
             "G1AmpNav2TwoGoalModel9996FullActorLateralEnvCfg",
             "G1Nav2TwoGoalModel9996FullActorLateralRslRlOnPolicyRunnerAmpCfg",
         ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateralFinal-v0",
+            "G1AmpNav2TwoGoalModel9996FullActorLateralFinalEnvCfg",
+            "G1Nav2TwoGoalModel9996FullActorLateralFinalRslRlOnPolicyRunnerAmpCfg",
+        ),
     ):
         assert f'id="{task}"' in registry
         task_block = registry[registry.index(f'id="{task}"') :]
@@ -311,6 +316,12 @@ def test_full_actor_escape_stage_is_exact_model9996_and_safety_constrained():
     assert "two_goal_signed_root_response.weight = 100.0" in lateral
     assert "two_goal_response_shortfall.weight = -300.0" in lateral
     assert "swept_oriented_footprint_hard_barrier.weight = -150.0" in lateral
+    final_start = env_text.index("class G1AmpNav2TwoGoalModel9996FullActorLateralFinalEnvCfg")
+    final = env_text[final_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
+    assert "two_goal_signed_root_response.weight = 80.0" in final
+    assert "two_goal_response_shortfall.weight = -400.0" in final
+    assert "lateral_command_leak_l2.weight = -20.0" in final
+    assert "swept_oriented_footprint_hard_barrier.weight = -150.0" in final
 
 
 def test_residual_calibration_preserves_base_and_scales_only_final_layer():

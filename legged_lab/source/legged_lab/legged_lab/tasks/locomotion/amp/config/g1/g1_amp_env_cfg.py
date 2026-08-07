@@ -2434,6 +2434,28 @@ class G1AmpNav2TwoGoalModel9996FullActorLateralEnvCfg(
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996FullActorLateralFinalEnvCfg(
+    G1AmpNav2TwoGoalModel9996FullActorLateralEnvCfg
+):
+    """Refine response and leakage only after both soles are in the safe set."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.two_goal_signed_root_response.weight = 80.0
+        self.rewards.two_goal_response_shortfall.weight = -400.0
+        self.rewards.two_goal_response_shortfall.params.update(
+            {"target_fraction": 0.80, "max_penalty": 1.0}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -20.0
+        self.rewards.lateral_command_leak_l2.params.update(
+            {"forward_velocity_scale": 0.040, "yaw_rate_scale": 0.050, "max_penalty": 100.0}
+        )
+        self.rewards.lateral_foot_ordering_l2.weight = -2.0
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -0.5
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -150.0
+
+
+@configclass
 class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Bootstrap the two target skills from the existing forward gait cycle."""
 

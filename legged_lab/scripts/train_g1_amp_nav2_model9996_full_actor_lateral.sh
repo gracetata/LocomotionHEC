@@ -8,7 +8,15 @@ LEGGED_LAB_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 MODEL9996=$(realpath "${LEGGED_LAB_DIR}/../checkpoint/nav2_behavior_model9996_source/model_9996.pt")
 MODEL9996_SIZE=16202421
 MODEL9996_SHA256="bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6"
-TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateral-v0"
+STAGE=${STAGE:-spacing}
+if [[ "${STAGE}" == "spacing" ]]; then
+    TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateral-v0"
+elif [[ "${STAGE}" == "final" ]]; then
+    TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateralFinal-v0"
+else
+    echo "Error: STAGE must be spacing or final." >&2
+    exit 1
+fi
 EXPERIMENT_NAME="g1_amp_nav2_two_goal_model9996_full_actor_lateral"
 OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996FullActorLateral"
 
@@ -54,8 +62,14 @@ echo "Protected source  : ${MODEL9996_SHA256}"
 echo "Stage source      : ${SOURCE_SHA256}"
 echo "Commands          : vx=wz=0, vy=+/-[0.20,0.35]"
 echo "Deployment intent : this actor is gated to strict lateral only"
-echo "Foot barrier      : hard -150 below 0.025 m; ordering -30"
-echo "Response          : signed +100; stationary shortfall -300"
+echo "Stage             : ${STAGE}"
+if [[ "${STAGE}" == "spacing" ]]; then
+    echo "Foot barrier      : hard -150 below 0.025 m; ordering -30"
+    echo "Response          : signed +100; stationary shortfall -300"
+else
+    echo "Foot barrier      : hard -150; safe-set shaping reduced"
+    echo "Response/leak     : signed +80; shortfall -400; leak -20"
+fi
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "=================================================="
 

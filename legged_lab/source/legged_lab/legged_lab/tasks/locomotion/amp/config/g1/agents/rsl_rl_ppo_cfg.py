@@ -409,3 +409,17 @@ class G1Nav2TwoGoalModel9996FullActorLateralRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.baseline_kl_cfg.enabled = False
         self.algorithm.baseline_kl_cfg.scale = 0.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
+
+
+@configclass
+class G1Nav2TwoGoalModel9996FullActorLateralFinalRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996FullActorLateralRslRlOnPolicyRunnerAmpCfg
+):
+    """Small safe-set updates for the final lateral response/leak trade-off."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 5.0e-6
+        self.algorithm.clip_param = 0.08
+        self.algorithm.num_learning_epochs = 3
+        self.algorithm.entropy_coef = 1.0e-4
