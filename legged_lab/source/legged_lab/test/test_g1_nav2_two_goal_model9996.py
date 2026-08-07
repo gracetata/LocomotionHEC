@@ -194,6 +194,19 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
     assert "lateral_foot_ordering_l2.weight = -8.0" in polish
     assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in polish
 
+    leakage_start = env_text.index(
+        "class G1AmpNav2TwoGoalModel9996LateralLeakageCorrectiveEnvCfg"
+    )
+    leakage = env_text[
+        leakage_start: env_text.index("class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg")
+    ]
+    assert "two_goal_signed_root_response.weight = 100.0" in leakage
+    assert "two_goal_response_shortfall.weight = -500.0" in leakage
+    assert "lateral_command_leak_l2.weight = -5.0" in leakage
+    assert "lateral_foot_ordering_l2.weight = -1.0" in leakage
+    assert "swept_oriented_footprint_soft_margin_l2.weight = -0.5" in leakage
+    assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in leakage
+
     yaw_start = env_text.index("class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg")
     yaw = env_text[yaw_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
     assert "two_goal_signed_root_response" in yaw
@@ -227,6 +240,8 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "lateral_specialist" in script
     assert "lateral_safety_polish" in script
     assert "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSafetyPolish-v0" in script
+    assert "lateral_leakage_corrective" in script
+    assert "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralLeakageCorrective-v0" in script
     assert "yaw_specialist" in script
     assert 'agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}"' in script
     assert 'agent.freeze_pure_yaw_residual="${FREEZE_PURE_YAW_RESIDUAL}"' in script

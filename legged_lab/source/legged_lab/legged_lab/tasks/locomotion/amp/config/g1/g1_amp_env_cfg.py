@@ -2269,6 +2269,28 @@ class G1AmpNav2TwoGoalModel9996LateralSafetyPolishEnvCfg(
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996LateralLeakageCorrectiveEnvCfg(
+    G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg
+):
+    """Remove forward/yaw leakage after a safe lateral gait already exists.
+
+    Inside the safe set, the hard sole barrier remains dominant while the
+    wide-stance shaping terms become weak guides.  Response and shortfall are
+    raised together with leakage so that standing still is strictly worse
+    than preserving useful lateral motion while cancelling parasitic motion.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.two_goal_signed_root_response.weight = 100.0
+        self.rewards.two_goal_response_shortfall.weight = -500.0
+        self.rewards.lateral_command_leak_l2.weight = -5.0
+        self.rewards.lateral_foot_ordering_l2.weight = -1.0
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -0.5
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -100.0
+
+
+@configclass
 class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg(
     G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg
 ):

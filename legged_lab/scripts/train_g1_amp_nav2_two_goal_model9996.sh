@@ -176,6 +176,25 @@ case "${STAGE}" in
         FOOT_BARRIER_DESCRIPTION="final signed ordering -8; SAT soft -8; hard/overlap -100"
         MAX_ITERATIONS=${MAX_ITERATIONS:-30}
         ;;
+    lateral_leakage_corrective)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralLeakageCorrective-v0"
+        : "${SOURCE_CHECKPOINT:?lateral_leakage_corrective requires a safe moving lateral checkpoint}"
+        : "${SOURCE_SIZE:?lateral_leakage_corrective requires SOURCE_SIZE}"
+        : "${SOURCE_SHA256:?lateral_leakage_corrective requires SOURCE_SHA256}"
+        [[ "${SOURCE_CHECKPOINT}" != "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: lateral_leakage_corrective must follow a safe residual gait." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=False
+        LOAD_POLICY_ONLY=True
+        COMMAND_BRIDGE_ENABLE=False
+        COMMAND_BRIDGE_SCALE=0.0
+        COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=True
+        FOOT_BARRIER_DESCRIPTION="safe-set corrective: response +100, shortfall -500, leak -5, hard barrier -100"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-30}
+        ;;
     yaw_specialist)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996YawSpecialist-v0"
         : "${SOURCE_CHECKPOINT:?yaw_specialist requires the accepted lateral checkpoint}"
