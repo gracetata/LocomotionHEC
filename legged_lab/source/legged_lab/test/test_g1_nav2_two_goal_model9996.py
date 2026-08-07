@@ -199,7 +199,10 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "pure_yaw_teacher_forward_command=0.0" in script
     assert "pure_yaw_positive_teacher_yaw_min=1.2" in script
     assert "pure_yaw_negative_teacher_yaw_min=1.2" in script
-    assert "teacher_delta_fraction=0.50" in script
+    assert "teacher_delta_fraction=1.0" in script
+    assert "lateral_cancel" in script
+    assert "lateral_teacher_forward_command=-0.30" in script
+    assert "teacher_delta_fraction=0.35" in script
     assert "lateral_specialist" in script
     assert "yaw_specialist" in script
     assert 'agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}"' in script

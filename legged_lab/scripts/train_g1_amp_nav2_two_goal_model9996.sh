@@ -104,6 +104,25 @@ case "${STAGE}" in
         FOOT_BARRIER_DESCRIPTION="yaw proxy distillation: strict +/-0.35 observes model_9996 zero-drift +/-1.2 action prior"
         MAX_ITERATIONS=${MAX_ITERATIONS:-10}
         ;;
+    lateral_cancel)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
+        : "${SOURCE_CHECKPOINT:?lateral_cancel requires the widest-foot moving checkpoint}"
+        : "${SOURCE_SIZE:?lateral_cancel requires SOURCE_SIZE}"
+        : "${SOURCE_SHA256:?lateral_cancel requires SOURCE_SHA256}"
+        [[ "${SOURCE_CHECKPOINT}" != "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: lateral_cancel requires a learned safe-foot residual policy." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=False
+        LOAD_POLICY_ONLY=True
+        COMMAND_BRIDGE_ENABLE=True
+        COMMAND_BRIDGE_SCALE=0.25
+        COMMAND_BRIDGE_RESIDUAL_LR=1.0e-4
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=True
+        FOOT_BARRIER_DESCRIPTION="safe-foot residual + model_9996 negative-forward cancellation prior"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-20}
+        ;;
     lateral_specialist)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
         : "${SOURCE_CHECKPOINT:?lateral_specialist requires a moving residual policy}"
@@ -216,6 +235,7 @@ for arg in "$@"; do
         agent.policy.fixed_command_bridge_fraction=*|\
         agent.algorithm.command_bridge_cfg.enabled=*|agent.algorithm.command_bridge_cfg.scale=*|\
         agent.algorithm.command_bridge_cfg.residual_learning_rate=*|\
+        agent.algorithm.command_bridge_cfg.lateral_teacher_forward_command=*|\
         agent.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command=*|\
         agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale=*|\
         agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale=*|\
@@ -241,7 +261,13 @@ if [[ "${STAGE}" == "yaw_proxy_bootstrap" ]]; then
         agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_max=1.2
         agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_min=1.2
         agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_max=1.2
-        agent.algorithm.command_bridge_cfg.teacher_delta_fraction=0.50
+        agent.algorithm.command_bridge_cfg.teacher_delta_fraction=1.0
+    )
+elif [[ "${STAGE}" == "lateral_cancel" ]]; then
+    STAGE_AGENT_ARGS+=(
+        agent.algorithm.command_bridge_cfg.lateral_teacher_forward_command=-0.30
+        agent.algorithm.command_bridge_cfg.lateral_teacher_min_abs_command=0.0
+        agent.algorithm.command_bridge_cfg.teacher_delta_fraction=0.35
     )
 fi
 
