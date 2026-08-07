@@ -11,6 +11,7 @@ ENV_CFG_FILE = G1_ROOT / "g1_amp_env_cfg.py"
 REGISTRY_FILE = G1_ROOT / "__init__.py"
 AGENT_CFG_FILE = G1_ROOT / "agents" / "rsl_rl_ppo_cfg.py"
 TRAIN_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model9996.sh"
+CALIBRATE_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "calibrate_g1_amp_nav2_two_goal_residual.py"
 ACCEPTANCE_SCRIPT = (
     LEGGED_LAB_ROOT / "scripts" / "test_g1_amp_nav2_two_goal_model9996_mujoco.sh"
 )
@@ -228,6 +229,18 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "Deployed carrier  : disabled" in script
     assert 'OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996"' in script
+
+
+def test_residual_calibration_preserves_base_and_scales_only_final_layer():
+    script = CALIBRATE_SCRIPT.read_text()
+    assert '"lateral": "lateral_command_residual"' in script
+    assert '"pure_yaw": "pure_yaw_command_residual"' in script
+    assert 'scaled_keys = (f"{prefix}.2.weight", f"{prefix}.2.bias")' in script
+    assert 'key.startswith("actor.")' in script
+    assert "torch.equal(state[key], value)" in script
+    assert "fixed_command_bridge_fraction" in script
+    assert "Refusing to overwrite" in script
+    assert MODEL9996_SHA256 in script
 
 
 def test_mujoco_acceptance_is_strict_and_bidirectional():
