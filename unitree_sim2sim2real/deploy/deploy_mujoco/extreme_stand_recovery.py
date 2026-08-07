@@ -1637,6 +1637,7 @@ class ExtremeStandRecoveryPerturbation:
         accelerations = np.stack(self.joint_acceleration_samples, axis=0)
         jerks = np.stack(self.joint_jerk_samples, axis=0)
         actor_actions = np.stack(self.actor_action_samples, axis=0)
+        raw_targets = np.stack(self.raw_target_position_samples, axis=0)
         targets = np.stack(self.target_position_samples, axis=0)
         pd_torques = np.stack(self.pd_torque_command_samples, axis=0)
         actuator_forces = np.stack(self.actuator_force_samples, axis=0)
@@ -1654,6 +1655,7 @@ class ExtremeStandRecoveryPerturbation:
         steady_accelerations = accelerations[steady_mask]
         steady_jerks = jerks[steady_mask]
         steady_actions = actor_actions[steady_mask]
+        steady_raw_targets = raw_targets[steady_mask]
         steady_targets = targets[steady_mask]
         steady_pd_torques = pd_torques[steady_mask]
         steady_actuator_forces = actuator_forces[steady_mask]
@@ -1706,6 +1708,41 @@ class ExtremeStandRecoveryPerturbation:
             if steady_actions.shape[0] >= 2 and sample_dt > 0.0
             else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
         )
+        action_second_differences = (
+            np.diff(steady_actions, n=2, axis=0)
+            if steady_actions.shape[0] >= 3
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        target_rates = (
+            np.diff(steady_targets, axis=0) / sample_dt
+            if steady_targets.shape[0] >= 2 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        target_accelerations = (
+            np.diff(steady_targets, n=2, axis=0) / (sample_dt * sample_dt)
+            if steady_targets.shape[0] >= 3 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        raw_target_rates = (
+            np.diff(steady_raw_targets, axis=0) / sample_dt
+            if steady_raw_targets.shape[0] >= 2 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        raw_target_accelerations = (
+            np.diff(steady_raw_targets, n=2, axis=0) / (sample_dt * sample_dt)
+            if steady_raw_targets.shape[0] >= 3 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        torque_rates = (
+            np.diff(steady_pd_torques, axis=0) / sample_dt
+            if steady_pd_torques.shape[0] >= 2 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        target_default_errors = steady_targets - self.default_joint_positions[None, :]
+        raw_target_default_errors = (
+            steady_raw_targets - self.default_joint_positions[None, :]
+        )
+        mechanical_power = steady_actuator_forces * steady_velocities
         finite_accelerations = steady_accelerations[
             np.all(np.isfinite(steady_accelerations), axis=1)
         ]
@@ -1723,6 +1760,12 @@ class ExtremeStandRecoveryPerturbation:
             if np.any(finite_limits)
             else math.nan
         )
+        relative_pd_torque = np.full_like(steady_pd_torques, math.nan)
+        relative_pd_torque[finite_limits] = (
+            np.abs(steady_pd_torques[finite_limits])
+            / steady_torque_limits[finite_limits]
+        )
+        soft_peak_relative_pd_torque = np.maximum(relative_pd_torque - 0.60, 0.0)
         foot_errors = steady_foot_distances - self.default_foot_planar_distance_m
         foot_error_stats = _finite_stats(foot_errors)
         foot_distance_stats = _finite_stats(steady_foot_distances)
@@ -1800,6 +1843,9 @@ class ExtremeStandRecoveryPerturbation:
             "actor_action": {
                 "value": _finite_stats(steady_actions),
                 "delta_rate_per_s": _finite_stats(action_rates),
+                "second_difference_per_step": _finite_stats(
+                    action_second_differences
+                ),
                 "high_frequency_8_25hz_rms": {
                     "mean_across_joints": (
                         float(np.nanmean(action_high_frequency_rms))
@@ -1821,6 +1867,10 @@ class ExtremeStandRecoveryPerturbation:
                 },
             },
             "target_joint_position_rad": {
+                "value": _finite_stats(steady_targets),
+                "default_error": _finite_stats(target_default_errors),
+                "velocity_rad_s": _finite_stats(target_rates),
+                "acceleration_rad_s2": _finite_stats(target_accelerations),
                 "high_frequency_8_25hz_rms": {
                     "mean_across_joints": (
                         float(np.nanmean(target_high_frequency_rms))
@@ -1834,11 +1884,30 @@ class ExtremeStandRecoveryPerturbation:
                     ),
                 },
             },
+            "raw_target_joint_position_rad": {
+                "value": _finite_stats(steady_raw_targets),
+                "default_error": _finite_stats(raw_target_default_errors),
+                "velocity_rad_s": _finite_stats(raw_target_rates),
+                "acceleration_rad_s2": _finite_stats(raw_target_accelerations),
+            },
             "joint_velocity_rad_s": _finite_stats(steady_velocities),
             "joint_acceleration_rad_s2": _finite_stats(finite_accelerations),
+            "mechanical_power_w": {
+                **_finite_stats(mechanical_power),
+                "mean_square": (
+                    float(np.nanmean(np.square(mechanical_power)))
+                    if np.any(np.isfinite(mechanical_power))
+                    else math.nan
+                ),
+            },
             "actuator_effort_nm": {
                 "pd_command": _finite_stats(steady_pd_torques),
                 "actual": _finite_stats(steady_actuator_forces),
+                "pd_command_rate_nm_s": _finite_stats(torque_rates),
+                "relative_pd_command": _finite_stats(relative_pd_torque),
+                "soft_peak_above_60pct": _finite_stats(
+                    soft_peak_relative_pd_torque
+                ),
                 "pd_command_high_frequency_8_25hz_rms": {
                     "mean_across_joints": (
                         float(np.nanmean(torque_high_frequency_rms))

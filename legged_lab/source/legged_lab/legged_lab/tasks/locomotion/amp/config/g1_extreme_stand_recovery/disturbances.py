@@ -86,6 +86,7 @@ class single_body_force_curriculum(ManagerTermBase):
         initial_quiet_range_s: tuple[float, float] = (1.0, 2.0),
         force_magnitudes_n: tuple[float, float, float, float] = (10.0, 20.0, 36.0, 45.0),
         stage_step_thresholds: tuple[int, int, int] = (7200, 14400, 24000),
+        body_force_scales: tuple[float, ...] | None = None,
         direction_probabilities: tuple[float, float, float, float] = (0.15, 0.30, 0.20, 0.35),
     ) -> None:
         del asset_cfg, initial_quiet_range_s
@@ -95,6 +96,16 @@ class single_body_force_curriculum(ManagerTermBase):
             raise ValueError("V5 curriculum requires four force levels and three thresholds.")
         if any(force <= 0.0 for force in force_magnitudes_n):
             raise ValueError("All curriculum forces must be positive.")
+        if body_force_scales is None:
+            body_scales = torch.ones(len(self._body_ids), device=env.device)
+        else:
+            if len(body_force_scales) != len(self._body_ids) or any(
+                scale <= 0.0 or scale > 1.0 for scale in body_force_scales
+            ):
+                raise ValueError(
+                    "body_force_scales must match selected bodies and stay within (0, 1]."
+                )
+            body_scales = torch.tensor(body_force_scales, device=env.device)
         probabilities = torch.tensor(direction_probabilities, device=env.device)
         if probabilities.shape != (4,) or torch.any(probabilities < 0.0) or probabilities.sum() <= 0.0:
             raise ValueError("direction_probabilities must contain four non-negative values.")
@@ -148,8 +159,11 @@ class single_body_force_curriculum(ManagerTermBase):
                 dtype=self._asset.data.joint_pos.dtype,
             )
             rows = torch.arange(len(active_ids), device=env.device)
+            applied_magnitude = self._force_magnitude[active_ids] * body_scales[
+                self._active_body_slot[active_ids]
+            ]
             forces[rows, self._active_body_slot[active_ids], :2] = (
-                self._active_direction[active_ids] * self._force_magnitude[active_ids, None]
+                self._active_direction[active_ids] * applied_magnitude[:, None]
             )
             self._asset.set_external_force_and_torque(
                 forces,
@@ -165,3 +179,8 @@ class single_body_force_curriculum(ManagerTermBase):
         env.extras["log"]["ExtremeStand/disturbance_active_fraction"] = (
             self.active_time_left > 0.0
         ).float().mean()
+        env.extras["log"]["ExtremeStand/disturbance_applied_force_n"] = torch.where(
+            self.active_time_left > 0.0,
+            self._force_magnitude * body_scales[self._active_body_slot],
+            torch.zeros_like(self._force_magnitude),
+        ).mean()

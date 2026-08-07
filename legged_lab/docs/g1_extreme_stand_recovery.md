@@ -469,6 +469,30 @@ checkpoint：legged_lab/ExtremeStandRecovery Checkpoints/2026-08-06_20-23-31_g1_
 TensorBoard：http://127.0.0.1:6008/
 ```
 
+本机在 iteration 345 后发生重启。日志与内核检查未发现 Python traceback、CUDA OOM、NVIDIA Xid 或硬件错误；已验证最后一个完整 checkpoint `model_300.pt`（SHA256 `32361c3ac7a4b0c54d875edbf211900d46c4f7f47fe55ba796f51ddf8add70e2`）同时包含 policy、optimizer、AMP discriminator、AMP optimizer 和 normalizer，因此从它完整恢复，而不是只加载 policy。恢复训练的位置为：
+
+```text
+服务：g1-extreme-stand-smooth-settle-v5-resume300-20260806.service
+训练日志：legged_lab/logs/monitoring/g1_extreme_stand_smooth_settle_v5_resume300_to1499_20260806.log
+运行目录：legged_lab/logs/rsl_rl/g1_extreme_stand_recovery/2026-08-06_20-56-09_g1_extreme_stand_smooth_settle_v5_resume300_to1499_20260806
+checkpoint：legged_lab/ExtremeStandRecovery Checkpoints/2026-08-06_20-56-09_g1_extreme_stand_smooth_settle_v5_resume300_to1499_20260806
+TensorBoard：http://127.0.0.1:6008/
+```
+
+恢复进程执行剩余1200轮，并保留总 iteration 编号 `300..1499`。扰动状态机的本地控制步计数已同步平移：恢复后立即从20 N开始，总 iteration 600进入36 N，总 iteration 1000进入45 N，避免重启后重复10 N课程。
+
+本机随后于 2026-08-06 21:32 再次重启，训练在日志 iteration 979 附近停止；当前 boot 的内核日志未发现 CUDA OOM、NVIDIA Xid、segfault、MCE 或硬件错误。主运行目录与专用目录中的最后完整 `model_900.pt` SHA256 均为 `5696bf6aa3f7e234790a310136a39478aaea10e1ae366eed2103ad3129890ace`，且 checkpoint 内含 policy、PPO optimizer、AMP discriminator、AMP optimizer 和 normalizer 状态。第二次完整恢复位置为：
+
+```text
+服务：g1-extreme-stand-smooth-settle-v5-resume900-20260807.service
+训练日志：legged_lab/logs/monitoring/g1_extreme_stand_smooth_settle_v5_resume900_to1499_20260807.log
+运行目录：legged_lab/logs/rsl_rl/g1_extreme_stand_recovery/2026-08-07_12-25-12_g1_extreme_stand_smooth_settle_v5_resume900_to1499_20260807
+checkpoint：legged_lab/ExtremeStandRecovery Checkpoints/2026-08-07_12-25-12_g1_extreme_stand_smooth_settle_v5_resume900_to1499_20260807
+TensorBoard：http://127.0.0.1:6008/
+```
+
+该进程从总 iteration 900 执行剩余600轮。恢复后的本地课程阈值为 `[0, 0, 2400]` 个控制步，因此总 iteration 900..999 延续36 N，总 iteration 1000..1499使用45 N；没有重放10 N或20 N课程。
+
 最小 smoke：
 
 ```bash
@@ -489,6 +513,83 @@ SHA256: fc6e8f7096a3a1a97ae273d9b11462f1f09455e5d393ca87b11384c54ccefc78
 ```
 
 smoke 模型不是可部署模型；必须完成1500次正式续训，再用同一批大推力、随机脚距和长期稳定场景与 V4 做同 seed 对比。建议重点对比 `model_300/600/1000/1200/1499.pt`，用于识别平滑约束是否造成恢复能力退化。
+
+### 5.6 Target-Lock V6：修复 V5 目标漂移与大冲量分布缺口
+
+V5 最终 `model_1499.pt` 的固定基线测试表明，核心非 stress 场景稳态 jerk 从 `78.22` 降至 `23.66 rad/s³`，action、目标加速度、PD 力矩变化率也分别降至 V4 的约 `29%/14%/23%`；但该模型不能验收：目标角相对默认值误差从 `0.0824` 增至 `0.1938 rad`，随机姿态与脚距严格恢复率均降为0，240 N 四方向只存活3/4，360 N 全部失败。完整报告：
+
+```text
+legged_lab/logs/monitoring/extreme_stand_v4_v5_v5final_20260807/COMPARISON.md
+```
+
+对 `model_600/1000/1200/1499.pt` 使用同一 seed 的 nominal、pose-recovery、feet-distance-recovery、robust 扫描后，四个模型的目标误差均为约 `0.187–0.208 rad`，姿态和脚距严格恢复率均为0。因此问题从 V5 早期已存在，是奖励设计问题，不是后期过训练。扫描结果：
+
+```text
+legged_lab/logs/monitoring/extreme_stand_v5_intermediate_sweep_20260807/
+```
+
+V6 是新任务 `LeggedLab-Isaac-AMP-G1-ExtremeStandRecovery-TargetLockV6-v0`，只修改 Extreme Stand：
+
+- `post_disturbance_pose_recovery` 和 `post_disturbance_stillness` 改用有界有理核。V5 的两个窄指数相乘使静止奖励全程精确为0；V6 的 `1/(1+error/scale)` 在大误差处仍有梯度。
+- 新增 `near_default_target_lock_penalty`。物理姿态远离默认值时允许快速恢复；进入默认姿态吸引域后，按目标角偏差、actor action 和关节速度强制 `target_q→default_q`、`action→0`、`qdot→0`。
+- 广义坐标、关键点和脚距的默认姿态奖励分别增强，修复“能站住但停在偏移姿态”的局部最优。
+- 单扰动课程改为 `45→90→150→240 N`，持续 `0.1–0.3 s`、静置 `8–12 s`，阶段为 V6 iteration `0/200/400/700`。躯干/骨盆保留完整力，肩、肘、髋、膝按 `0.50/0.35/0.65/0.50` 缩放；最大躯干冲量 `240 N × 0.30 s = 72 N·s`，覆盖 360 N、0.20 s 测试冲量，而不会把相同大力不合理地直接施加到末端 link。
+
+代码路径：
+
+- V6 配置：`legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_extreme_stand_recovery/g1_extreme_stand_recovery_v6_env_cfg.py`；
+- 奖励：同目录 `rewards.py`；
+- 单扰动状态机：同目录 `disturbances.py`；
+- 启动器：`legged_lab/scripts/extreme_stand_recovery/train_g1_extreme_stand_recovery_target_lock_v6.sh`。
+
+V6 固定从 V5 最终 checkpoint policy-only 续训：
+
+```text
+legged_lab/ExtremeStandRecovery Checkpoints/2026-08-07_12-25-12_g1_extreme_stand_smooth_settle_v5_resume900_to1499_20260807/model_1499.pt
+SHA256: 13538475518be2a323dfedff230949b3c6b8057c8f4f9af000adbbfd90c7ee7c
+```
+
+正式训练命令：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
+conda activate env_isaaclab
+
+RUN_NAME=g1_extreme_stand_recovery_target_lock_v6_from_v5_model1499 \
+bash legged_lab/scripts/extreme_stand_recovery/train_g1_extreme_stand_recovery_target_lock_v6.sh
+```
+
+默认参数为 `4096 env × 1000 iterations`、学习率 `5e-6`、每100轮保存一次。2026-08-07 已完成 Python 编译、Shell 语法、Extreme Stand 静态合同测试 `10/10` 和真实 Isaac `64 env × 2 iterations` smoke；另一次 `32 env × 10 iterations` 信号 smoke 实际触发45 N课程，`post_disturbance_pose_recovery` 从0增至 `0.1478`、`post_disturbance_stillness` 从0增至 `0.0397`，证明 V6 静止奖励不再是死信号。smoke 日志：
+
+```text
+legged_lab/logs/monitoring/g1_extreme_stand_target_lock_v6_smoke_20260807.log
+legged_lab/logs/rsl_rl/g1_amp/train_g1_extreme_stand_target_lock_v6_signal_smoke_20260807_20260807_132206.log
+```
+
+这些 smoke 只证明训练与奖励信号正确，不能替代完成后的 V4/V6 同 seed MuJoCo 闭环验收。
+
+正式 V6 训练已于 2026-08-07 启动：
+
+```text
+服务：g1-extreme-stand-target-lock-v6-20260807.service
+训练日志：legged_lab/logs/monitoring/g1_extreme_stand_target_lock_v6_from_v5_model1499_full_20260807.log
+运行目录：legged_lab/logs/rsl_rl/g1_extreme_stand_recovery/2026-08-07_13-24-03_g1_extreme_stand_recovery_target_lock_v6_from_v5_model1499_full_20260807
+checkpoint：legged_lab/ExtremeStandRecovery Checkpoints/2026-08-07_13-24-03_g1_extreme_stand_recovery_target_lock_v6_from_v5_model1499_full_20260807
+TensorBoard：http://127.0.0.1:6008/
+```
+
+进程固定在逻辑 CPU `0-7,10-31`，排除本机已知不稳定的 CPU 8–9。训练完成后仍需使用 9.4 的固定 V4 基线门禁，不能把 V6 训练曲线直接视为最终通过。
+
+V6 最终 `model_999.pt` 生成后运行完整固定门禁：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
+
+REQUIRE_PASS=False \
+bash scripts/test_g1_extreme_stand_target_lock_v6_mujoco.sh
+```
+
+该入口锁定本节 V6 checkpoint 路径，以 `v4/v6` 分目录保存六核心场景、四档四方向大推力、统一 `COMPARISON.md` 和 `comparison.json`。中断后原命令可通过 `SKIP_EXISTING=True` 续跑；第一次必须保留 `REQUIRE_PASS=False` 以完整保存失败证据，报告通过后再用 `REQUIRE_PASS=True` 执行最终门禁。
 
 ## 6. TensorBoard
 
@@ -511,6 +612,8 @@ Pose V3 重点观察 episode length、`termination_penalty`、`time_out/base_hei
 V4 还必须同时观察 `dof_torques_l2`、`joint_torque_rate_l2`、`dof_acc_l2`、`action_rate_l2` 和 `action_second_difference_l2`。这些都是已乘负权重的 episode reward，绝对值下降通常表示更平滑，但若同时出现 episode length 下降或 `bad_orientation/base_height` 上升，说明平滑惩罚过强、恢复动作被压制，不能仅因曲线更接近0就认为训练更好。
 
 V5 重点观察 `target_q_default_error_l2`、`target_q_velocity_l2`、`target_q_acceleration_l2`、三项 `normalized_*_topk_l2`、`soft_peak_joint_torque_topk_l2`、`joint_velocity_l2`、`joint_acceleration_l2`、`mechanical_power_l2` 和 `near_default_settle_penalty`。同时检查 `ExtremeStand/disturbance_stage`、`disturbance_force_n`、`disturbance_active_fraction` 是否符合课程。平滑负项下降时，`post_disturbance_pose_recovery`、`post_disturbance_stillness`、episode length 和 time-out 率不应同步恶化；否则说明刹车权重压制了必要恢复动作。
+
+V6 还要观察 `near_default_target_lock_penalty` 与 `ExtremeStand/disturbance_applied_force_n`。新的两个 post-disturbance 奖励在第一次扰动后的安静窗口必须非零；若再次长期精确为0，应停止训练检查信号，而不能仅靠增加轮数。目标锁定项绝对值应随训练下降，同时 `target_q_default_error_l2`、姿态恢复率和脚距恢复率改善；若 episode length 或大推力存活率下降，则说明锁定门控过早或大冲量课程过强。
 
 ## 7. Isaac Sim 测试与可视化
 
@@ -705,7 +808,38 @@ bash scripts/sim2sim_g1_extreme_stand_recovery_mujoco.sh
 
 每次运行保存 `metrics.json`、`torso_trace.csv`；完整套件另外生成 `summary.json` 和中文 `REPORT.md`。
 
-### 9.4 Pose V2 `model_2999.pt` 代表性 smoke
+### 9.4 V5 与 V4 固定基线闭环验收
+
+V5 不能只用训练 reward 或单次可视化判定。项目根目录的 `scripts/test_g1_extreme_stand_smooth_settle_v5_mujoco.sh` 会使用相同 MuJoCo、零速度指令、初始分布、seed、PD 参数和未覆盖的29维 Actor 输出，对固定 V4 基线与 V5 候选执行：
+
+- `nominal`、`pose_recovery`、`feet_distance_recovery`、`recovery`、`robust`、`stress` 六个场景，各3个固定 seed、每次40秒；前10秒视为恢复段，后30秒用于长期 jerk 和20–25 Hz位置高频统计；
+- `120/180/240/360 N × 0.20 s` 四档躯干推力，每档固定测试前、后、左、右四个方向；
+- 为两个模型分别保存 ONNX、逐次 `metrics.json`、运动曲线、推力诊断图和中文 `REPORT.md`；最后生成统一 `COMPARISON.md` 与 `comparison.json`。
+
+新版报告器还会在同一稳态窗口直接统计 action RMS/变化率/每步二阶差分、实际 PD 目标相对默认角误差及其速度/加速度、关节速度/加速度、PD 力矩及其变化率、按关节限位归一化的相对力矩、超过60%限位的软峰值、实际机械功率、8–25 Hz action/目标角/力矩能量和力矩饱和率。旧 `metrics.json` 缺少这些字段时会被明确标为“控制链指标不完整”，不能用于 V4/V5 最终通过判定。2026-08-06 已在真实 MuJoCo 1秒 nominal smoke 中验证所有新增字段均为有限值，且不改变控制输出。
+
+正式 V5 `model_1499.pt` 生成后，在新终端执行：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
+
+V5_CKPT="$PWD/legged_lab/ExtremeStandRecovery Checkpoints/2026-08-07_12-25-12_g1_extreme_stand_smooth_settle_v5_resume900_to1499_20260807/model_1499.pt"
+V5_SHA256="$(sha256sum "$V5_CKPT" | awk '{print $1}')"
+
+V5_CHECKPOINT="$V5_CKPT" \
+V5_EXPECTED_SHA256="$V5_SHA256" \
+RESULTS_ROOT="$PWD/legged_lab/logs/monitoring/extreme_stand_v4_v5_fixed_baseline" \
+SKIP_EXISTING=True REQUIRE_PASS=False \
+bash scripts/test_g1_extreme_stand_smooth_settle_v5_mujoco.sh
+```
+
+固定基线脚本默认使用 `CPU_AFFINITY=0-7,10-31`，导出、MuJoCo rollout、汇总和比较子进程都会继承该 CPU 集。这是本机的稳定性保护：逻辑 CPU 8–9 曾使 Python/torch 导入出现非确定性解释器错误。其他机器只有在确认全部逻辑 CPU 稳定后才应显式覆盖 `CPU_AFFINITY`；本机不要取消该限制。
+
+无需手工激活 Conda；脚本显式使用 `~/anaconda3/envs/env_isaaclab/bin/python`，并由 MuJoCo 入口自动选择本机可用的 Unitree/MuJoCo Python。`SKIP_EXISTING=True` 会保留已完成的运行，异常中断后可原命令续测。第一次应保留 `REQUIRE_PASS=False`，以确保即使候选未达标也能完整落盘报告；确认报告通过后可再用 `REQUIRE_PASS=True` 作为 CI 式门禁。
+
+闭环验收比单模型基础验收更严格：核心五个非 stress 场景的平均稳态 jerk RMS 必须比 V4 至少降低15%，无扰动 jerk 不能增加；随机姿态和随机脚距恢复率、生存率、躯干姿态与脚距不能明显退化；120/180 N 四方向必须全部存活；四档推力结束后均不能有持续关节/策略高频，后期位置、action、力矩高频比不大于1.5，action-rate 最迟6秒内回到稳定区间。未通过时必须根据失败项选择最合适 checkpoint 或调整仅 V5 的奖励/课程，完成 smoke 后续训并用同一结果目录重新对比，不能通过改变 seed 或降低推力规避失败。
+
+### 9.5 Pose V2 `model_2999.pt` 代表性 smoke
 
 报告路径：
 
@@ -724,7 +858,7 @@ bash scripts/sim2sim_g1_extreme_stand_recovery_mujoco.sh
 
 整组汇总显示 `Acceptance: FAIL`，原因不是摔倒，而是严格 `pose_recovery` 的单关节最大误差仍超过 `0.20 rad`。这一区分必须保留：稳定站立/存活已经通过，严格恢复全部默认关节姿态尚未通过。
 
-### 9.5 随机全身姿态恢复专项测试
+### 9.6 随机全身姿态恢复专项测试
 
 该测试与原 `recovery` 不同：只给29个关节加入训练范围内的随机位置偏差，关节速度、root 姿态、root 速度和外力全部为零，避免其他扰动掩盖“能否回到默认关节姿态”这一问题。
 
@@ -759,7 +893,7 @@ Pose V2 `model_2999.pt` 的 5-seed、每次 15 秒专项报告：
 
 与旧 `model_4999.pt` 在同一组 seed 上的结果相比，最终 MAE 从 `0.1067 rad` 降至 `0.0634 rad`，平均误差下降比例从 `46.5%` 提升至 `68.1%`，说明新增腿部、笛卡尔和足间距奖励确实改善了默认姿态恢复；但严格全身姿态门槛仍未完全通过，不能把 5/5 存活表述成 5/5 恢复成功。
 
-### 9.6 随机双脚间距恢复专项测试
+### 9.7 随机双脚间距恢复专项测试
 
 该场景只改变左右 hip-roll 与 ankle-roll 的对称组合，不加入其他关节噪声、root 噪声、初始速度或外力。每次初始化先在实际 MJCF 关节限位内搜索，再随机选取一个使左右足 body 平面距离相对默认值偏差 `5–12 cm` 的可达构型；同时微调 root 高度，使较低一侧足 body 保持默认初始高度。它不会直接平移脚，也不会修改策略的 29 维输出。
 
@@ -815,7 +949,7 @@ bash scripts/sim2sim_g1_extreme_stand_recovery_mujoco.sh
 
 结论是当前模型能够从较宽脚距恢复到默认值附近，但对较窄脚距会越过默认值并最终稳定在约 `0.276–0.281 m` 的偏宽站姿；“不摔倒”不能等同于“恢复默认脚距”。这与训练末期 `default_key_body_pose_gaussian=0` 的现象一致，后续训练仍需改善默认几何姿态吸引域。
 
-### 9.7 躯干大推力与持续 jerk 专项测试
+### 9.8 躯干大推力与持续 jerk 专项测试
 
 `large_push` 用于隔离真机“受到较大推力后全身持续 jerk”的问题。测试先让默认站立稳定 `5 s`，再只对 `torso_link` 施加一次世界系水平力；不随机其他 body、不加力矩、不改策略输出。运行器同时记录29关节位置/速度/加速度/jerk、29维 actor action、关节目标、PD 力矩命令、实际执行器力矩和力矩限位。
 
@@ -970,7 +1104,7 @@ Pose V3 奖励与训练代码在 2026-07-23 已完成：
 - Pose V2 启动器显式把三个 V3 新项置零，历史实验语义与新 V3 续训入口已分离；
 - 2026-07-24 已从完整 `model_1400.pt` 恢复并完成至 iteration 2999；最终 checkpoint SHA256 为 `e2c694d2d7710315f41f1c6c75849ffb95b53d0fb29e612aa211e1525a7cb1e4`；
 - 已生成 V3 ONNX（SHA256 `81bc3c1a1744e5549a8209f3e46a8b46863ff2fe68a38f3f50719a7f0f25784e`）并接入 MuJoCo；
-- 2026-07-27 新增随机双脚间距专项场景与 `K` 交互键，真实 3-seed × 12 秒测试 3/3 未摔倒、1/3 严格恢复默认脚距，专项验收未通过；完整报告见 9.6；
+- 2026-07-27 新增随机双脚间距专项场景与 `K` 交互键，真实 3-seed × 12 秒测试 3/3 未摔倒、1/3 严格恢复默认脚距，专项验收未通过；完整报告见 9.7；
 - V3 MuJoCo 测试模型与现有 Pose V2 真机脚本尚未统一，不能把本节 V3 MuJoCo 结论直接当作真机部署模型结论。
 
 Smooth-Torque V4 训练代码在 2026-07-31 已完成：

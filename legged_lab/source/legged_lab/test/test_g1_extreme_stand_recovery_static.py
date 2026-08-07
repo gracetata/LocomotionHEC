@@ -16,6 +16,7 @@ TASK_DIR = (
 )
 ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_env_cfg.py"
 V5_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v5_env_cfg.py"
+V6_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v6_env_cfg.py"
 V5_DISTURBANCES = TASK_DIR / "disturbances.py"
 TASK_INIT = TASK_DIR / "__init__.py"
 RUNNER_CFG = TASK_DIR / "agents" / "rsl_rl_ppo_cfg.py"
@@ -41,6 +42,12 @@ SMOOTH_SETTLE_V5_TRAIN_SCRIPT = (
     / "extreme_stand_recovery"
     / "train_g1_extreme_stand_recovery_smooth_settle_v5.sh"
 )
+TARGET_LOCK_V6_TRAIN_SCRIPT = (
+    PROJECT_ROOT
+    / "scripts"
+    / "extreme_stand_recovery"
+    / "train_g1_extreme_stand_recovery_target_lock_v6.sh"
+)
 VIS_SCRIPT = PROJECT_ROOT / "scripts" / "extreme_stand_recovery" / "vis_g1_extreme_stand_recovery.sh"
 MUJOCO_SCRIPT = PROJECT_ROOT / "scripts" / "extreme_stand_recovery" / "val_mujoco_g1_extreme_stand_recovery.sh"
 ROOT_MUJOCO_SCRIPT = PROJECT_ROOT.parent / "scripts" / "sim2sim_g1_extreme_stand_recovery_mujoco.sh"
@@ -53,6 +60,9 @@ PUSH_DIAGNOSTIC_PLOT_SCRIPT = (
 POSE_RECOVERY_SCRIPT = PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_random_pose_recovery_mujoco.sh"
 ANTI_JITTER_MUJOCO_SCRIPT = (
     PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_anti_jitter_v3_mujoco.sh"
+)
+TARGET_LOCK_V6_MUJOCO_SCRIPT = (
+    PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_target_lock_v6_mujoco.sh"
 )
 MUJOCO_ADAPTER = PROJECT_ROOT.parent / "unitree_sim2sim2real" / "deploy" / "deploy_mujoco" / "extreme_stand_recovery.py"
 MUJOCO_RUNNER = PROJECT_ROOT.parent / "unitree_sim2sim2real" / "deploy" / "deploy_mujoco" / "deploy_mujoco_g1_amp.py"
@@ -67,6 +77,7 @@ def test_extreme_stand_recovery_files_exist():
     for path in (
         ENV_CFG,
         V5_ENV_CFG,
+        V6_ENV_CFG,
         V5_DISTURBANCES,
         TASK_INIT,
         RUNNER_CFG,
@@ -75,6 +86,7 @@ def test_extreme_stand_recovery_files_exist():
         ANTI_JITTER_V3_TRAIN_SCRIPT,
         SMOOTH_TORQUE_V4_TRAIN_SCRIPT,
         SMOOTH_SETTLE_V5_TRAIN_SCRIPT,
+        TARGET_LOCK_V6_TRAIN_SCRIPT,
         VIS_SCRIPT,
         MUJOCO_SCRIPT,
         ROOT_MUJOCO_SCRIPT,
@@ -84,6 +96,7 @@ def test_extreme_stand_recovery_files_exist():
         PUSH_DIAGNOSTIC_PLOT_SCRIPT,
         POSE_RECOVERY_SCRIPT,
         ANTI_JITTER_MUJOCO_SCRIPT,
+        TARGET_LOCK_V6_MUJOCO_SCRIPT,
         MUJOCO_ADAPTER,
         MUJOCO_RUNNER,
     ):
@@ -240,6 +253,30 @@ def test_v5_uses_target_settling_topk_normalization_and_single_push_clock():
     assert "SAVE_INTERVAL=${SAVE_INTERVAL:-100}" in train_text
     assert '"agent.save_interval=${SAVE_INTERVAL}"' in train_text
     assert "e0addb8ce23153498d4f805c75f4e3ba19568198f890ffc980160fea7c3b7fff" in train_text
+
+
+def test_v6_fixes_dead_settle_signal_and_covers_large_push_impulse():
+    cfg_text = _read(V6_ENV_CFG)
+    rewards_text = _read(TASK_DIR / "rewards.py")
+    disturbance_text = _read(V5_DISTURBANCES)
+    train_text = _read(TARGET_LOCK_V6_TRAIN_SCRIPT)
+    task_text = _read(TASK_INIT)
+
+    assert "TargetLockV6" in task_text
+    assert "near_default_target_lock_penalty" in cfg_text
+    assert "post_disturbance_pose_recovery_rational" in cfg_text
+    assert "post_disturbance_stillness_rational" in cfg_text
+    assert "torch.reciprocal(1.0 + velocity_mse / velocity_scale)" in rewards_text
+    assert "torch.reciprocal(1.0 + mean_square_error / pose_scale)" in rewards_text
+    assert "force_magnitudes_n\": (45.0, 90.0, 150.0, 240.0)" in cfg_text
+    assert "stage_step_thresholds\": (4800, 9600, 16800)" in cfg_text
+    assert "quiet_duration_range_s\": (8.0, 12.0)" in cfg_text
+    assert "body_force_scales" in cfg_text
+    assert "applied_magnitude" in disturbance_text
+    assert "disturbance_applied_force_n" in disturbance_text
+    assert "MAX_ITERATIONS=${MAX_ITERATIONS:-1000}" in train_text
+    assert "LEARNING_RATE=${LEARNING_RATE:-5.0e-6}" in train_text
+    assert "13538475518be2a323dfedff230949b3c6b8057c8f4f9af000adbbfd90c7ee7c" in train_text
 
 
 def test_launchers_never_enable_armhack_action_adapters():

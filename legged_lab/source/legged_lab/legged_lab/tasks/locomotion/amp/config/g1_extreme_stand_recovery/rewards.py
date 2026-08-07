@@ -67,6 +67,28 @@ def _near_default_gate(
     return torch.exp(-torch.mean(torch.square(error), dim=1) / variance)
 
 
+def _near_default_rational_score(
+    asset: Articulation,
+    asset_cfg: SceneEntityCfg,
+    pose_scale: float,
+) -> torch.Tensor:
+    """Return a non-vanishing default-pose score for corrective rewards.
+
+    A narrow Gaussian is useful as a final accuracy bonus, but it can
+    underflow to an effectively zero signal after a large reset or push.  This
+    rational score stays differentiable away from the target while remaining
+    bounded in ``(0, 1]``.
+    """
+    if pose_scale <= 0.0:
+        raise ValueError(f"near-default pose_scale must be positive, got {pose_scale}")
+    error = (
+        asset.data.joint_pos[:, asset_cfg.joint_ids]
+        - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    )
+    mean_square_error = torch.mean(torch.square(error), dim=1)
+    return torch.reciprocal(1.0 + mean_square_error / pose_scale)
+
+
 def _joint_effort_limits(asset: Articulation, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     return asset.data.joint_effort_limits[:, asset_cfg.joint_ids].clamp_min(1.0e-6)
 
@@ -609,6 +631,20 @@ def post_disturbance_pose_recovery(
     return quiet.to(asset.data.joint_pos.dtype) * _near_default_gate(asset, asset_cfg, variance)
 
 
+def post_disturbance_pose_recovery_rational(
+    env,
+    event_name: str = "single_disturbance",
+    pose_scale: float = 0.0225,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward recovery throughout the quiet window without Gaussian underflow."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    event = _single_disturbance_term(env, event_name)
+    quiet = event.has_disturbed & (event.active_time_left <= 0.0)
+    score = _near_default_rational_score(asset, asset_cfg, pose_scale)
+    return quiet.to(score.dtype) * score
+
+
 def post_disturbance_stillness(
     env,
     event_name: str = "single_disturbance",
@@ -625,3 +661,68 @@ def post_disturbance_stillness(
     speed_error = torch.mean(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
     stillness = torch.exp(-speed_error / velocity_variance)
     return quiet.to(stillness.dtype) * _near_default_gate(asset, asset_cfg, pose_variance) * stillness
+
+
+def post_disturbance_stillness_rational(
+    env,
+    event_name: str = "single_disturbance",
+    pose_scale: float = 0.0225,
+    velocity_scale: float = 0.25,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward quiet-window settling with usable gradients after large pushes.
+
+    V5 multiplied two narrow exponentials.  In practice that term was exactly
+    zero in TensorBoard for the entire run.  Mean-square velocity and pose are
+    instead mapped through rational kernels, so a moving or displaced robot
+    still receives a directionally useful signal and the maximum remains one.
+    """
+    if velocity_scale <= 0.0:
+        raise ValueError(f"velocity_scale must be positive, got {velocity_scale}")
+    asset: Articulation = env.scene[asset_cfg.name]
+    event = _single_disturbance_term(env, event_name)
+    quiet = event.has_disturbed & (event.active_time_left <= 0.0)
+    velocity_mse = torch.mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1
+    )
+    stillness_score = torch.reciprocal(1.0 + velocity_mse / velocity_scale)
+    pose_score = _near_default_rational_score(asset, asset_cfg, pose_scale)
+    return quiet.to(stillness_score.dtype) * pose_score * stillness_score
+
+
+def near_default_target_lock_penalty(
+    env,
+    pose_scale: float = 0.0225,
+    target_weight: float = 30.0,
+    action_weight: float = 5.0,
+    joint_velocity_weight: float = 5.0,
+    action_term_name: str = "joint_pos",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Lock the physical PD target to default only after recovery is close.
+
+    Far from the default posture the policy remains free to make decisive
+    recovery motions.  As physical joint error shrinks, the bounded rational
+    gate strongly suppresses target drift, non-zero policy action and residual
+    joint speed.  This directly closes the V5 failure mode where the body was
+    nearly upright but the PD target stayed about 0.19 rad from default.
+    """
+    if min(target_weight, action_weight, joint_velocity_weight) < 0.0:
+        raise ValueError("near-default target-lock weights must be non-negative.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    target_q = env.action_manager.get_term(action_term_name).processed_actions
+    default_q = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    target_error = torch.mean(torch.square(target_q - default_q), dim=1)
+    action_error = torch.mean(torch.square(env.action_manager.action), dim=1)
+    velocity_error = torch.mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1
+    )
+    pose_score = _near_default_rational_score(asset, asset_cfg, pose_scale)
+    # Squaring the score concentrates the lock near the recovered basin while
+    # preserving a small corrective gradient at moderate pose error.
+    gate = torch.square(pose_score)
+    return gate * (
+        target_weight * target_error
+        + action_weight * action_error
+        + joint_velocity_weight * velocity_error
+    )

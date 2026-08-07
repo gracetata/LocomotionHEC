@@ -47,9 +47,16 @@ def _nested(report: dict[str, Any], *keys: str, default: Any = math.nan) -> Any:
     return value
 
 
-def _finite_float(value: Any) -> float:
+def _finite_float(value: Any, *, unavailable: float = 0.0) -> float:
+    if value is None:
+        return float(unavailable)
     result = float(value)
-    return result if math.isfinite(result) else math.nan
+    # Reports are strict JSON (allow_nan=False).  Optional diagnostics such as
+    # large-push fields are absent in nominal/recovery runs, so represent an
+    # unavailable scalar as 0.0 and use the accompanying profile/type flags to
+    # distinguish "not measured" from a real zero.  This also keeps historical
+    # metrics files readable after new report fields are added.
+    return result if math.isfinite(result) else 0.0
 
 
 def _file_metadata(path_value: str | None) -> dict[str, Any]:
@@ -87,6 +94,22 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
         high_frequency = motion_quality.get(
             "joint_position_high_frequency_20_25hz_rms_rad", {}
         )
+        actor_action = motion_quality.get("actor_action", {})
+        target_position = motion_quality.get("target_joint_position_rad", {})
+        joint_velocity = motion_quality.get("joint_velocity_rad_s", {})
+        joint_acceleration = motion_quality.get("joint_acceleration_rad_s2", {})
+        mechanical_power = motion_quality.get("mechanical_power_w", {})
+        actuator_effort = motion_quality.get("actuator_effort_nm", {})
+        control_chain_metrics_available = bool(
+            "second_difference_per_step" in actor_action
+            and "default_error" in target_position
+            and "velocity_rad_s" in target_position
+            and "acceleration_rad_s2" in target_position
+            and "mechanical_power_w" in motion_quality
+            and "pd_command_rate_nm_s" in actuator_effort
+            and "relative_pd_command" in actuator_effort
+            and "soft_peak_above_60pct" in actuator_effort
+        )
         feet_distance = motion_quality.get("feet_planar_distance_m", {})
         feet_recovery = stand.get("foot_spacing_recovery", {})
         large_push = stand.get("large_push", {})
@@ -98,6 +121,9 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
         push_late_ratios = push_diagnostics.get("late_post_over_pre", {})
         push_flags = push_diagnostics.get("flags", {})
         push_settling = push_diagnostics.get("actor_action_rate_settling", {})
+        sim_time_s = _finite_float(report.get("sim_time", 0.0))
+        settling_time_value = push_settling.get("settling_time_after_push_end_s")
+        settling_time_available = settling_time_value is not None
         command = [
             _finite_float(tracking.get("mean_command_lin_vel_x", math.nan)),
             _finite_float(tracking.get("mean_command_lin_vel_y", math.nan)),
@@ -111,7 +137,7 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
                 "healthy": bool(health.get("healthy", False)),
                 "fallen": bool(health.get("fallen", True)),
                 "fall_time_s": health.get("fall_time"),
-                "sim_time_s": _finite_float(report.get("sim_time", 0.0)),
+                "sim_time_s": sim_time_s,
                 "min_root_height_m": _finite_float(health.get("min_root_height", math.nan)),
                 "max_abs_roll_rad": _finite_float(health.get("max_abs_roll", math.nan)),
                 "max_abs_pitch_rad": _finite_float(health.get("max_abs_pitch", math.nan)),
@@ -176,6 +202,101 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
                 ),
                 "joint_position_hf_per_joint_rms_rad": dict(
                     high_frequency.get("per_joint", {})
+                ),
+                "control_chain_metrics_available": control_chain_metrics_available,
+                "actor_action_rms": _finite_float(
+                    _nested(actor_action, "value", "rms", default=0.0)
+                ),
+                "actor_action_rate_rms_per_s": _finite_float(
+                    _nested(actor_action, "delta_rate_per_s", "rms", default=0.0)
+                ),
+                "actor_action_second_difference_rms": _finite_float(
+                    _nested(
+                        actor_action,
+                        "second_difference_per_step",
+                        "rms",
+                        default=0.0,
+                    )
+                ),
+                "actor_action_hf_mean_rms": _finite_float(
+                    _nested(
+                        actor_action,
+                        "high_frequency_8_25hz_rms",
+                        "mean_across_joints",
+                        default=0.0,
+                    )
+                ),
+                "target_default_error_rms_rad": _finite_float(
+                    _nested(target_position, "default_error", "rms", default=0.0)
+                ),
+                "target_velocity_rms_rad_s": _finite_float(
+                    _nested(target_position, "velocity_rad_s", "rms", default=0.0)
+                ),
+                "target_acceleration_rms_rad_s2": _finite_float(
+                    _nested(
+                        target_position,
+                        "acceleration_rad_s2",
+                        "rms",
+                        default=0.0,
+                    )
+                ),
+                "target_position_hf_mean_rms_rad": _finite_float(
+                    _nested(
+                        target_position,
+                        "high_frequency_8_25hz_rms",
+                        "mean_across_joints",
+                        default=0.0,
+                    )
+                ),
+                "joint_velocity_rms_rad_s": _finite_float(
+                    joint_velocity.get("rms", 0.0)
+                ),
+                "joint_acceleration_rms_rad_s2": _finite_float(
+                    joint_acceleration.get("rms", 0.0)
+                ),
+                "mechanical_power_rms_w": _finite_float(
+                    mechanical_power.get("rms", 0.0)
+                ),
+                "mechanical_power_mean_square_w2": _finite_float(
+                    mechanical_power.get("mean_square", 0.0)
+                ),
+                "pd_torque_rms_nm": _finite_float(
+                    _nested(actuator_effort, "pd_command", "rms", default=0.0)
+                ),
+                "pd_torque_rate_rms_nm_s": _finite_float(
+                    _nested(
+                        actuator_effort,
+                        "pd_command_rate_nm_s",
+                        "rms",
+                        default=0.0,
+                    )
+                ),
+                "relative_pd_torque_rms": _finite_float(
+                    _nested(
+                        actuator_effort,
+                        "relative_pd_command",
+                        "rms",
+                        default=0.0,
+                    )
+                ),
+                "soft_peak_pd_torque_rms": _finite_float(
+                    _nested(
+                        actuator_effort,
+                        "soft_peak_above_60pct",
+                        "rms",
+                        default=0.0,
+                    )
+                ),
+                "pd_torque_hf_mean_rms_nm": _finite_float(
+                    _nested(
+                        actuator_effort,
+                        "pd_command_high_frequency_8_25hz_rms",
+                        "mean_across_joints",
+                        default=0.0,
+                    )
+                ),
+                "pd_torque_saturation_fraction": _finite_float(
+                    actuator_effort.get("command_saturation_fraction", 0.0)
                 ),
                 "default_feet_distance_m": _finite_float(
                     feet_distance.get("default", math.nan)
@@ -339,11 +460,14 @@ def load_runs(results_root: Path) -> list[dict[str, Any]]:
                 "large_push_late_action_hf_rms": _finite_float(
                     push_late.get("actor_action_hf_8_25hz_rms_mean", math.nan)
                 ),
+                "large_push_action_rate_settled": settling_time_available,
+                # A missing settling time means that the action rate never met
+                # the threshold for the required hold interval.  Use the full
+                # rollout duration as a finite failure sentinel; mapping it to
+                # zero would incorrectly pass the <=6 s comparison gate.
                 "large_push_action_rate_settling_time_s": _finite_float(
-                    push_settling.get(
-                        "settling_time_after_push_end_s",
-                        math.nan,
-                    )
+                    settling_time_value,
+                    unavailable=sim_time_s,
                 ),
             }
         )
@@ -410,6 +534,63 @@ def summarize_profile(profile: str, runs: list[dict[str, Any]]) -> dict[str, Any
         ),
         "maximum_joint_position_hf_rms_rad": _maximum(
             [run["joint_position_hf_max_rms_rad"] for run in selected]
+        ),
+        "control_chain_metrics_available_count": sum(
+            int(run["control_chain_metrics_available"]) for run in selected
+        ),
+        "mean_actor_action_rms": _mean(
+            [run["actor_action_rms"] for run in selected]
+        ),
+        "mean_actor_action_rate_rms_per_s": _mean(
+            [run["actor_action_rate_rms_per_s"] for run in selected]
+        ),
+        "mean_actor_action_second_difference_rms": _mean(
+            [run["actor_action_second_difference_rms"] for run in selected]
+        ),
+        "mean_actor_action_hf_rms": _mean(
+            [run["actor_action_hf_mean_rms"] for run in selected]
+        ),
+        "mean_target_default_error_rms_rad": _mean(
+            [run["target_default_error_rms_rad"] for run in selected]
+        ),
+        "mean_target_velocity_rms_rad_s": _mean(
+            [run["target_velocity_rms_rad_s"] for run in selected]
+        ),
+        "mean_target_acceleration_rms_rad_s2": _mean(
+            [run["target_acceleration_rms_rad_s2"] for run in selected]
+        ),
+        "mean_target_position_hf_rms_rad": _mean(
+            [run["target_position_hf_mean_rms_rad"] for run in selected]
+        ),
+        "mean_joint_velocity_rms_rad_s": _mean(
+            [run["joint_velocity_rms_rad_s"] for run in selected]
+        ),
+        "mean_joint_acceleration_rms_rad_s2": _mean(
+            [run["joint_acceleration_rms_rad_s2"] for run in selected]
+        ),
+        "mean_mechanical_power_rms_w": _mean(
+            [run["mechanical_power_rms_w"] for run in selected]
+        ),
+        "mean_mechanical_power_mean_square_w2": _mean(
+            [run["mechanical_power_mean_square_w2"] for run in selected]
+        ),
+        "mean_pd_torque_rms_nm": _mean(
+            [run["pd_torque_rms_nm"] for run in selected]
+        ),
+        "mean_pd_torque_rate_rms_nm_s": _mean(
+            [run["pd_torque_rate_rms_nm_s"] for run in selected]
+        ),
+        "mean_relative_pd_torque_rms": _mean(
+            [run["relative_pd_torque_rms"] for run in selected]
+        ),
+        "mean_soft_peak_pd_torque_rms": _mean(
+            [run["soft_peak_pd_torque_rms"] for run in selected]
+        ),
+        "mean_pd_torque_hf_rms_nm": _mean(
+            [run["pd_torque_hf_mean_rms_nm"] for run in selected]
+        ),
+        "mean_pd_torque_saturation_fraction": _mean(
+            [run["pd_torque_saturation_fraction"] for run in selected]
         ),
         "mean_default_feet_distance_m": _mean(
             [run["default_feet_distance_m"] for run in selected]
@@ -515,6 +696,9 @@ def summarize_profile(profile: str, runs: list[dict[str, Any]]) -> dict[str, Any
         ),
         "mean_large_push_action_rate_settling_time_s": _mean(
             [run["large_push_action_rate_settling_time_s"] for run in selected]
+        ),
+        "large_push_action_rate_settled_count": sum(
+            int(run["large_push_action_rate_settled"]) for run in selected
         ),
     }
 
@@ -753,7 +937,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 f"{push['mean_large_push_late_action_hf_ratio']:.2f}/"
                 f"{push['mean_large_push_late_action_rate_ratio']:.2f}/"
                 f"{push['mean_large_push_late_torque_hf_ratio']:.2f} | "
-                f"{push['mean_large_push_action_rate_settling_time_s']:.2f} |",
+                f"{push['mean_large_push_action_rate_settling_time_s']:.2f} "
+                f"({push['large_push_action_rate_settled_count']}/{push['run_count']}收敛) |",
                 "",
                 "### 单次诊断",
                 "",
@@ -777,7 +962,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 f"{run['large_push_pre_action_hf_rms']:.6f}→"
                 f"{run['large_push_post_action_hf_rms']:.6f}→"
                 f"{run['large_push_late_action_hf_rms']:.6f} | "
-                f"{run['large_push_action_rate_settling_time_s']:.2f} |"
+                f"{run['large_push_action_rate_settling_time_s']:.2f}"
+                f"{'（未收敛）' if not run['large_push_action_rate_settled'] else ''} |"
             )
     lines.extend(
         [
@@ -809,6 +995,28 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 maximum=100.0 * profile["maximum_feet_distance_error_abs_m"],
                 within=profile["mean_feet_distance_within_1cm_fraction"],
             )
+        )
+    lines.extend(
+        [
+            "",
+            "### 控制链平滑指标",
+            "",
+            "下表使用同一个稳态窗口。`action Δ²` 是与训练一致的每控制步二阶差分；目标角速度/加速度由实际送入 PD 的目标有限差分得到；机械功率使用 MuJoCo 实际执行器力矩乘关节速度。",
+            "",
+            "| 场景 | action RMS/变化率/Δ² | action/目标角 8–25 Hz RMS | 目标默认误差/速度/加速度 | 关节速度/加速度 RMS | PD 力矩/变化率 RMS | 相对力矩/60%软峰值 | 力矩高频/饱和率 | 机械功率 RMS |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | ---: |",
+        ]
+    )
+    for profile in summary["profiles"]:
+        lines.append(
+            "| {profile} | {mean_actor_action_rms:.4f}/{mean_actor_action_rate_rms_per_s:.3f}/{mean_actor_action_second_difference_rms:.5f} | "
+            "{mean_actor_action_hf_rms:.6f}/{mean_target_position_hf_rms_rad:.6f} | "
+            "{mean_target_default_error_rms_rad:.4f}/{mean_target_velocity_rms_rad_s:.3f}/{mean_target_acceleration_rms_rad_s2:.2f} | "
+            "{mean_joint_velocity_rms_rad_s:.3f}/{mean_joint_acceleration_rms_rad_s2:.2f} | "
+            "{mean_pd_torque_rms_nm:.2f}/{mean_pd_torque_rate_rms_nm_s:.2f} | "
+            "{mean_relative_pd_torque_rms:.4f}/{mean_soft_peak_pd_torque_rms:.4f} | "
+            "{mean_pd_torque_hf_rms_nm:.5f}/{mean_pd_torque_saturation_fraction:.3%} | "
+            "{mean_mechanical_power_rms_w:.3f} |".format(**profile)
         )
     lines.extend(
         [
