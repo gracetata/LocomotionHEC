@@ -255,6 +255,18 @@ class AmpActorExporter(torch.nn.Module):
         super().__init__()
         self.obs_dim, self.action_dim = actor_dimensions(model_state)
         self.actor = build_actor(model_state, activation_name)
+        self.has_lateral_expert = "lateral_expert_actor.0.weight" in model_state
+        if self.has_lateral_expert:
+            lateral_expert_state = {
+                "actor." + key[len("lateral_expert_actor.") :]: value
+                for key, value in model_state.items()
+                if key.startswith("lateral_expert_actor.")
+            }
+            self.lateral_expert_actor = build_actor(lateral_expert_state, activation_name)
+        else:
+            # Keep a shape-compatible module so TorchScript can compile the
+            # gated branch even for ordinary checkpoints.
+            self.lateral_expert_actor = build_actor(model_state, activation_name)
         normalizer = build_actor_normalizer(model_state)
         self.normalizer = normalizer if normalizer is not None else torch.nn.Identity()
         self.has_command_residual = (
@@ -276,6 +288,14 @@ class AmpActorExporter(torch.nn.Module):
         self.register_buffer(
             "lateral_teacher_opposite_yaw_abs",
             model_state.get("lateral_teacher_opposite_yaw_abs", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "lateral_expert_forward_command",
+            model_state.get("lateral_expert_forward_command", torch.tensor(-0.10)).float(),
+        )
+        self.register_buffer(
+            "lateral_expert_same_yaw_abs",
+            model_state.get("lateral_expert_same_yaw_abs", torch.tensor(0.10)).float(),
         )
         self.register_buffer(
             "lateral_teacher_mixture_enabled",
@@ -353,17 +373,32 @@ class AmpActorExporter(torch.nn.Module):
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         normalized_obs = self.normalizer(obs)
         actions = self.actor(normalized_obs)
+        command = obs[..., 6:9]
+        lateral = (
+            (torch.abs(command[..., 1]) >= 0.10)
+            & (torch.abs(command[..., 0]) <= 0.02)
+            & (torch.abs(command[..., 2]) <= 0.05)
+        )
+        pure_yaw = (
+            (torch.sqrt(torch.sum(torch.square(command[..., :2]), dim=-1)) <= 0.02)
+            & (torch.abs(command[..., 2]) >= 0.10)
+        )
+        if self.has_lateral_expert:
+            lateral_obs = obs.clone()
+            lateral_obs[..., 6] = torch.where(
+                lateral,
+                self.lateral_expert_forward_command.to(lateral_obs.dtype),
+                lateral_obs[..., 6],
+            )
+            same_yaw_sign = torch.where(command[..., 1] >= 0.0, 1.0, -1.0).to(lateral_obs.dtype)
+            lateral_obs[..., 8] = torch.where(
+                lateral,
+                same_yaw_sign * self.lateral_expert_same_yaw_abs.to(lateral_obs.dtype),
+                lateral_obs[..., 8],
+            )
+            lateral_actions = self.lateral_expert_actor(self.normalizer(lateral_obs))
+            actions = torch.where(lateral.unsqueeze(-1), lateral_actions, actions)
         if self.has_command_residual:
-            command = obs[..., 6:9]
-            lateral = (
-                (torch.abs(command[..., 1]) >= 0.10)
-                & (torch.abs(command[..., 0]) <= 0.02)
-                & (torch.abs(command[..., 2]) <= 0.05)
-            )
-            pure_yaw = (
-                (torch.sqrt(torch.sum(torch.square(command[..., :2]), dim=-1)) <= 0.02)
-                & (torch.abs(command[..., 2]) >= 0.10)
-            )
             teacher_obs = obs.clone()
             teacher_x = teacher_obs[..., 6]
             teacher_x = torch.where(

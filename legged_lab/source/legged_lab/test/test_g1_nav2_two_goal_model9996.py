@@ -22,6 +22,9 @@ ACCEPTANCE_SCRIPT = (
     LEGGED_LAB_ROOT / "scripts" / "test_g1_amp_nav2_two_goal_model9996_mujoco.sh"
 )
 MERGE_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "merge_g1_amp_nav2_two_goal_model9996.py"
+GATED_MERGE_SCRIPT = (
+    LEGGED_LAB_ROOT / "scripts" / "merge_g1_amp_nav2_model9996_gated_experts.py"
+)
 MODE_ROOT = (
     PACKAGE_ROOT
     / "data"
@@ -334,6 +337,18 @@ def test_residual_calibration_preserves_base_and_scales_only_final_layer():
     assert "fixed_command_bridge_fraction" in script
     assert "Refusing to overwrite" in script
     assert MODEL9996_SHA256 in script
+
+
+def test_gated_merge_preserves_model9996_and_uses_strict_lateral_calibration():
+    script = GATED_MERGE_SCRIPT.read_text()
+    assert MODEL9996_SHA256 in script
+    assert '"lateral_expert_actor."' in script
+    assert 'key.startswith("actor.")' in script
+    assert 'key.startswith("lateral_command_residual.")' in script
+    assert 'state["fixed_command_bridge_fraction"] = torch.tensor(0.0)' in script
+    assert 'default=-0.10' in script
+    assert 'default=0.10' in script
+    assert "Refusing to overwrite" in script
 
 
 def test_mujoco_acceptance_is_strict_and_bidirectional():
