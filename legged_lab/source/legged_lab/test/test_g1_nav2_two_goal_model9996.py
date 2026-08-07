@@ -349,6 +349,8 @@ def test_gated_merge_preserves_model9996_and_uses_strict_lateral_calibration():
     assert 'default=-0.14' in script
     assert 'default=0.10' in script
     assert "Refusing to overwrite" in script
+    exporter = (LEGGED_LAB_ROOT / "scripts" / "rsl_rl" / "export_amp_actor_to_onnx.py").read_text()
+    assert 'torch.tensor(-0.14)' in exporter
 
 
 def test_mujoco_acceptance_is_strict_and_bidirectional():

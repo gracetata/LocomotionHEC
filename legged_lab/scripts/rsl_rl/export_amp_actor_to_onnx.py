@@ -291,7 +291,7 @@ class AmpActorExporter(torch.nn.Module):
         )
         self.register_buffer(
             "lateral_expert_forward_command",
-            model_state.get("lateral_expert_forward_command", torch.tensor(-0.10)).float(),
+            model_state.get("lateral_expert_forward_command", torch.tensor(-0.14)).float(),
         )
         self.register_buffer(
             "lateral_expert_same_yaw_abs",
