@@ -385,3 +385,27 @@ class G1Nav2TwoGoalModel9996FullActorRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.amp_cfg.command_obs_start_index = 6
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85
+
+
+@configclass
+class G1Nav2TwoGoalModel9996FullActorLateralRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996FullActorRslRlOnPolicyRunnerAmpCfg
+):
+    """Continue the lateral expert; retention is provided by deployment gating."""
+
+    experiment_name = "g1_amp_nav2_two_goal_model9996_full_actor_lateral"
+    checkpoint_output_dir = "Nav2TwoGoalModel9996FullActorLateral"
+    load_actor_amp_only = False
+    load_policy_only = True
+    actor_warmup_iterations = 0
+    save_interval = 2
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 1.0e-5
+        self.algorithm.clip_param = 0.10
+        self.algorithm.num_learning_epochs = 3
+        self.algorithm.entropy_coef = 3.0e-4
+        self.algorithm.baseline_kl_cfg.enabled = False
+        self.algorithm.baseline_kl_cfg.scale = 0.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0

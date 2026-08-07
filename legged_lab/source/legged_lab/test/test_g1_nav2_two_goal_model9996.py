@@ -14,6 +14,9 @@ TRAIN_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model99
 FULL_ACTOR_TRAIN_SCRIPT = (
     LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model9996_full_actor.sh"
 )
+FULL_ACTOR_LATERAL_TRAIN_SCRIPT = (
+    LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_model9996_full_actor_lateral.sh"
+)
 CALIBRATE_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "calibrate_g1_amp_nav2_two_goal_residual.py"
 ACCEPTANCE_SCRIPT = (
     LEGGED_LAB_ROOT / "scripts" / "test_g1_amp_nav2_two_goal_model9996_mujoco.sh"
@@ -123,6 +126,11 @@ def test_tasks_are_manager_amp_and_model9996_specific():
             "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActor-v0",
             "G1AmpNav2TwoGoalModel9996FullActorEnvCfg",
             "G1Nav2TwoGoalModel9996FullActorRslRlOnPolicyRunnerAmpCfg",
+        ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateral-v0",
+            "G1AmpNav2TwoGoalModel9996FullActorLateralEnvCfg",
+            "G1Nav2TwoGoalModel9996FullActorLateralRslRlOnPolicyRunnerAmpCfg",
         ),
     ):
         assert f'id="{task}"' in registry
@@ -291,6 +299,18 @@ def test_full_actor_escape_stage_is_exact_model9996_and_safety_constrained():
     assert '"min_clearance": 0.040' in full_actor
     assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in full_actor
     assert "two_goal_signed_root_response" in full_actor
+
+    lateral_script = FULL_ACTOR_LATERAL_TRAIN_SCRIPT.read_text()
+    assert MODEL9996_SHA256 in lateral_script
+    assert "agent.load_policy_only=True" in lateral_script
+    assert "agent.algorithm.baseline_kl_cfg.enabled=False" in lateral_script
+    lateral_start = env_text.index("class G1AmpNav2TwoGoalModel9996FullActorLateralEnvCfg")
+    lateral = env_text[
+        lateral_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")
+    ]
+    assert "two_goal_signed_root_response.weight = 100.0" in lateral
+    assert "two_goal_response_shortfall.weight = -300.0" in lateral
+    assert "swept_oriented_footprint_hard_barrier.weight = -150.0" in lateral
 
 
 def test_residual_calibration_preserves_base_and_scales_only_final_layer():

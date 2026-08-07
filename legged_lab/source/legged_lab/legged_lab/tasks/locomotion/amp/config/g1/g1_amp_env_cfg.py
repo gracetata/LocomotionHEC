@@ -2410,6 +2410,30 @@ class G1AmpNav2TwoGoalModel9996FullActorEnvCfg(
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996FullActorLateralEnvCfg(
+    G1AmpNav2TwoGoalModel9996FullActorEnvCfg
+):
+    """Train a full-capacity actor that is deployed only for strict lateral commands."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = (
+            G1_NAV2_TWO_GOAL_LATERAL_ONLY_MODE_CONFIG_PATH
+        )
+        self.commands.base_velocity.mode_command_clip_min = (0.0, -0.35, 0.0)
+        self.commands.base_velocity.mode_command_clip_max = (0.0, 0.35, 0.0)
+        self.rewards.two_goal_signed_root_response.weight = 100.0
+        self.rewards.two_goal_response_shortfall.weight = -300.0
+        self.rewards.two_goal_response_shortfall.params.update(
+            {"target_fraction": 0.75, "max_penalty": 1.0}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -1.0
+        self.rewards.lateral_foot_ordering_l2.weight = -30.0
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -5.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -150.0
+
+
+@configclass
 class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Bootstrap the two target skills from the existing forward gait cycle."""
 
