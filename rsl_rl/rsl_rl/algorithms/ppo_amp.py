@@ -77,8 +77,6 @@ def build_two_goal_carrier_teacher_obs(
         raise ValueError("Velocity-command observation slice is outside the policy input.")
     if lateral_teacher_forward_command <= max_student_forward_command:
         raise ValueError("Lateral teacher command must exceed the student dead-zone band.")
-    if pure_yaw_teacher_forward_command <= max_student_pure_yaw_translation_command:
-        raise ValueError("Pure-yaw teacher command must exceed the student dead-zone band.")
     if pure_yaw_positive_teacher_yaw_scale <= 0.0 or pure_yaw_negative_teacher_yaw_scale <= 0.0:
         raise ValueError("Pure-yaw teacher yaw scales must be positive.")
 

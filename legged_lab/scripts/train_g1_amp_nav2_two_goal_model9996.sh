@@ -85,6 +85,25 @@ case "${STAGE}" in
         FOOT_BARRIER_DESCRIPTION="direct model_9996 lateral: soft 0.100 m; hard 0.045 m; weight -100"
         MAX_ITERATIONS=${MAX_ITERATIONS:-40}
         ;;
+    yaw_proxy_bootstrap)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996YawSpecialist-v0"
+        SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-"${PROTECTED_MODEL9996}"}
+        SOURCE_SIZE=${SOURCE_SIZE:-${PROTECTED_MODEL9996_SIZE}}
+        SOURCE_SHA256=${SOURCE_SHA256:-"${PROTECTED_MODEL9996_SHA256}"}
+        [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: yaw_proxy_bootstrap must start with zero residuals from protected model_9996." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=True
+        LOAD_POLICY_ONLY=False
+        COMMAND_BRIDGE_ENABLE=True
+        COMMAND_BRIDGE_SCALE=0.50
+        COMMAND_BRIDGE_RESIDUAL_LR=3.0e-4
+        FREEZE_LATERAL_RESIDUAL=True
+        FREEZE_PURE_YAW_RESIDUAL=False
+        FOOT_BARRIER_DESCRIPTION="yaw proxy distillation: strict +/-0.35 observes model_9996 zero-drift +/-1.2 action prior"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-10}
+        ;;
     lateral_specialist)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
         : "${SOURCE_CHECKPOINT:?lateral_specialist requires a moving residual policy}"
@@ -174,7 +193,8 @@ verify_on_exit() {
 trap verify_on_exit EXIT
 
 verify_all
-if [[ "${STAGE}" == "bootstrap" || "${STAGE}" == "lateral_direct" ]]; then
+if [[ "${STAGE}" == "bootstrap" || "${STAGE}" == "lateral_direct" || \
+      "${STAGE}" == "yaw_proxy_bootstrap" ]]; then
     [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_MODEL9996}" ]] || \
         die "${STAGE} source must be the protected model_9996"
 fi
@@ -196,12 +216,34 @@ for arg in "$@"; do
         agent.policy.fixed_command_bridge_fraction=*|\
         agent.algorithm.command_bridge_cfg.enabled=*|agent.algorithm.command_bridge_cfg.scale=*|\
         agent.algorithm.command_bridge_cfg.residual_learning_rate=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_min=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_max=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_min=*|\
+        agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_max=*|\
+        agent.algorithm.command_bridge_cfg.teacher_delta_fraction=*|\
         env.commands.base_velocity.mode_sampling_config_path=*|\
         env.commands.base_velocity.mode_probability=*)
             die "protected model_9996 two-goal setting cannot be overridden: ${arg}"
             ;;
     esac
 done
+
+STAGE_AGENT_ARGS=()
+if [[ "${STAGE}" == "yaw_proxy_bootstrap" ]]; then
+    STAGE_AGENT_ARGS+=(
+        agent.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command=0.0
+        agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale=3.428571429
+        agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale=3.428571429
+        agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_min=1.2
+        agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_max=1.2
+        agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_min=1.2
+        agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_max=1.2
+        agent.algorithm.command_bridge_cfg.teacher_delta_fraction=0.50
+    )
+fi
 
 echo "=================================================="
 echo " G1 Nav2 model_9996 two-goal training"
@@ -257,6 +299,7 @@ bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
     agent.algorithm.command_bridge_cfg.scale="${COMMAND_BRIDGE_SCALE}" \
     agent.algorithm.command_bridge_cfg.residual_learning_rate="${COMMAND_BRIDGE_RESIDUAL_LR}" \
     agent.algorithm.command_bridge_cfg.residual_updates_per_batch="${COMMAND_BRIDGE_RESIDUAL_UPDATES}" \
+    "${STAGE_AGENT_ARGS[@]}" \
     "$@"
 
 if grep -Eq 'Traceback \(most recent call last\)|CUDA out of memory|NaN|nan detected|TypeError:' \

@@ -193,6 +193,12 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "barrier_corrective" in script
     assert "lateral_direct" in script
     assert "lateral_direct must start with zero residuals from protected model_9996" in script
+    assert "yaw_proxy_bootstrap" in script
+    assert "yaw_proxy_bootstrap must start with zero residuals from protected model_9996" in script
+    assert "pure_yaw_teacher_forward_command=0.0" in script
+    assert "pure_yaw_positive_teacher_yaw_min=1.2" in script
+    assert "pure_yaw_negative_teacher_yaw_min=1.2" in script
+    assert "teacher_delta_fraction=0.50" in script
     assert "lateral_specialist" in script
     assert "yaw_specialist" in script
     assert 'agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}"' in script
