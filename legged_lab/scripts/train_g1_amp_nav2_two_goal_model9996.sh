@@ -7,7 +7,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 LEGGED_LAB_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 
 STAGE=${STAGE:-bootstrap}
-PROTECTED_MODEL9996="${LEGGED_LAB_DIR}/../checkpoint/nav2_behavior_model9996_source/model_9996.pt"
+PROTECTED_MODEL9996=$(realpath \
+    "${LEGGED_LAB_DIR}/../checkpoint/nav2_behavior_model9996_source/model_9996.pt")
 PROTECTED_MODEL9996_SIZE=16202421
 PROTECTED_MODEL9996_SHA256="bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6"
 
