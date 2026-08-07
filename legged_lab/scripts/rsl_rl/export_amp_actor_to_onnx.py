@@ -237,6 +237,17 @@ G1_PD_GAINS: Dict[str, Dict[str, float]] = {
 }
 
 
+class ZeroCommandResidual(torch.nn.Module):
+    """JIT-safe placeholder used by checkpoints without residual adapters."""
+
+    def __init__(self, action_dim: int) -> None:
+        super().__init__()
+        self.action_dim = int(action_dim)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(obs[..., : self.action_dim])
+
+
 class AmpActorExporter(torch.nn.Module):
     """Feed-forward AMP actor wrapper with optional actor-observation normalization."""
 
@@ -257,6 +268,11 @@ class AmpActorExporter(torch.nn.Module):
             self.pure_yaw_command_residual = build_named_mlp(
                 model_state, "pure_yaw_command_residual", activation_name
             )
+        else:
+            # TorchScript compiles both branches, so both attributes must
+            # exist even when exporting a pre-residual baseline checkpoint.
+            self.lateral_command_residual = ZeroCommandResidual(self.action_dim)
+            self.pure_yaw_command_residual = ZeroCommandResidual(self.action_dim)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         normalized_obs = self.normalizer(obs)

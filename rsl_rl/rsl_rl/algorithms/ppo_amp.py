@@ -237,12 +237,46 @@ class PPOAMP(PPO):
         self.command_bridge_teacher_delta_fraction = float(
             self.command_bridge_cfg.get("teacher_delta_fraction", 0.60)
         )
+        self.command_bridge_residual_learning_rate = float(
+            self.command_bridge_cfg.get("residual_learning_rate", 0.0)
+        )
+        self.command_bridge_residual_updates_per_batch = int(
+            self.command_bridge_cfg.get("residual_updates_per_batch", 1)
+        )
         if self.command_bridge_scale < 0.0:
             raise ValueError("command bridge scale must be non-negative.")
         if not 0.0 <= self.command_bridge_teacher_delta_fraction <= 1.0:
             raise ValueError("command bridge teacher_delta_fraction must be in [0, 1].")
+        if self.command_bridge_residual_learning_rate < 0.0:
+            raise ValueError("command bridge residual_learning_rate must be non-negative.")
+        if self.command_bridge_residual_updates_per_batch <= 0:
+            raise ValueError("command bridge residual_updates_per_batch must be positive.")
         if self.command_bridge_enabled and self.baseline_policy is None:
             raise ValueError("command bridge requires an enabled frozen baseline policy.")
+
+        self.command_bridge_optimizer = None
+        self.command_bridge_residual_parameters: list[torch.nn.Parameter] = []
+        if self.command_bridge_enabled and self.command_bridge_residual_learning_rate > 0.0:
+            residual_modules = (
+                getattr(self.policy, "lateral_command_residual", None),
+                getattr(self.policy, "pure_yaw_command_residual", None),
+            )
+            if any(module is None for module in residual_modules):
+                raise ValueError(
+                    "A residual-only command bridge requires lateral and pure-yaw residual modules."
+                )
+            self.command_bridge_residual_parameters = list(
+                chain.from_iterable(module.parameters() for module in residual_modules)
+            )
+            self.command_bridge_optimizer = optim.Adam(
+                self.command_bridge_residual_parameters,
+                lr=self.command_bridge_residual_learning_rate,
+            )
+            print(
+                "Using residual-only command-bridge optimizer: "
+                f"lr={self.command_bridge_residual_learning_rate:.3e}, "
+                f"updates_per_batch={self.command_bridge_residual_updates_per_batch}."
+            )
 
         self.disc_normalizer_mode = self.amp_cfg.get("normalizer_mode", "policy")
         if self.disc_normalizer_mode not in {"policy", "policy_demo", "demo_static"}:
@@ -313,6 +347,50 @@ class PPOAMP(PPO):
             self.amp_discriminator.update_normalization(disc_obs_batch)
         elif self.disc_normalizer_mode == "policy_demo":
             self.amp_discriminator.update_normalization(torch.cat((disc_obs_batch, disc_demo_obs_batch), dim=0))
+
+    def _compute_command_bridge_loss(self, actor_obs: torch.Tensor) -> torch.Tensor:
+        """Distill carrier-command action deltas only on strict two-goal samples."""
+        if self.baseline_policy is None:
+            return torch.zeros((), device=self.device)
+        teacher_obs, lateral_bridge, pure_yaw_bridge = build_two_goal_carrier_teacher_obs(
+            actor_obs,
+            command_obs_start_index=int(self.command_bridge_cfg.get("command_obs_start_index", 6)),
+            lateral_min_command=float(self.command_bridge_cfg.get("lateral_min_command", 0.10)),
+            pure_yaw_min_command=float(self.command_bridge_cfg.get("pure_yaw_min_command", 0.10)),
+            max_student_forward_command=float(
+                self.command_bridge_cfg.get("max_student_forward_command", 0.02)
+            ),
+            max_lateral_yaw_command=float(
+                self.command_bridge_cfg.get("max_lateral_yaw_command", 0.05)
+            ),
+            max_student_pure_yaw_translation_command=float(
+                self.command_bridge_cfg.get("max_student_pure_yaw_translation_command", 0.02)
+            ),
+            lateral_teacher_forward_command=float(
+                self.command_bridge_cfg.get("lateral_teacher_forward_command", 0.20)
+            ),
+            pure_yaw_teacher_forward_command=float(
+                self.command_bridge_cfg.get("pure_yaw_teacher_forward_command", 0.15)
+            ),
+        )
+        bridge_mask = lateral_bridge | pure_yaw_bridge
+        with torch.no_grad():
+            baseline_mu = self.baseline_policy.actor(
+                self.baseline_policy.actor_obs_normalizer(actor_obs)
+            )
+            teacher_mu = self.baseline_policy.actor(
+                self.baseline_policy.actor_obs_normalizer(teacher_obs)
+            )
+            target_mu = baseline_mu + self.command_bridge_teacher_delta_fraction * (
+                teacher_mu - baseline_mu
+            )
+        student_mu = self.policy.actor_mean_from_flat_obs(actor_obs)
+        per_sample_loss = torch.mean(torch.square(student_mu - target_mu), dim=-1)
+        return torch.where(
+            bridge_mask,
+            per_sample_loss,
+            torch.zeros_like(per_sample_loss),
+        ).sum() / torch.clamp(bridge_mask.sum(), min=1)
         
     def process_env_step(
         self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
@@ -328,7 +406,7 @@ class PPOAMP(PPO):
         # Compute the Style Reward
         self.style_rewards, self.disc_score = self.amp_discriminator.predict_style_reward(disc_obs, dt=self.amp_cfg["step_dt"])
         # Linearly interpolate between task reward and style reward
-        if self.command_conditioned_style_reward:
+        if getattr(self, "command_conditioned_style_reward", False):
             actor_obs = self.policy.get_actor_obs(obs)
             specialization_mask = two_goal_specialization_mask_from_policy_obs(
                 actor_obs,
@@ -559,50 +637,9 @@ class PPOAMP(PPO):
                 loss = loss + baseline_kl_weighted_loss
 
                 if self.command_bridge_enabled and self.command_bridge_scale > 0.0:
-                    teacher_obs, lateral_bridge, pure_yaw_bridge = build_two_goal_carrier_teacher_obs(
-                        actor_obs_batch,
-                        command_obs_start_index=int(
-                            self.command_bridge_cfg.get("command_obs_start_index", 6)
-                        ),
-                        lateral_min_command=float(
-                            self.command_bridge_cfg.get("lateral_min_command", 0.10)
-                        ),
-                        pure_yaw_min_command=float(
-                            self.command_bridge_cfg.get("pure_yaw_min_command", 0.10)
-                        ),
-                        max_student_forward_command=float(
-                            self.command_bridge_cfg.get("max_student_forward_command", 0.02)
-                        ),
-                        max_lateral_yaw_command=float(
-                            self.command_bridge_cfg.get("max_lateral_yaw_command", 0.05)
-                        ),
-                        max_student_pure_yaw_translation_command=float(
-                            self.command_bridge_cfg.get(
-                                "max_student_pure_yaw_translation_command", 0.02
-                            )
-                        ),
-                        lateral_teacher_forward_command=float(
-                            self.command_bridge_cfg.get("lateral_teacher_forward_command", 0.20)
-                        ),
-                        pure_yaw_teacher_forward_command=float(
-                            self.command_bridge_cfg.get("pure_yaw_teacher_forward_command", 0.15)
-                        ),
-                    )
-                    bridge_mask = lateral_bridge | pure_yaw_bridge
-                    with torch.no_grad():
-                        teacher_mu = self.baseline_policy.actor(
-                            self.baseline_policy.actor_obs_normalizer(teacher_obs)
-                        )
-                        target_mu = baseline_mu_batch + self.command_bridge_teacher_delta_fraction * (
-                            teacher_mu - baseline_mu_batch
-                        )
-                    per_sample_bridge_loss = torch.mean(torch.square(mu_batch - target_mu), dim=-1)
-                    command_bridge_loss = torch.where(
-                        bridge_mask,
-                        per_sample_bridge_loss,
-                        torch.zeros_like(per_sample_bridge_loss),
-                    ).sum() / torch.clamp(bridge_mask.sum(), min=1)
-                    loss = loss + self.command_bridge_scale * command_bridge_loss
+                    command_bridge_loss = self._compute_command_bridge_loss(actor_obs_batch)
+                    if self.command_bridge_optimizer is None:
+                        loss = loss + self.command_bridge_scale * command_bridge_loss
                 else:
                     command_bridge_loss = torch.zeros((), device=self.device)
             else:
@@ -719,6 +756,18 @@ class PPOAMP(PPO):
             # Apply the gradients for PPO
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.optimizer.step()
+            # A dedicated optimizer lets the carrier teacher establish gait
+            # onset without raising the critic/base-actor PPO learning rate.
+            if self.command_bridge_optimizer is not None and self.command_bridge_scale > 0.0:
+                for _ in range(self.command_bridge_residual_updates_per_batch):
+                    self.command_bridge_optimizer.zero_grad()
+                    command_bridge_loss = self._compute_command_bridge_loss(actor_obs_batch.detach())
+                    command_bridge_loss.backward()
+                    nn.utils.clip_grad_norm_(
+                        self.command_bridge_residual_parameters,
+                        self.max_grad_norm,
+                    )
+                    self.command_bridge_optimizer.step()
             # Apply the gradients for RND
             if self.rnd_optimizer:
                 self.rnd_optimizer.step()

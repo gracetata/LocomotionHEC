@@ -40,6 +40,8 @@ HEADLESS=${HEADLESS:-True}
 QUIET_TERMINAL=${QUIET_TERMINAL:-True}
 BASELINE_KL_SCALE=${BASELINE_KL_SCALE:-0.08}
 COMMAND_BRIDGE_SCALE=${COMMAND_BRIDGE_SCALE:-0.20}
+COMMAND_BRIDGE_RESIDUAL_LR=${COMMAND_BRIDGE_RESIDUAL_LR:-0.0}
+COMMAND_BRIDGE_RESIDUAL_UPDATES=${COMMAND_BRIDGE_RESIDUAL_UPDATES:-1}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-"${LEGGED_LAB_DIR}/logs/rsl_rl/${EXPERIMENT_NAME}/train_${RUN_NAME}.log"}
 
 die() {
@@ -102,6 +104,8 @@ for arg in "$@"; do
         agent.load_actor_only=*|agent.load_actor_amp_only=*|agent.load_policy_only=*|\
         agent.freeze_actor_hidden_layers=*|agent.algorithm.amp_cfg.freeze_discriminator=*|\
         agent.algorithm.command_bridge_cfg.enabled=*|agent.algorithm.command_bridge_cfg.scale=*|\
+        agent.algorithm.command_bridge_cfg.residual_learning_rate=*|\
+        agent.algorithm.command_bridge_cfg.residual_updates_per_batch=*|\
         env.commands.base_velocity.mode_sampling_config_path=*|\
         env.commands.base_velocity.mode_probability=*)
             die "Protected two-goal setting cannot be overridden: ${arg}"
@@ -125,6 +129,7 @@ echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, base actor frozen"
 echo "Trainable policy  : separate lateral/yaw residual adapters + action noise"
 echo "Actor schedule    : fresh-load iterations 0-7 critic-only, then actor enabled"
 echo "Command bridge    : strict-goal carrier-teacher scale=${COMMAND_BRIDGE_SCALE}"
+echo "Bridge optimizer  : residual_lr=${COMMAND_BRIDGE_RESIDUAL_LR}, updates/batch=${COMMAND_BRIDGE_RESIDUAL_UPDATES}"
 echo "Baseline KL       : specialization=0.005, retention=${BASELINE_KL_SCALE}, hard=0.15"
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "Run               : ${RUN_NAME}"
@@ -166,6 +171,8 @@ bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
     agent.reset_iteration_on_policy_only_load=True \
     agent.algorithm.command_bridge_cfg.enabled=True \
     agent.algorithm.command_bridge_cfg.scale="${COMMAND_BRIDGE_SCALE}" \
+    agent.algorithm.command_bridge_cfg.residual_learning_rate="${COMMAND_BRIDGE_RESIDUAL_LR}" \
+    agent.algorithm.command_bridge_cfg.residual_updates_per_batch="${COMMAND_BRIDGE_RESIDUAL_UPDATES}" \
     "$@"
 
 verify_source

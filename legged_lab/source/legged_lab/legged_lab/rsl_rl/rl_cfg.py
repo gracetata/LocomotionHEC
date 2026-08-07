@@ -154,6 +154,11 @@ class RslRlPpoAmpAlgorithmCfg:
         lateral_teacher_forward_command: float = 0.20
         pure_yaw_teacher_forward_command: float = 0.15
         teacher_delta_fraction: float = 0.60
+        residual_learning_rate: float = 0.0
+        """Optional learning rate for a residual-only teacher optimizer."""
+
+        residual_updates_per_batch: int = 1
+        """Teacher-only residual updates after each PPO mini-batch."""
 
     command_bridge_cfg: CommandBridgeCfg = CommandBridgeCfg()
     """Optional carrier-command action teacher for strict two-goal samples."""

@@ -17,6 +17,7 @@ REWARD_MATH_FILE = AMP_ROOT / "mdp" / "reward_math.py"
 ENV_CFG_FILE = G1_ROOT / "g1_amp_env_cfg.py"
 REGISTRY_FILE = G1_ROOT / "__init__.py"
 AGENT_CFG_FILE = G1_ROOT / "agents" / "rsl_rl_ppo_cfg.py"
+RL_CFG_FILE = PACKAGE_ROOT / "rsl_rl" / "rl_cfg.py"
 TRAIN_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal.sh"
 MODE_CONFIG = (
     PACKAGE_ROOT
@@ -212,6 +213,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     env_text = ENV_CFG_FILE.read_text()
     registry = REGISTRY_FILE.read_text()
     agent = AGENT_CFG_FILE.read_text()
+    rl_cfg = RL_CFG_FILE.read_text()
     script = TRAIN_SCRIPT.read_text()
     block = env_text[env_text.index("class G1AmpNav2TwoGoalFinetuneEnvCfg") :]
 
@@ -254,6 +256,8 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "hard_limit = 0.15" in agent
     assert "command_bridge_cfg.enabled = True" in agent
     assert "command_bridge_cfg.scale = 0.20" in agent
+    assert "residual_learning_rate: float = 0.0" in rl_cfg
+    assert "residual_updates_per_batch: int = 1" in rl_cfg
     assert "restore_configured_learning_rate_on_load = True" in agent
     assert 'weight=-4.0' in block
     assert 'weight=-2.0' in block
