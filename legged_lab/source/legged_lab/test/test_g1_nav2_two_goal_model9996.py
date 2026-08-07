@@ -1,0 +1,165 @@
+import hashlib
+import json
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+LEGGED_LAB_ROOT = REPO_ROOT / "legged_lab"
+PACKAGE_ROOT = LEGGED_LAB_ROOT / "source" / "legged_lab" / "legged_lab"
+G1_ROOT = PACKAGE_ROOT / "tasks" / "locomotion" / "amp" / "config" / "g1"
+ENV_CFG_FILE = G1_ROOT / "g1_amp_env_cfg.py"
+REGISTRY_FILE = G1_ROOT / "__init__.py"
+AGENT_CFG_FILE = G1_ROOT / "agents" / "rsl_rl_ppo_cfg.py"
+TRAIN_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model9996.sh"
+ACCEPTANCE_SCRIPT = (
+    LEGGED_LAB_ROOT / "scripts" / "test_g1_amp_nav2_two_goal_model9996_mujoco.sh"
+)
+MODE_ROOT = (
+    PACKAGE_ROOT
+    / "data"
+    / "MotionData"
+    / "g1_29dof"
+    / "amp"
+    / "nav2_behavior_50hz"
+)
+MODEL9996 = REPO_ROOT / "checkpoint" / "nav2_behavior_model9996_source" / "model_9996.pt"
+MODEL9996_SIZE = 16_202_421
+MODEL9996_SHA256 = "bc30bc5171d211fa414fbeab31452b92ad76ca7f6ad76a2417a6e7f7515a0fa6"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def test_model9996_is_the_exact_and_only_protected_origin():
+    assert MODEL9996.stat().st_size == MODEL9996_SIZE
+    assert _sha256(MODEL9996) == MODEL9996_SHA256
+    script = TRAIN_SCRIPT.read_text()
+    assert "model_9996.pt" in script
+    assert str(MODEL9996_SIZE) in script
+    assert MODEL9996_SHA256 in script
+    assert "model_10990" not in script
+    assert "model_12995" not in script
+    assert "bootstrap source must be the protected model_9996" in script
+
+
+def test_commands_are_strict_and_balanced_with_a_retention_anchor():
+    stage1 = json.loads((MODE_ROOT / "task_sampling_two_goal_config.json").read_text())
+    stage2 = json.loads((MODE_ROOT / "task_sampling_two_goal_stage2_config.json").read_text())
+    expected_weights = {
+        "lateral_left": 0.25,
+        "lateral_right": 0.25,
+        "turn_in_place_left": 0.25,
+        "turn_in_place_right": 0.25,
+    }
+    for config in (stage1, stage2):
+        assert config["mode_weights"] == expected_weights
+        for name, mode in config["modes"].items():
+            assert mode["lin_vel_x"] == [0.0, 0.0]
+            if name.startswith("lateral"):
+                assert mode["ang_vel_z"] == [0.0, 0.0]
+            else:
+                assert mode["lin_vel_y"] == [0.0, 0.0]
+
+    env_text = ENV_CFG_FILE.read_text()
+    block = env_text[env_text.index("class G1AmpNav2TwoGoalFinetuneEnvCfg") :]
+    assert "mode_probability = 0.80" in block
+    assert "recorded Nav2 remainder is a retention anchor" in block
+
+
+def test_tasks_are_manager_amp_and_model9996_specific():
+    registry = REGISTRY_FILE.read_text()
+    for task, env_cfg, agent_cfg in (
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996Bootstrap-v0",
+            "G1AmpNav2TwoGoalModel9996BootstrapEnvCfg",
+            "G1Nav2TwoGoalModel9996BootstrapRslRlOnPolicyRunnerAmpCfg",
+        ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996Corrective-v0",
+            "G1AmpNav2TwoGoalModel9996CorrectiveEnvCfg",
+            "G1Nav2TwoGoalModel9996CorrectiveRslRlOnPolicyRunnerAmpCfg",
+        ),
+    ):
+        assert f'id="{task}"' in registry
+        task_block = registry[registry.index(f'id="{task}"') :]
+        task_block = task_block[: task_block.index("\n)\n")]
+        assert 'entry_point="legged_lab.envs:ManagerBasedAmpEnv"' in task_block
+        assert env_cfg in task_block
+        assert agent_cfg in task_block
+
+
+def test_deployment_has_no_carrier_and_retention_is_structural():
+    agent = AGENT_CFG_FILE.read_text()
+    start = agent.index("class G1Nav2TwoGoalModel9996BootstrapRslRlOnPolicyRunnerAmpCfg")
+    block = agent[start:]
+    assert 'experiment_name = "g1_amp_nav2_two_goal_model9996"' in block
+    assert 'checkpoint_output_dir = "Nav2TwoGoalModel9996"' in block
+    assert "load_actor_amp_only = True" in block
+    assert "freeze_base_actor = True" in agent
+    assert "freeze_pure_yaw_residual = False" in block
+    assert "self.policy.fixed_command_bridge_fraction = 0.0" in block
+    assert "self.algorithm.baseline_kl_cfg.specialization_scale = 0.0" in block
+    assert "self.algorithm.command_bridge_cfg.enabled = True" in block
+
+    corrective = block[block.index("class G1Nav2TwoGoalModel9996Corrective") :]
+    assert "load_policy_only = True" in corrective
+    assert "self.algorithm.command_bridge_cfg.enabled = False" in corrective
+    assert "self.algorithm.command_bridge_cfg.scale = 0.0" in corrective
+    assert "self.algorithm.command_bridge_cfg.residual_learning_rate = 0.0" in corrective
+
+
+def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
+    env_text = ENV_CFG_FILE.read_text()
+    start = env_text.index("class G1AmpNav2TwoGoalModel9996BootstrapEnvCfg")
+    block = env_text[start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
+    for reward in (
+        "lateral_command_progress",
+        "pure_yaw_command_progress",
+        "dense_root_pose_command_progress",
+        "two_goal_response_shortfall",
+        "swept_oriented_footprint_soft_margin_l2",
+        "swept_oriented_footprint_hard_barrier",
+    ):
+        assert reward in block
+    assert block.count("swept_oriented_footprint_hard_barrier.weight = -12.0") == 2
+    assert block.count('["overlap_scale"] = 4.0') == 2
+    assert '"hard_clearance": 0.025' in env_text
+    assert '"soft_clearance": 0.040' in env_text
+
+
+def test_training_script_separates_bootstrap_and_corrective_contracts():
+    script = TRAIN_SCRIPT.read_text()
+    assert "load_actor_amp_only=\"${LOAD_ACTOR_AMP_ONLY}\"" in script
+    assert "load_policy_only=\"${LOAD_POLICY_ONLY}\"" in script
+    assert "agent.policy.fixed_command_bridge_fraction=0.0" in script
+    assert "BASELINE_KL_CHECKPOINT=\"${PROTECTED_MODEL9996}\"" in script
+    assert "RSI_ENABLE=False" in script
+    assert "RANDOMIZATION_STRENGTH=0" in script
+    assert "Deployed carrier  : disabled" in script
+    assert 'OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996"' in script
+
+
+def test_mujoco_acceptance_is_strict_and_bidirectional():
+    script = ACCEPTANCE_SCRIPT.read_text()
+    for scenario in (
+        "lateral_left",
+        "lateral_right",
+        "yaw_left",
+        "yaw_right",
+        "stand",
+        "forward",
+        "baseline_forward",
+    ):
+        assert scenario in script
+    assert 'float(state["fixed_command_bridge_fraction"]) != 0.0' in script
+    assert 'signed lateral speed {signed_vy:.4f} < 0.18 m/s' in script
+    assert 'signed yaw rate {signed_yaw:.4f} < 0.25 rad/s' in script
+    assert 'planar drift {planar_drift:.4f} > 0.035 m/s' in script
+    assert 'health["sole_clearance_violation_fraction"] != 0.0' in script
+    assert 'health["min_signed_sole_clearance_m"] < 0.025' in script
+    assert "forward retention degraded by more than 15%" in script

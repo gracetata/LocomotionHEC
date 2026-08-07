@@ -55,6 +55,34 @@ def test_residual_gates_never_change_forward_retention_commands():
     torch.testing.assert_close(actual[2:], base[2:], rtol=0.0, atol=0.0)
 
 
+def test_zero_deployment_bridge_uses_learned_residual_not_carrier_action():
+    obs = _observations(batch=3)
+    obs["policy"][:, 6:9] = torch.tensor(
+        [[0.0, 0.25, 0.0], [0.0, 0.0, 0.35], [0.5, 0.0, 0.0]]
+    )
+    model = ActorCriticCommandResidual(
+        obs,
+        {"policy": ["policy"], "critic": ["critic"]},
+        29,
+        actor_hidden_dims=[32, 16],
+        critic_hidden_dims=[32, 16],
+        command_residual_hidden_dim=8,
+        fixed_command_bridge_fraction=0.0,
+        lateral_teacher_forward_command=0.20,
+        pure_yaw_teacher_forward_command=0.15,
+    ).eval()
+    with torch.no_grad():
+        model.lateral_command_residual[-1].bias.fill_(0.75)
+        model.pure_yaw_command_residual[-1].bias.fill_(-0.50)
+
+    base = model.actor(obs["policy"])
+    actual = model.act_inference(obs)
+    torch.testing.assert_close(actual[0], base[0] + 0.75)
+    torch.testing.assert_close(actual[1], base[1] - 0.50)
+    torch.testing.assert_close(actual[2], base[2], rtol=0.0, atol=0.0)
+    torch.testing.assert_close(model.fixed_command_bridge_fraction, torch.tensor(0.0))
+
+
 def test_fixed_bridge_is_exact_carrier_actor_only_for_strict_commands():
     obs = _observations()
     obs["policy"][0, 6:9] = torch.tensor([0.0, 0.25, 0.0])

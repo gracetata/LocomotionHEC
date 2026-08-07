@@ -2047,6 +2047,63 @@ class G1AmpNav2TwoGoalStage2FinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996BootstrapEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
+    """Start the two strict skills while retaining a hard sole-safety barrier.
+
+    The commands seen by the environment are already strict: lateral samples
+    have ``vx=wz=0`` and turn-in-place samples have ``vx=vy=0``.  The carrier
+    used by the bootstrap runner is only an auxiliary action target and never
+    changes these commands or the deployed policy input.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.two_goal_response_shortfall.weight = -3.0
+        self.rewards.safe_step_initiation.weight = 0.8
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -1.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -12.0
+        self.rewards.swept_oriented_footprint_hard_barrier.params["overlap_scale"] = 4.0
+
+
+@configclass
+class G1AmpNav2TwoGoalModel9996CorrectiveEnvCfg(G1AmpNav2TwoGoalStage2FinetuneEnvCfg):
+    """Convert bootstrap motion into true lateral steps and in-place turns."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        # A carrier is only an exploration initializer. Credit is dominated by
+        # real root displacement/heading, while visible forward leakage and
+        # turn radius are made more expensive than standing still.
+        self.rewards.lateral_command_progress.weight = 7.0
+        self.rewards.lateral_command_progress.params.update(
+            {"forward_leak_scale": 0.025, "yaw_leak_scale": 0.060}
+        )
+        self.rewards.pure_yaw_command_progress.weight = 8.0
+        self.rewards.pure_yaw_command_progress.params["planar_drift_scale"] = 0.025
+        self.rewards.dense_root_pose_command_progress.weight = 8.0
+        self.rewards.dense_root_pose_command_progress.params.update(
+            {"forward_leak_scale": 0.050, "yaw_leak_scale": 0.12, "planar_drift_scale": 0.040}
+        )
+        self.rewards.safe_alternating_touchdown_progress.weight = 3.0
+        self.rewards.safe_step_initiation.weight = 0.8
+        self.rewards.safe_alternating_swing_progress.weight = 2.5
+        self.rewards.two_goal_response_shortfall.weight = -4.0
+        self.rewards.two_goal_response_shortfall.params["target_fraction"] = 0.65
+        self.rewards.pure_yaw_planar_drift_l2.weight = -2.0
+        self.rewards.pure_yaw_planar_drift_l2.params.update(
+            {"velocity_scale": 0.040, "max_penalty": 1.0}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -1.5
+        self.rewards.lateral_command_leak_l2.params.update(
+            {"forward_velocity_scale": 0.050, "yaw_rate_scale": 0.10, "max_penalty": 1.0}
+        )
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -1.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -12.0
+        self.rewards.swept_oriented_footprint_hard_barrier.params["overlap_scale"] = 4.0
+        self.rewards.pure_yaw_torso_roll_l2.weight = -0.5
+
+
+@configclass
 class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Bootstrap the two target skills from the existing forward gait cycle."""
 

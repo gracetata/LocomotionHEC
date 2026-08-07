@@ -206,3 +206,72 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
         # In PPOAMP this is the task fraction: 0.85 task + 0.15 frozen style.
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85
+
+
+@configclass
+class G1Nav2TwoGoalModel9996BootstrapRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg
+):
+    """Bootstrap strict-command residuals from a frozen model_9996 actor."""
+
+    experiment_name = "g1_amp_nav2_two_goal_model9996"
+    checkpoint_output_dir = "Nav2TwoGoalModel9996"
+    load_actor_amp_only = True
+    load_policy_only = False
+    freeze_pure_yaw_residual = False
+    actor_warmup_iterations = 0
+    save_interval = 2
+
+    def __post_init__(self):
+        super().__post_init__()
+        # The carrier exists only in the auxiliary training target. Inference
+        # always remains base actor + learned strict-command residual.
+        self.policy.fixed_command_bridge_fraction = 0.0
+        self.policy.lateral_teacher_min_abs_command = 0.0
+        self.policy.pure_yaw_positive_teacher_yaw_scale = 1.0
+        self.policy.pure_yaw_negative_teacher_yaw_scale = 1.0
+        self.policy.pure_yaw_positive_teacher_yaw_min = 0.0
+        self.policy.pure_yaw_positive_teacher_yaw_max = 10.0
+        self.policy.pure_yaw_negative_teacher_yaw_min = 0.0
+        self.policy.pure_yaw_negative_teacher_yaw_max = 10.0
+        self.algorithm.learning_rate = 1.5e-5
+        self.algorithm.clip_param = 0.15
+        self.algorithm.num_learning_epochs = 3
+        self.algorithm.entropy_coef = 8.0e-4
+        self.algorithm.baseline_kl_cfg.specialization_scale = 0.0
+        self.algorithm.command_bridge_cfg.enabled = True
+        self.algorithm.command_bridge_cfg.scale = 0.20
+        self.algorithm.command_bridge_cfg.teacher_delta_fraction = 0.80
+        self.algorithm.command_bridge_cfg.residual_learning_rate = 3.0e-4
+        self.algorithm.command_bridge_cfg.residual_updates_per_batch = 1
+        self.algorithm.command_bridge_cfg.lateral_teacher_forward_command = 0.20
+        self.algorithm.command_bridge_cfg.lateral_teacher_min_abs_command = 0.0
+        self.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command = 0.15
+        self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale = 1.0
+        self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale = 1.0
+        self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_min = 0.0
+        self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_max = 10.0
+        self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_min = 0.0
+        self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_max = 10.0
+        self.algorithm.amp_cfg.specialization_task_style_lerp = 1.0
+
+
+@configclass
+class G1Nav2TwoGoalModel9996CorrectiveRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996BootstrapRslRlOnPolicyRunnerAmpCfg
+):
+    """Remove carrier-like drift using only physical task rewards."""
+
+    load_actor_amp_only = False
+    load_policy_only = True
+    reset_iteration_on_policy_only_load = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 3.0e-5
+        self.algorithm.num_learning_epochs = 4
+        self.algorithm.entropy_coef = 5.0e-4
+        self.algorithm.command_bridge_cfg.enabled = False
+        self.algorithm.command_bridge_cfg.scale = 0.0
+        self.algorithm.command_bridge_cfg.residual_learning_rate = 0.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
