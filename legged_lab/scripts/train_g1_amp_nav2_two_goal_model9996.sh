@@ -101,6 +101,10 @@ case "${STAGE}" in
         ;;
 esac
 
+# Symlink targets must remain valid from the staging directory even when the
+# caller supplied a repository-relative checkpoint path.
+SOURCE_CHECKPOINT=$(realpath "${SOURCE_CHECKPOINT}")
+
 EXPERIMENT_NAME="g1_amp_nav2_two_goal_model9996"
 OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996"
 STAGING_RUN="_source_model9996_${STAGE}"
