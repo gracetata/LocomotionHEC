@@ -248,7 +248,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "RslRlPpoActorCriticCommandResidualCfg" in agent
     assert "fixed_command_bridge_fraction=1.0" in agent
     assert "pure_yaw_teacher_forward_command=0.10" in agent
-    assert "pure_yaw_positive_teacher_yaw_scale=1.657142857" in agent
+    assert "pure_yaw_positive_teacher_yaw_scale=1.652" in agent
     assert "pure_yaw_negative_teacher_yaw_scale=1.428571429" in agent
     assert "actor_warmup_iterations = 8" in agent
     assert "freeze_discriminator = True" in agent

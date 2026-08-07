@@ -91,12 +91,12 @@ def test_fixed_bridge_supports_sign_specific_pure_yaw_carriers():
         command_residual_hidden_dim=8,
         fixed_command_bridge_fraction=1.0,
         pure_yaw_teacher_forward_command=0.10,
-        pure_yaw_positive_teacher_yaw_scale=1.657142857,
+        pure_yaw_positive_teacher_yaw_scale=1.652,
         pure_yaw_negative_teacher_yaw_scale=1.428571429,
     ).eval()
     teacher_obs = obs["policy"].clone()
     teacher_obs[:, 6] = 0.10
-    teacher_obs[0, 8] = 0.58
+    teacher_obs[0, 8] = 0.5782
     teacher_obs[1, 8] = -0.50
     torch.testing.assert_close(
         model.act_inference(obs),
