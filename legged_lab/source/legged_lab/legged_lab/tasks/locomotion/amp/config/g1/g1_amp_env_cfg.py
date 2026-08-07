@@ -2332,6 +2332,84 @@ class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg(
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996FullActorEnvCfg(
+    G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg
+):
+    """Two-goal full-actor refinement from the exact model_9996 actor.
+
+    This task is used only after the frozen residual adapter proved unable to
+    change the closed-loop contact sequence.  The sole barrier is deliberately
+    much larger than any progress reward, while a physically modest signed
+    left/right ordering margin supplies a smooth gradient before overlap.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        foot_asset_cfg = SceneEntityCfg(
+            "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+        self.rewards.two_goal_signed_root_response = RewTerm(
+            func=mdp.two_goal_signed_root_response,
+            weight=20.0,
+            params={
+                "command_name": "base_velocity",
+                "min_lateral_command": 0.10,
+                "min_yaw_command": 0.10,
+            },
+        )
+        self.rewards.two_goal_response_shortfall.weight = -80.0
+        self.rewards.two_goal_response_shortfall.params.update(
+            {"target_fraction": 0.75, "max_penalty": 1.0}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -3.0
+        self.rewards.lateral_command_leak_l2.params.update(
+            {"forward_velocity_scale": 0.050, "yaw_rate_scale": 0.10, "max_penalty": 100.0}
+        )
+        self.rewards.pure_yaw_planar_drift_l2.weight = -0.75
+        self.rewards.pure_yaw_planar_drift_l2.params.update(
+            {"velocity_scale": 0.035, "max_penalty": 100.0}
+        )
+        self.rewards.pure_yaw_root_rate_error_l2 = RewTerm(
+            func=mdp.pure_yaw_root_rate_error_l2,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "min_yaw_command": 0.10,
+                "error_scale": 0.10,
+                "max_penalty": 100.0,
+            },
+        )
+        self.rewards.lateral_foot_ordering_l2 = RewTerm(
+            func=mdp.lateral_foot_ordering_l2,
+            weight=-20.0,
+            params={
+                "command_name": "base_velocity",
+                "asset_cfg": foot_asset_cfg,
+                "foot_half_width": 0.035,
+                "min_clearance": 0.040,
+                "shortfall_scale": 0.040,
+                "max_penalty": 100.0,
+                "min_lateral_command": 0.10,
+            },
+        )
+        for term in (
+            self.rewards.swept_oriented_footprint_soft_margin_l2,
+            self.rewards.swept_oriented_footprint_hard_barrier,
+        ):
+            term.params.update(
+                {
+                    "soft_clearance": 0.060,
+                    "hard_clearance": 0.025,
+                    "overlap_scale": 16.0,
+                    "soft_max_penalty": 100.0,
+                    "interpolation_steps": 10,
+                }
+            )
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -2.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -100.0
+
+
+@configclass
 class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Bootstrap the two target skills from the existing forward gait cycle."""
 

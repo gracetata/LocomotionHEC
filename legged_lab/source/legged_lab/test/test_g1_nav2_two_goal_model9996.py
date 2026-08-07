@@ -11,6 +11,9 @@ ENV_CFG_FILE = G1_ROOT / "g1_amp_env_cfg.py"
 REGISTRY_FILE = G1_ROOT / "__init__.py"
 AGENT_CFG_FILE = G1_ROOT / "agents" / "rsl_rl_ppo_cfg.py"
 TRAIN_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model9996.sh"
+FULL_ACTOR_TRAIN_SCRIPT = (
+    LEGGED_LAB_ROOT / "scripts" / "train_g1_amp_nav2_two_goal_model9996_full_actor.sh"
+)
 CALIBRATE_SCRIPT = LEGGED_LAB_ROOT / "scripts" / "calibrate_g1_amp_nav2_two_goal_residual.py"
 ACCEPTANCE_SCRIPT = (
     LEGGED_LAB_ROOT / "scripts" / "test_g1_amp_nav2_two_goal_model9996_mujoco.sh"
@@ -115,6 +118,11 @@ def test_tasks_are_manager_amp_and_model9996_specific():
             "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996YawSpecialist-v0",
             "G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg",
             "G1Nav2TwoGoalModel9996YawSpecialistRslRlOnPolicyRunnerAmpCfg",
+        ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActor-v0",
+            "G1AmpNav2TwoGoalModel9996FullActorEnvCfg",
+            "G1Nav2TwoGoalModel9996FullActorRslRlOnPolicyRunnerAmpCfg",
         ),
     ):
         assert f'id="{task}"' in registry
@@ -253,6 +261,36 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "Deployed carrier  : disabled" in script
     assert 'OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996"' in script
+
+
+def test_full_actor_escape_stage_is_exact_model9996_and_safety_constrained():
+    script = FULL_ACTOR_TRAIN_SCRIPT.read_text()
+    assert MODEL9996_SHA256 in script
+    assert "model_10990" not in script
+    assert "model_12995" not in script
+    assert "agent.load_actor_amp_only=True" in script
+    assert "agent.freeze_base_actor=False" in script
+    assert "agent.freeze_actor_hidden_layers=1" in script
+    assert "agent.actor_warmup_iterations=8" in script
+    assert "BASELINE_KL_CHECKPOINT=\"${MODEL9996}\"" in script
+
+    agent = AGENT_CFG_FILE.read_text()
+    start = agent.index("class G1Nav2TwoGoalModel9996FullActorRslRlOnPolicyRunnerAmpCfg")
+    block = agent[start:]
+    assert "freeze_actor_hidden_layers = 1" in block
+    assert "freeze_base_actor = False" in block
+    assert "actor_warmup_iterations = 8" in block
+    assert "self.algorithm.learning_rate = 1.5e-5" in block
+    assert "self.algorithm.baseline_kl_cfg.specialization_scale = 0.005" in block
+    assert "self.algorithm.amp_cfg.freeze_discriminator = True" in block
+
+    env_text = ENV_CFG_FILE.read_text()
+    start = env_text.index("class G1AmpNav2TwoGoalModel9996FullActorEnvCfg")
+    full_actor = env_text[start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
+    assert "lateral_foot_ordering_l2" in full_actor
+    assert '"min_clearance": 0.040' in full_actor
+    assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in full_actor
+    assert "two_goal_signed_root_response" in full_actor
 
 
 def test_residual_calibration_preserves_base_and_scales_only_final_layer():

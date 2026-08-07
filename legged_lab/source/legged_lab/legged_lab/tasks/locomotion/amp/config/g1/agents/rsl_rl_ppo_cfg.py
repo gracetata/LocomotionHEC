@@ -324,3 +324,64 @@ class G1Nav2TwoGoalModel9996YawSpecialistRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.learning_rate = 1.5e-5
         self.algorithm.clip_param = 0.10
         self.algorithm.entropy_coef = 3.0e-4
+
+
+@configclass
+class G1Nav2TwoGoalModel9996FullActorRslRlOnPolicyRunnerAmpCfg(
+    G1RslRlOnPolicyRunnerAmpCfg
+):
+    """Fine-tune model_9996 with enough capacity to change contact timing."""
+
+    experiment_name = "g1_amp_nav2_two_goal_model9996_full_actor"
+    checkpoint_output_dir = "Nav2TwoGoalModel9996FullActor"
+    load_actor_only = False
+    load_actor_amp_only = True
+    load_policy_only = False
+    reset_iteration_on_policy_only_load = True
+    reset_amp_on_load = False
+    freeze_actor_hidden_layers = 1
+    freeze_base_actor = False
+    actor_warmup_iterations = 8
+    restore_configured_learning_rate_on_load = True
+    save_interval = 5
+    policy = RslRlPpoActorCriticCfg(
+        init_noise_std=0.35,
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        actor_obs_normalization=False,
+        critic_obs_normalization=False,
+        activation="elu",
+    )
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        self.algorithm.learning_rate = 1.5e-5
+        self.algorithm.schedule = "fixed"
+        self.algorithm.desired_kl = 0.01
+        self.algorithm.clip_param = 0.15
+        self.algorithm.num_learning_epochs = 3
+        self.algorithm.num_mini_batches = 4
+        self.algorithm.entropy_coef = 8.0e-4
+        self.algorithm.max_grad_norm = 0.5
+        self.algorithm.baseline_kl_cfg.mean_only = True
+        self.algorithm.baseline_kl_cfg.command_conditioned = True
+        self.algorithm.baseline_kl_cfg.command_obs_start_index = 6
+        self.algorithm.baseline_kl_cfg.specialization_scale = 0.005
+        self.algorithm.baseline_kl_cfg.max_forward_command = 0.02
+        self.algorithm.baseline_kl_cfg.max_lateral_yaw_command = 0.05
+        self.algorithm.baseline_kl_cfg.max_pure_yaw_translation_command = 0.02
+        self.algorithm.baseline_kl_cfg.target = 0.02
+        self.algorithm.baseline_kl_cfg.min_scale = 0.08
+        self.algorithm.baseline_kl_cfg.max_scale = 0.08
+        self.algorithm.baseline_kl_cfg.adaptation_rate = 1.5
+        self.algorithm.baseline_kl_cfg.hard_limit = 0.15
+        self.algorithm.command_bridge_cfg.enabled = False
+        self.algorithm.command_bridge_cfg.scale = 0.0
+        self.algorithm.amp_cfg.freeze_discriminator = True
+        self.algorithm.amp_cfg.command_conditioned_style_reward = True
+        self.algorithm.amp_cfg.specialization_task_style_lerp = 1.0
+        self.algorithm.amp_cfg.command_obs_start_index = 6
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85
