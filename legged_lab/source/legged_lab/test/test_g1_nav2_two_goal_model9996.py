@@ -185,6 +185,8 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
     assert "two_goal_signed_root_response" in yaw
     assert "pure_yaw_planar_drift_l2.weight = -0.75" in yaw
     assert '"max_penalty": 100.0' in yaw
+    assert "pure_yaw_root_rate_error_l2" in yaw
+    assert '"error_scale": 0.10' in yaw
 
 
 def test_training_script_separates_bootstrap_and_corrective_contracts():

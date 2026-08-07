@@ -1759,6 +1759,24 @@ def pure_yaw_planar_drift_l2(
     return torch.clamp(drift / float(velocity_scale) ** 2, max=float(max_penalty)) * pure_yaw.float()
 
 
+def pure_yaw_root_rate_error_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_yaw_command: float = 0.10,
+    error_scale: float = 0.10,
+    max_penalty: float = 100.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize both yaw shortfall and overshoot using actual root yaw rate."""
+    if error_scale <= 0.0 or max_penalty <= 0.0:
+        raise ValueError("error_scale and max_penalty must be positive.")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    _, pure_yaw = two_goal_command_masks(command, pure_yaw_min_command=min_yaw_command)
+    error = torch.square(asset.data.root_ang_vel_b[:, 2] - command[:, 2])
+    return torch.clamp(error / float(error_scale) ** 2, max=float(max_penalty)) * pure_yaw.float()
+
+
 def lateral_command_leak_l2(
     env: ManagerBasedRLEnv,
     command_name: str,

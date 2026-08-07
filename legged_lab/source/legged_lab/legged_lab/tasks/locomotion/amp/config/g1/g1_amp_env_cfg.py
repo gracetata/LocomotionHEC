@@ -2255,6 +2255,16 @@ class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg(
         self.rewards.pure_yaw_planar_drift_l2.params.update(
             {"velocity_scale": 0.035, "max_penalty": 100.0}
         )
+        self.rewards.pure_yaw_root_rate_error_l2 = RewTerm(
+            func=mdp.pure_yaw_root_rate_error_l2,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "min_yaw_command": 0.10,
+                "error_scale": 0.10,
+                "max_penalty": 100.0,
+            },
+        )
         # Yaw also retains the same geometrical no-crossing constraint.
         self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -4.0
         self.rewards.swept_oriented_footprint_hard_barrier.weight = -50.0
