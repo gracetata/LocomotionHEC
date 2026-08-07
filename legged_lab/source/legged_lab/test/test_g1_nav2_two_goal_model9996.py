@@ -184,7 +184,9 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
     assert '"soft_max_penalty": 100.0' in lateral
     assert "lateral_foot_ordering_l2" in lateral
     assert '"foot_half_width": 0.035' in lateral
-    assert '"min_clearance": 0.025' in lateral
+    assert "weight=-20.0" in lateral
+    assert '"min_clearance": 0.150' in lateral
+    assert '"shortfall_scale": 0.050' in lateral
     assert "swept_oriented_footprint_soft_margin_l2.weight = -8.0" in lateral
     assert "swept_oriented_footprint_hard_barrier.weight = -1.0" in lateral
     polish_start = env_text.index("class G1AmpNav2TwoGoalModel9996LateralSafetyPolishEnvCfg")

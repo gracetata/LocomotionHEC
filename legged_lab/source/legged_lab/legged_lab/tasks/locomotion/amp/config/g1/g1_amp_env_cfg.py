@@ -2216,21 +2216,24 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
         # SAT distance is symmetric and therefore cannot distinguish a safely
         # separated stance from crossed feet after they have passed each
         # other.  This smooth auxiliary term uses ordered left/right centers
-        # and the physical sole width (2 * 0.035 m) plus 0.025 m clearance to
-        # give PPO an unambiguous outward direction.  The first stage keeps the
+        # and the physical sole width (2 * 0.035 m).  A conservative 0.150 m
+        # training clearance requires 0.220 m ordered ankle separation.  This
+        # keeps the guide active before rotated sole rectangles overlap and
+        # provides sim-to-sim margin beyond the 0.025 m acceptance threshold.
+        # The first stage keeps the
         # discontinuous hard barrier moderate so stopping is not the cheapest
         # escape from the unsafe model_9996 gait.
         self.rewards.lateral_foot_ordering_l2 = RewTerm(
             func=mdp.lateral_foot_ordering_l2,
-            weight=-8.0,
+            weight=-20.0,
             params={
                 "command_name": "base_velocity",
                 "asset_cfg": SceneEntityCfg(
                     "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
                 ),
                 "foot_half_width": 0.035,
-                "min_clearance": 0.025,
-                "shortfall_scale": 0.080,
+                "min_clearance": 0.150,
+                "shortfall_scale": 0.050,
                 "max_penalty": 100.0,
                 "min_lateral_command": 0.10,
             },
