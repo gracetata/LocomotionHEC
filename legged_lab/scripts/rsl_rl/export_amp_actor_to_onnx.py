@@ -384,9 +384,12 @@ class AmpActorExporter(torch.nn.Module):
             )
             teacher_actions = self.actor(self.normalizer(teacher_obs))
             bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(actions.dtype)
-            actions = actions + bridge_mask * self.fixed_command_bridge_fraction.to(actions.dtype) * (
+            bridge_fraction = self.fixed_command_bridge_fraction.to(actions.dtype)
+            blended_actions = actions + bridge_mask * bridge_fraction * (
                 teacher_actions - actions
             )
+            exact_bridge_mask = (bridge_mask > 0.0) & (bridge_fraction >= 1.0)
+            actions = torch.where(exact_bridge_mask, teacher_actions, blended_actions)
             actions = actions + lateral.unsqueeze(-1).to(actions.dtype) * self.lateral_command_residual(
                 normalized_obs
             )

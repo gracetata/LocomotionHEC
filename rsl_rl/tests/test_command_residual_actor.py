@@ -136,3 +136,22 @@ def test_fixed_bridge_bounds_specialization_teacher_commands():
     teacher_obs[2, 8] = 0.5782
     teacher_obs[3, 8] = -0.50
     torch.testing.assert_close(model.act_inference(obs), model.actor(teacher_obs), rtol=0.0, atol=1.0e-7)
+
+
+def test_exact_bridge_is_independent_of_student_yaw_after_teacher_saturation():
+    obs = _observations(batch=2)
+    obs["policy"][:, 6:9] = torch.tensor([[0.0, 0.0, -0.35], [0.0, 0.0, -0.50]])
+    model = ActorCriticCommandResidual(
+        obs,
+        {"policy": ["policy"], "critic": ["critic"]},
+        29,
+        actor_hidden_dims=[32, 16],
+        critic_hidden_dims=[32, 16],
+        command_residual_hidden_dim=8,
+        fixed_command_bridge_fraction=1.0,
+        pure_yaw_teacher_forward_command=0.10,
+        pure_yaw_negative_teacher_yaw_scale=1.428571429,
+        pure_yaw_negative_teacher_yaw_max=0.50,
+    ).eval()
+    actual = model.act_inference(obs)
+    torch.testing.assert_close(actual[0], actual[1], rtol=0.0, atol=0.0)

@@ -222,9 +222,12 @@ class ActorCriticCommandResidual(ActorCritic):
         )
         teacher_mean = self.actor(self.actor_obs_normalizer(teacher_obs))
         bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(mean.dtype)
-        mean = mean + bridge_mask * self.fixed_command_bridge_fraction.to(mean.dtype) * (
+        bridge_fraction = self.fixed_command_bridge_fraction.to(mean.dtype)
+        blended_mean = mean + bridge_mask * bridge_fraction * (
             teacher_mean - mean
         )
+        exact_bridge_mask = (bridge_mask > 0.0) & (bridge_fraction >= 1.0)
+        mean = torch.where(exact_bridge_mask, teacher_mean, blended_mean)
         mean = mean + lateral.unsqueeze(-1).to(mean.dtype) * self.lateral_command_residual(normalized_obs)
         mean = mean + pure_yaw.unsqueeze(-1).to(mean.dtype) * self.pure_yaw_command_residual(normalized_obs)
         return mean
