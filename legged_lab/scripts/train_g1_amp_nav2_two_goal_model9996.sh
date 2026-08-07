@@ -66,6 +66,25 @@ case "${STAGE}" in
         FREEZE_LATERAL_RESIDUAL=False
         FREEZE_PURE_YAW_RESIDUAL=False
         ;;
+    lateral_proxy_bootstrap)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
+        SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-"${PROTECTED_MODEL9996}"}
+        SOURCE_SIZE=${SOURCE_SIZE:-${PROTECTED_MODEL9996_SIZE}}
+        SOURCE_SHA256=${SOURCE_SHA256:-"${PROTECTED_MODEL9996_SHA256}"}
+        [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: lateral_proxy_bootstrap must start from protected model_9996." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=True
+        LOAD_POLICY_ONLY=False
+        COMMAND_BRIDGE_ENABLE=True
+        COMMAND_BRIDGE_SCALE=0.50
+        COMMAND_BRIDGE_RESIDUAL_LR=3.0e-4
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=True
+        FOOT_BARRIER_DESCRIPTION="strict lateral distills model_9996 [0.30, signed 0.25, opposite yaw 0.80] safe-step proxy"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-12}
+        ;;
     lateral_direct)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
         SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-"${PROTECTED_MODEL9996}"}
@@ -255,6 +274,7 @@ for arg in "$@"; do
         agent.algorithm.command_bridge_cfg.enabled=*|agent.algorithm.command_bridge_cfg.scale=*|\
         agent.algorithm.command_bridge_cfg.residual_learning_rate=*|\
         agent.algorithm.command_bridge_cfg.lateral_teacher_forward_command=*|\
+        agent.algorithm.command_bridge_cfg.lateral_teacher_opposite_yaw_abs=*|\
         agent.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command=*|\
         agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale=*|\
         agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale=*|\
@@ -280,6 +300,13 @@ if [[ "${STAGE}" == "yaw_proxy_bootstrap" ]]; then
         agent.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_max=1.2
         agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_min=1.2
         agent.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_max=1.2
+        agent.algorithm.command_bridge_cfg.teacher_delta_fraction=1.0
+    )
+elif [[ "${STAGE}" == "lateral_proxy_bootstrap" ]]; then
+    STAGE_AGENT_ARGS+=(
+        agent.algorithm.command_bridge_cfg.lateral_teacher_forward_command=0.30
+        agent.algorithm.command_bridge_cfg.lateral_teacher_min_abs_command=0.25
+        agent.algorithm.command_bridge_cfg.lateral_teacher_opposite_yaw_abs=0.80
         agent.algorithm.command_bridge_cfg.teacher_delta_fraction=1.0
     )
 elif [[ "${STAGE}" == "lateral_cancel" ]]; then

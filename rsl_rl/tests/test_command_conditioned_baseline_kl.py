@@ -23,6 +23,23 @@ def test_carrier_teacher_changes_only_strict_two_goal_command_slice():
     torch.testing.assert_close(teacher[4], obs[4])
 
 
+def test_lateral_teacher_can_add_mirrored_opposite_yaw_for_safe_gait_onset():
+    obs = torch.zeros(2, 96)
+    obs[0, 6:9] = torch.tensor([0.0, 0.25, 0.0])
+    obs[1, 6:9] = torch.tensor([0.0, -0.25, 0.0])
+    teacher, lateral, pure_yaw = build_two_goal_carrier_teacher_obs(
+        obs,
+        lateral_teacher_forward_command=0.30,
+        lateral_teacher_min_abs_command=0.25,
+        lateral_teacher_opposite_yaw_abs=0.80,
+    )
+    torch.testing.assert_close(lateral, torch.tensor([True, True]))
+    torch.testing.assert_close(pure_yaw, torch.tensor([False, False]))
+    torch.testing.assert_close(teacher[:, 6], torch.tensor([0.30, 0.30]))
+    torch.testing.assert_close(teacher[:, 7], torch.tensor([0.25, -0.25]))
+    torch.testing.assert_close(teacher[:, 8], torch.tensor([-0.80, 0.80]))
+
+
 def test_command_conditioned_mask_separates_specialization_and_retention():
     policy_obs = torch.zeros(5, 96)
     policy_obs[0, 6:9] = torch.tensor([0.0, 0.30, 0.0])

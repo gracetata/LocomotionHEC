@@ -216,6 +216,11 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "pure_yaw_positive_teacher_yaw_min=1.2" in script
     assert "pure_yaw_negative_teacher_yaw_min=1.2" in script
     assert "teacher_delta_fraction=1.0" in script
+    assert "lateral_proxy_bootstrap" in script
+    assert "lateral_proxy_bootstrap must start from protected model_9996" in script
+    assert "lateral_teacher_forward_command=0.30" in script
+    assert "lateral_teacher_min_abs_command=0.25" in script
+    assert "lateral_teacher_opposite_yaw_abs=0.80" in script
     assert "lateral_cancel" in script
     assert "lateral_teacher_forward_command=-0.30" in script
     assert "teacher_delta_fraction=0.35" in script

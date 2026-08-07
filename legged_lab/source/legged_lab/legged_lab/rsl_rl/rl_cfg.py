@@ -60,6 +60,7 @@ class RslRlPpoActorCriticCommandResidualCfg(RslRlPpoActorCriticCfg):
     fixed_command_bridge_fraction: float = 0.0
     lateral_teacher_forward_command: float = 0.20
     lateral_teacher_min_abs_command: float = 0.0
+    lateral_teacher_opposite_yaw_abs: float = 0.0
     pure_yaw_teacher_forward_command: float = 0.15
     pure_yaw_positive_teacher_yaw_scale: float = 1.0
     pure_yaw_negative_teacher_yaw_scale: float = 1.0
@@ -163,6 +164,7 @@ class RslRlPpoAmpAlgorithmCfg:
         max_student_pure_yaw_translation_command: float = 0.02
         lateral_teacher_forward_command: float = 0.20
         lateral_teacher_min_abs_command: float = 0.0
+        lateral_teacher_opposite_yaw_abs: float = 0.0
         pure_yaw_teacher_forward_command: float = 0.15
         pure_yaw_positive_teacher_yaw_scale: float = 1.0
         pure_yaw_negative_teacher_yaw_scale: float = 1.0

@@ -274,6 +274,10 @@ class AmpActorExporter(torch.nn.Module):
             model_state.get("lateral_teacher_min_abs_command", torch.tensor(0.0)).float(),
         )
         self.register_buffer(
+            "lateral_teacher_opposite_yaw_abs",
+            model_state.get("lateral_teacher_opposite_yaw_abs", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
             "pure_yaw_teacher_forward_command",
             model_state.get("pure_yaw_teacher_forward_command", torch.tensor(0.15)).float(),
         )
@@ -352,6 +356,12 @@ class AmpActorExporter(torch.nn.Module):
                 teacher_y,
             )
             teacher_yaw = teacher_obs[..., 8]
+            lateral_teacher_yaw = torch.where(
+                teacher_y >= 0.0,
+                -self.lateral_teacher_opposite_yaw_abs.to(teacher_yaw.dtype),
+                self.lateral_teacher_opposite_yaw_abs.to(teacher_yaw.dtype),
+            )
+            teacher_yaw = torch.where(lateral, lateral_teacher_yaw, teacher_yaw)
             teacher_yaw_scale = torch.where(
                 teacher_yaw >= 0.0,
                 self.pure_yaw_positive_teacher_yaw_scale.to(teacher_yaw.dtype),

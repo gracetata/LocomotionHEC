@@ -145,6 +145,7 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         fixed_command_bridge_fraction=1.0,
         lateral_teacher_forward_command=0.20,
         lateral_teacher_min_abs_command=0.25,
+        lateral_teacher_opposite_yaw_abs=0.0,
         pure_yaw_teacher_forward_command=0.10,
         pure_yaw_positive_teacher_yaw_scale=1.652,
         pure_yaw_negative_teacher_yaw_scale=1.428571429,
@@ -192,6 +193,7 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.command_bridge_cfg.max_student_pure_yaw_translation_command = 0.02
         self.algorithm.command_bridge_cfg.lateral_teacher_forward_command = 0.20
         self.algorithm.command_bridge_cfg.lateral_teacher_min_abs_command = 0.25
+        self.algorithm.command_bridge_cfg.lateral_teacher_opposite_yaw_abs = 0.0
         self.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command = 0.10
         self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale = 1.652
         self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale = 1.428571429

@@ -44,6 +44,7 @@ class ActorCriticCommandResidual(ActorCritic):
         fixed_command_bridge_fraction: float = 0.0,
         lateral_teacher_forward_command: float = 0.20,
         lateral_teacher_min_abs_command: float = 0.0,
+        lateral_teacher_opposite_yaw_abs: float = 0.0,
         pure_yaw_teacher_forward_command: float = 0.15,
         pure_yaw_positive_teacher_yaw_scale: float = 1.0,
         pure_yaw_negative_teacher_yaw_scale: float = 1.0,
@@ -87,6 +88,8 @@ class ActorCriticCommandResidual(ActorCritic):
             raise ValueError("negative pure-yaw teacher scale must be positive.")
         if float(lateral_teacher_min_abs_command) < 0.0:
             raise ValueError("lateral teacher minimum magnitude must be non-negative.")
+        if float(lateral_teacher_opposite_yaw_abs) < 0.0:
+            raise ValueError("lateral teacher opposite-yaw magnitude must be non-negative.")
         if not 0.0 <= float(pure_yaw_positive_teacher_yaw_min) <= float(
             pure_yaw_positive_teacher_yaw_max
         ):
@@ -108,6 +111,10 @@ class ActorCriticCommandResidual(ActorCritic):
         self.register_buffer(
             "lateral_teacher_min_abs_command",
             torch.tensor(float(lateral_teacher_min_abs_command)),
+        )
+        self.register_buffer(
+            "lateral_teacher_opposite_yaw_abs",
+            torch.tensor(float(lateral_teacher_opposite_yaw_abs)),
         )
         self.register_buffer(
             "pure_yaw_teacher_forward_command",
@@ -198,6 +205,13 @@ class ActorCriticCommandResidual(ActorCritic):
             command_y,
         )
         command_yaw = teacher_obs[..., self.command_obs_start_index + 2]
+        lateral_teacher_yaw = torch.where(
+            command_y >= 0.0,
+            -self.lateral_teacher_opposite_yaw_abs.to(command_yaw.dtype),
+            self.lateral_teacher_opposite_yaw_abs.to(command_yaw.dtype),
+        )
+        command_yaw = torch.where(lateral, lateral_teacher_yaw, command_yaw)
+        teacher_obs[..., self.command_obs_start_index + 2] = command_yaw
         yaw_scale = torch.where(
             command_yaw >= 0.0,
             self.pure_yaw_positive_teacher_yaw_scale.to(command_yaw.dtype),

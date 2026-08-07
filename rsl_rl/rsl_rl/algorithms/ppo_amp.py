@@ -56,6 +56,7 @@ def build_two_goal_carrier_teacher_obs(
     max_student_pure_yaw_translation_command: float = 0.02,
     lateral_teacher_forward_command: float = 0.20,
     lateral_teacher_min_abs_command: float = 0.0,
+    lateral_teacher_opposite_yaw_abs: float = 0.0,
     pure_yaw_teacher_forward_command: float = 0.15,
     pure_yaw_positive_teacher_yaw_scale: float = 1.0,
     pure_yaw_negative_teacher_yaw_scale: float = 1.0,
@@ -79,6 +80,8 @@ def build_two_goal_carrier_teacher_obs(
         raise ValueError("Lateral teacher command magnitude must exceed the student dead-zone band.")
     if pure_yaw_positive_teacher_yaw_scale <= 0.0 or pure_yaw_negative_teacher_yaw_scale <= 0.0:
         raise ValueError("Pure-yaw teacher yaw scales must be positive.")
+    if lateral_teacher_opposite_yaw_abs < 0.0:
+        raise ValueError("Lateral teacher opposite-yaw magnitude must be non-negative.")
 
     command = policy_obs[:, start : start + 3]
     lateral = (
@@ -102,6 +105,12 @@ def build_two_goal_carrier_teacher_obs(
         lateral_magnitude[lateral],
         -lateral_magnitude[lateral],
     )
+    lateral_teacher_yaw = torch.where(
+        teacher_obs[:, start + 1] >= 0.0,
+        -float(lateral_teacher_opposite_yaw_abs),
+        float(lateral_teacher_opposite_yaw_abs),
+    )
+    teacher_obs[lateral, start + 2] = lateral_teacher_yaw[lateral]
     teacher_obs[pure_yaw, start] = float(pure_yaw_teacher_forward_command)
     yaw_scale = torch.where(
         teacher_obs[:, start + 2] >= 0.0,
@@ -259,6 +268,7 @@ class PPOAMP(PPO):
                 "pure_yaw_command_residual.",
                 "fixed_command_bridge_fraction",
                 "lateral_teacher_forward_command",
+                "lateral_teacher_opposite_yaw_abs",
                 "pure_yaw_teacher_forward_command",
             )
             unexpected = list(getattr(baseline_load, "unexpected_keys", []))
@@ -420,6 +430,9 @@ class PPOAMP(PPO):
             ),
             lateral_teacher_min_abs_command=float(
                 self.command_bridge_cfg.get("lateral_teacher_min_abs_command", 0.0)
+            ),
+            lateral_teacher_opposite_yaw_abs=float(
+                self.command_bridge_cfg.get("lateral_teacher_opposite_yaw_abs", 0.0)
             ),
             pure_yaw_teacher_forward_command=float(
                 self.command_bridge_cfg.get("pure_yaw_teacher_forward_command", 0.15)
