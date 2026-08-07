@@ -59,9 +59,14 @@ class RslRlPpoActorCriticCommandResidualCfg(RslRlPpoActorCriticCfg):
     max_pure_yaw_translation_command: float = 0.02
     fixed_command_bridge_fraction: float = 0.0
     lateral_teacher_forward_command: float = 0.20
+    lateral_teacher_min_abs_command: float = 0.0
     pure_yaw_teacher_forward_command: float = 0.15
     pure_yaw_positive_teacher_yaw_scale: float = 1.0
     pure_yaw_negative_teacher_yaw_scale: float = 1.0
+    pure_yaw_positive_teacher_yaw_min: float = 0.0
+    pure_yaw_positive_teacher_yaw_max: float = 10.0
+    pure_yaw_negative_teacher_yaw_min: float = 0.0
+    pure_yaw_negative_teacher_yaw_max: float = 10.0
 
 ############################
 # Algorithm configurations #
@@ -157,9 +162,14 @@ class RslRlPpoAmpAlgorithmCfg:
         max_lateral_yaw_command: float = 0.05
         max_student_pure_yaw_translation_command: float = 0.02
         lateral_teacher_forward_command: float = 0.20
+        lateral_teacher_min_abs_command: float = 0.0
         pure_yaw_teacher_forward_command: float = 0.15
         pure_yaw_positive_teacher_yaw_scale: float = 1.0
         pure_yaw_negative_teacher_yaw_scale: float = 1.0
+        pure_yaw_positive_teacher_yaw_min: float = 0.0
+        pure_yaw_positive_teacher_yaw_max: float = 10.0
+        pure_yaw_negative_teacher_yaw_min: float = 0.0
+        pure_yaw_negative_teacher_yaw_max: float = 10.0
         teacher_delta_fraction: float = 0.60
         residual_learning_rate: float = 0.0
         """Optional learning rate for a residual-only teacher optimizer."""

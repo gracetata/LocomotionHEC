@@ -270,6 +270,10 @@ class AmpActorExporter(torch.nn.Module):
             model_state.get("lateral_teacher_forward_command", torch.tensor(0.20)).float(),
         )
         self.register_buffer(
+            "lateral_teacher_min_abs_command",
+            model_state.get("lateral_teacher_min_abs_command", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
             "pure_yaw_teacher_forward_command",
             model_state.get("pure_yaw_teacher_forward_command", torch.tensor(0.15)).float(),
         )
@@ -280,6 +284,22 @@ class AmpActorExporter(torch.nn.Module):
         self.register_buffer(
             "pure_yaw_negative_teacher_yaw_scale",
             model_state.get("pure_yaw_negative_teacher_yaw_scale", torch.tensor(1.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_positive_teacher_yaw_min",
+            model_state.get("pure_yaw_positive_teacher_yaw_min", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_positive_teacher_yaw_max",
+            model_state.get("pure_yaw_positive_teacher_yaw_max", torch.tensor(10.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_negative_teacher_yaw_min",
+            model_state.get("pure_yaw_negative_teacher_yaw_min", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_negative_teacher_yaw_max",
+            model_state.get("pure_yaw_negative_teacher_yaw_max", torch.tensor(10.0)).float(),
         )
         if self.has_command_residual:
             self.lateral_command_residual = build_named_mlp(
@@ -321,15 +341,43 @@ class AmpActorExporter(torch.nn.Module):
                 teacher_x,
             )
             teacher_obs[..., 6] = teacher_x
+            teacher_y = teacher_obs[..., 7]
+            teacher_lateral_magnitude = torch.maximum(
+                torch.abs(teacher_y),
+                self.lateral_teacher_min_abs_command.to(teacher_y.dtype),
+            )
+            teacher_obs[..., 7] = torch.where(
+                lateral,
+                torch.copysign(teacher_lateral_magnitude, teacher_y),
+                teacher_y,
+            )
             teacher_yaw = teacher_obs[..., 8]
             teacher_yaw_scale = torch.where(
                 teacher_yaw >= 0.0,
                 self.pure_yaw_positive_teacher_yaw_scale.to(teacher_yaw.dtype),
                 self.pure_yaw_negative_teacher_yaw_scale.to(teacher_yaw.dtype),
             )
+            teacher_yaw_min = torch.where(
+                teacher_yaw >= 0.0,
+                self.pure_yaw_positive_teacher_yaw_min.to(teacher_yaw.dtype),
+                self.pure_yaw_negative_teacher_yaw_min.to(teacher_yaw.dtype),
+            )
+            teacher_yaw_max = torch.where(
+                teacher_yaw >= 0.0,
+                self.pure_yaw_positive_teacher_yaw_max.to(teacher_yaw.dtype),
+                self.pure_yaw_negative_teacher_yaw_max.to(teacher_yaw.dtype),
+            )
+            bounded_teacher_yaw = torch.copysign(
+                torch.clamp(
+                    torch.abs(teacher_yaw) * teacher_yaw_scale,
+                    teacher_yaw_min,
+                    teacher_yaw_max,
+                ),
+                teacher_yaw,
+            )
             teacher_obs[..., 8] = torch.where(
                 pure_yaw,
-                teacher_yaw * teacher_yaw_scale,
+                bounded_teacher_yaw,
                 teacher_yaw,
             )
             teacher_actions = self.actor(self.normalizer(teacher_obs))

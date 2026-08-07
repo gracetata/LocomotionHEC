@@ -43,9 +43,14 @@ class ActorCriticCommandResidual(ActorCritic):
         max_pure_yaw_translation_command: float = 0.02,
         fixed_command_bridge_fraction: float = 0.0,
         lateral_teacher_forward_command: float = 0.20,
+        lateral_teacher_min_abs_command: float = 0.0,
         pure_yaw_teacher_forward_command: float = 0.15,
         pure_yaw_positive_teacher_yaw_scale: float = 1.0,
         pure_yaw_negative_teacher_yaw_scale: float = 1.0,
+        pure_yaw_positive_teacher_yaw_min: float = 0.0,
+        pure_yaw_positive_teacher_yaw_max: float = 10.0,
+        pure_yaw_negative_teacher_yaw_min: float = 0.0,
+        pure_yaw_negative_teacher_yaw_max: float = 10.0,
         activation: str = "elu",
         state_dependent_std: bool = False,
         **kwargs: dict[str, Any],
@@ -80,6 +85,16 @@ class ActorCriticCommandResidual(ActorCritic):
             raise ValueError("positive pure-yaw teacher scale must be positive.")
         if float(pure_yaw_negative_teacher_yaw_scale) <= 0.0:
             raise ValueError("negative pure-yaw teacher scale must be positive.")
+        if float(lateral_teacher_min_abs_command) < 0.0:
+            raise ValueError("lateral teacher minimum magnitude must be non-negative.")
+        if not 0.0 <= float(pure_yaw_positive_teacher_yaw_min) <= float(
+            pure_yaw_positive_teacher_yaw_max
+        ):
+            raise ValueError("invalid positive pure-yaw teacher magnitude envelope.")
+        if not 0.0 <= float(pure_yaw_negative_teacher_yaw_min) <= float(
+            pure_yaw_negative_teacher_yaw_max
+        ):
+            raise ValueError("invalid negative pure-yaw teacher magnitude envelope.")
         # Buffers make the deployed analytical bridge self-describing in a
         # checkpoint without adding trainable parameters.
         self.register_buffer(
@@ -89,6 +104,10 @@ class ActorCriticCommandResidual(ActorCritic):
         self.register_buffer(
             "lateral_teacher_forward_command",
             torch.tensor(float(lateral_teacher_forward_command)),
+        )
+        self.register_buffer(
+            "lateral_teacher_min_abs_command",
+            torch.tensor(float(lateral_teacher_min_abs_command)),
         )
         self.register_buffer(
             "pure_yaw_teacher_forward_command",
@@ -101,6 +120,22 @@ class ActorCriticCommandResidual(ActorCritic):
         self.register_buffer(
             "pure_yaw_negative_teacher_yaw_scale",
             torch.tensor(float(pure_yaw_negative_teacher_yaw_scale)),
+        )
+        self.register_buffer(
+            "pure_yaw_positive_teacher_yaw_min",
+            torch.tensor(float(pure_yaw_positive_teacher_yaw_min)),
+        )
+        self.register_buffer(
+            "pure_yaw_positive_teacher_yaw_max",
+            torch.tensor(float(pure_yaw_positive_teacher_yaw_max)),
+        )
+        self.register_buffer(
+            "pure_yaw_negative_teacher_yaw_min",
+            torch.tensor(float(pure_yaw_negative_teacher_yaw_min)),
+        )
+        self.register_buffer(
+            "pure_yaw_negative_teacher_yaw_max",
+            torch.tensor(float(pure_yaw_negative_teacher_yaw_max)),
         )
 
         def make_residual() -> nn.Sequential:
@@ -152,15 +187,36 @@ class ActorCriticCommandResidual(ActorCritic):
             command_x,
         )
         teacher_obs[..., self.command_obs_start_index] = command_x
+        command_y = teacher_obs[..., self.command_obs_start_index + 1]
+        teacher_lateral_magnitude = torch.maximum(
+            torch.abs(command_y),
+            self.lateral_teacher_min_abs_command.to(command_y.dtype),
+        )
+        teacher_obs[..., self.command_obs_start_index + 1] = torch.where(
+            lateral,
+            torch.copysign(teacher_lateral_magnitude, command_y),
+            command_y,
+        )
         command_yaw = teacher_obs[..., self.command_obs_start_index + 2]
         yaw_scale = torch.where(
             command_yaw >= 0.0,
             self.pure_yaw_positive_teacher_yaw_scale.to(command_yaw.dtype),
             self.pure_yaw_negative_teacher_yaw_scale.to(command_yaw.dtype),
         )
+        yaw_min = torch.where(
+            command_yaw >= 0.0,
+            self.pure_yaw_positive_teacher_yaw_min.to(command_yaw.dtype),
+            self.pure_yaw_negative_teacher_yaw_min.to(command_yaw.dtype),
+        )
+        yaw_max = torch.where(
+            command_yaw >= 0.0,
+            self.pure_yaw_positive_teacher_yaw_max.to(command_yaw.dtype),
+            self.pure_yaw_negative_teacher_yaw_max.to(command_yaw.dtype),
+        )
+        teacher_yaw = torch.copysign(torch.clamp(torch.abs(command_yaw) * yaw_scale, yaw_min, yaw_max), command_yaw)
         teacher_obs[..., self.command_obs_start_index + 2] = torch.where(
             pure_yaw,
-            command_yaw * yaw_scale,
+            teacher_yaw,
             command_yaw,
         )
         teacher_mean = self.actor(self.actor_obs_normalizer(teacher_obs))

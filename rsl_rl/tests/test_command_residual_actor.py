@@ -104,3 +104,35 @@ def test_fixed_bridge_supports_sign_specific_pure_yaw_carriers():
         rtol=0.0,
         atol=1.0e-7,
     )
+
+
+def test_fixed_bridge_bounds_specialization_teacher_commands():
+    obs = _observations(batch=4)
+    obs["policy"][:, 6:9] = torch.tensor(
+        [[0.0, 0.10, 0.0], [0.0, -0.10, 0.0], [0.0, 0.0, 0.50], [0.0, 0.0, -0.50]]
+    )
+    model = ActorCriticCommandResidual(
+        obs,
+        {"policy": ["policy"], "critic": ["critic"]},
+        29,
+        actor_hidden_dims=[32, 16],
+        critic_hidden_dims=[32, 16],
+        command_residual_hidden_dim=8,
+        fixed_command_bridge_fraction=1.0,
+        lateral_teacher_min_abs_command=0.25,
+        pure_yaw_teacher_forward_command=0.10,
+        pure_yaw_positive_teacher_yaw_scale=1.652,
+        pure_yaw_negative_teacher_yaw_scale=1.428571429,
+        pure_yaw_positive_teacher_yaw_min=0.55,
+        pure_yaw_positive_teacher_yaw_max=0.5782,
+        pure_yaw_negative_teacher_yaw_min=0.285714286,
+        pure_yaw_negative_teacher_yaw_max=0.50,
+    ).eval()
+    teacher_obs = obs["policy"].clone()
+    teacher_obs[:2, 6] = 0.20
+    teacher_obs[0, 7] = 0.25
+    teacher_obs[1, 7] = -0.25
+    teacher_obs[2:, 6] = 0.10
+    teacher_obs[2, 8] = 0.5782
+    teacher_obs[3, 8] = -0.50
+    torch.testing.assert_close(model.act_inference(obs), model.actor(teacher_obs), rtol=0.0, atol=1.0e-7)

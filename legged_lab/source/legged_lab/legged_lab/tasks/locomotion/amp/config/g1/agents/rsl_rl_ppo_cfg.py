@@ -144,9 +144,14 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         command_residual_hidden_dim=64,
         fixed_command_bridge_fraction=1.0,
         lateral_teacher_forward_command=0.20,
+        lateral_teacher_min_abs_command=0.25,
         pure_yaw_teacher_forward_command=0.10,
         pure_yaw_positive_teacher_yaw_scale=1.652,
         pure_yaw_negative_teacher_yaw_scale=1.428571429,
+        pure_yaw_positive_teacher_yaw_min=0.55,
+        pure_yaw_positive_teacher_yaw_max=0.5782,
+        pure_yaw_negative_teacher_yaw_min=0.285714286,
+        pure_yaw_negative_teacher_yaw_max=0.50,
     )
     freeze_actor_hidden_layers = 0
     freeze_base_actor = True
@@ -185,9 +190,14 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.command_bridge_cfg.max_student_forward_command = 0.02
         self.algorithm.command_bridge_cfg.max_student_pure_yaw_translation_command = 0.02
         self.algorithm.command_bridge_cfg.lateral_teacher_forward_command = 0.20
+        self.algorithm.command_bridge_cfg.lateral_teacher_min_abs_command = 0.25
         self.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command = 0.10
         self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale = 1.652
         self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale = 1.428571429
+        self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_min = 0.55
+        self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_max = 0.5782
+        self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_min = 0.285714286
+        self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_max = 0.50
         self.algorithm.command_bridge_cfg.teacher_delta_fraction = 0.60
         self.algorithm.amp_cfg.freeze_discriminator = True
         self.algorithm.amp_cfg.command_conditioned_style_reward = True

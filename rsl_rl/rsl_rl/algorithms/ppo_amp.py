@@ -55,9 +55,14 @@ def build_two_goal_carrier_teacher_obs(
     max_lateral_yaw_command: float = 0.05,
     max_student_pure_yaw_translation_command: float = 0.02,
     lateral_teacher_forward_command: float = 0.20,
+    lateral_teacher_min_abs_command: float = 0.0,
     pure_yaw_teacher_forward_command: float = 0.15,
     pure_yaw_positive_teacher_yaw_scale: float = 1.0,
     pure_yaw_negative_teacher_yaw_scale: float = 1.0,
+    pure_yaw_positive_teacher_yaw_min: float = 0.0,
+    pure_yaw_positive_teacher_yaw_max: float = 10.0,
+    pure_yaw_negative_teacher_yaw_min: float = 0.0,
+    pure_yaw_negative_teacher_yaw_max: float = 10.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pair strict commands with baseline commands known to start the gait.
 
@@ -90,13 +95,34 @@ def build_two_goal_carrier_teacher_obs(
     )
     teacher_obs = policy_obs.detach().clone()
     teacher_obs[lateral, start] = float(lateral_teacher_forward_command)
+    lateral_magnitude = torch.maximum(
+        torch.abs(teacher_obs[:, start + 1]),
+        torch.tensor(float(lateral_teacher_min_abs_command), device=teacher_obs.device),
+    )
+    teacher_obs[lateral, start + 1] = torch.copysign(
+        lateral_magnitude[lateral], teacher_obs[lateral, start + 1]
+    )
     teacher_obs[pure_yaw, start] = float(pure_yaw_teacher_forward_command)
     yaw_scale = torch.where(
         teacher_obs[:, start + 2] >= 0.0,
         float(pure_yaw_positive_teacher_yaw_scale),
         float(pure_yaw_negative_teacher_yaw_scale),
     )
-    teacher_obs[pure_yaw, start + 2] *= yaw_scale[pure_yaw]
+    yaw_min = torch.where(
+        teacher_obs[:, start + 2] >= 0.0,
+        float(pure_yaw_positive_teacher_yaw_min),
+        float(pure_yaw_negative_teacher_yaw_min),
+    )
+    yaw_max = torch.where(
+        teacher_obs[:, start + 2] >= 0.0,
+        float(pure_yaw_positive_teacher_yaw_max),
+        float(pure_yaw_negative_teacher_yaw_max),
+    )
+    bounded_yaw = torch.copysign(
+        torch.clamp(torch.abs(teacher_obs[:, start + 2]) * yaw_scale, yaw_min, yaw_max),
+        teacher_obs[:, start + 2],
+    )
+    teacher_obs[pure_yaw, start + 2] = bounded_yaw[pure_yaw]
     return teacher_obs, lateral, pure_yaw
 
 
@@ -386,6 +412,9 @@ class PPOAMP(PPO):
             lateral_teacher_forward_command=float(
                 self.command_bridge_cfg.get("lateral_teacher_forward_command", 0.20)
             ),
+            lateral_teacher_min_abs_command=float(
+                self.command_bridge_cfg.get("lateral_teacher_min_abs_command", 0.0)
+            ),
             pure_yaw_teacher_forward_command=float(
                 self.command_bridge_cfg.get("pure_yaw_teacher_forward_command", 0.15)
             ),
@@ -394,6 +423,18 @@ class PPOAMP(PPO):
             ),
             pure_yaw_negative_teacher_yaw_scale=float(
                 self.command_bridge_cfg.get("pure_yaw_negative_teacher_yaw_scale", 1.0)
+            ),
+            pure_yaw_positive_teacher_yaw_min=float(
+                self.command_bridge_cfg.get("pure_yaw_positive_teacher_yaw_min", 0.0)
+            ),
+            pure_yaw_positive_teacher_yaw_max=float(
+                self.command_bridge_cfg.get("pure_yaw_positive_teacher_yaw_max", 10.0)
+            ),
+            pure_yaw_negative_teacher_yaw_min=float(
+                self.command_bridge_cfg.get("pure_yaw_negative_teacher_yaw_min", 0.0)
+            ),
+            pure_yaw_negative_teacher_yaw_max=float(
+                self.command_bridge_cfg.get("pure_yaw_negative_teacher_yaw_max", 10.0)
             ),
         )
         bridge_mask = lateral_bridge | pure_yaw_bridge
