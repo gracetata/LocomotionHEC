@@ -82,7 +82,7 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
         FREEZE_LATERAL_RESIDUAL=False
         FREEZE_PURE_YAW_RESIDUAL=True
-        FOOT_BARRIER_DESCRIPTION="direct model_9996 lateral: signed left-right sole-width guide; SAT hard weight -12"
+        FOOT_BARRIER_DESCRIPTION="direct model_9996 lateral: unsaturated shape gradient; SAT hard guide -1"
         MAX_ITERATIONS=${MAX_ITERATIONS:-40}
         ;;
     yaw_proxy_bootstrap)
@@ -135,7 +135,7 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
         FREEZE_LATERAL_RESIDUAL=False
         FREEZE_PURE_YAW_RESIDUAL=True
-        FOOT_BARRIER_DESCRIPTION="lateral-only: signed left-right sole-width guide; SAT hard weight -12"
+        FOOT_BARRIER_DESCRIPTION="lateral-only: unsaturated shape gradient; SAT hard guide -1"
         MAX_ITERATIONS=${MAX_ITERATIONS:-40}
         ;;
     lateral_safety_polish)

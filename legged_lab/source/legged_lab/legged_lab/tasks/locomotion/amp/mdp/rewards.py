@@ -2050,6 +2050,7 @@ class swept_oriented_footprint_proximity_l2(ManagerTermBase):
         hard_clearance: float = 0.025,
         hard_scale: float = 3.0,
         overlap_scale: float = 8.0,
+        soft_max_penalty: float = 1.0,
         component: str = "combined",
         interpolation_steps: int = 4,
     ) -> torch.Tensor:
@@ -2081,13 +2082,19 @@ class swept_oriented_footprint_proximity_l2(ManagerTermBase):
         command = env.command_manager.get_command(command_name)
         lateral, pure_yaw = two_goal_command_masks(command)
         active = lateral | pure_yaw
-        soft = torch.clamp(
+        if soft_max_penalty <= 0.0:
+            raise ValueError("Footprint soft penalty cap must be positive.")
+        # Do not intrinsically saturate at the hard threshold.  A saturated
+        # soft term has zero gradient exactly where overlapping feet most need
+        # a separating direction; the hard/overlap indicators alone cannot
+        # supply that direction.  Configs retain the legacy cap of 1 by
+        # default, while the lateral ordering curriculum explicitly raises it.
+        soft_shortfall = torch.clamp(
             (float(soft_clearance) - clearance)
             / (float(soft_clearance) - float(hard_clearance)),
             min=0.0,
-            max=1.0,
         )
-        soft = torch.square(soft)
+        soft = torch.clamp(torch.square(soft_shortfall), max=float(soft_max_penalty))
         hard = (clearance < float(hard_clearance)).float() * float(hard_scale)
         overlap = (clearance < 0.0).float() * float(overlap_scale)
         if component == "soft":

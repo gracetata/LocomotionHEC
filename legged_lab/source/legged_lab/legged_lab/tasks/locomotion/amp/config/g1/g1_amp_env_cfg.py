@@ -2244,11 +2244,12 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
                     "soft_clearance": 0.100,
                     "hard_clearance": 0.045,
                     "overlap_scale": 16.0,
+                    "soft_max_penalty": 100.0,
                     "interpolation_steps": 10,
                 }
             )
-        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -2.0
-        self.rewards.swept_oriented_footprint_hard_barrier.weight = -12.0
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -4.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -1.0
 
 
 @configclass
