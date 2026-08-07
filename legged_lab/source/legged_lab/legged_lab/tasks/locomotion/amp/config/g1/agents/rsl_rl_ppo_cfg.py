@@ -155,6 +155,7 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
     )
     freeze_actor_hidden_layers = 0
     freeze_base_actor = True
+    freeze_lateral_residual = False
     freeze_pure_yaw_residual = True
     actor_warmup_iterations = 8
     restore_configured_learning_rate_on_load = True
@@ -289,3 +290,35 @@ class G1Nav2TwoGoalModel9996BarrierCorrectiveRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.clip_param = 0.12
         self.algorithm.num_learning_epochs = 4
         self.algorithm.entropy_coef = 4.0e-4
+
+
+@configclass
+class G1Nav2TwoGoalModel9996LateralSpecialistRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996BarrierCorrectiveRslRlOnPolicyRunnerAmpCfg
+):
+    """Update only the lateral residual; preserve pure yaw bit-for-bit."""
+
+    freeze_lateral_residual = False
+    freeze_pure_yaw_residual = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 1.5e-5
+        self.algorithm.clip_param = 0.10
+        self.algorithm.entropy_coef = 3.0e-4
+
+
+@configclass
+class G1Nav2TwoGoalModel9996YawSpecialistRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996BarrierCorrectiveRslRlOnPolicyRunnerAmpCfg
+):
+    """Update only the pure-yaw residual; preserve lateral motion bit-for-bit."""
+
+    freeze_lateral_residual = True
+    freeze_pure_yaw_residual = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 1.5e-5
+        self.algorithm.clip_param = 0.10
+        self.algorithm.entropy_coef = 3.0e-4

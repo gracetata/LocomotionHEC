@@ -24,6 +24,8 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=${COMMAND_BRIDGE_RESIDUAL_LR:-3.0e-4}
         FOOT_BARRIER_DESCRIPTION="soft 0.040 m; hard 0.025 m; weight -12"
         MAX_ITERATIONS=${MAX_ITERATIONS:-20}
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=False
         ;;
     corrective)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996Corrective-v0"
@@ -41,6 +43,8 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
         FOOT_BARRIER_DESCRIPTION="soft 0.040 m; hard 0.025 m; weight -12"
         MAX_ITERATIONS=${MAX_ITERATIONS:-30}
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=False
         ;;
     barrier_corrective)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996BarrierCorrective-v0"
@@ -58,9 +62,41 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
         FOOT_BARRIER_DESCRIPTION="soft 0.080 m; hard 0.040 m; weight -50; accept 0.025 m"
         MAX_ITERATIONS=${MAX_ITERATIONS:-30}
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=False
+        ;;
+    lateral_specialist)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
+        : "${SOURCE_CHECKPOINT:?lateral_specialist requires a moving residual policy}"
+        : "${SOURCE_SIZE:?lateral_specialist requires SOURCE_SIZE}"
+        : "${SOURCE_SHA256:?lateral_specialist requires SOURCE_SHA256}"
+        LOAD_ACTOR_AMP_ONLY=False
+        LOAD_POLICY_ONLY=True
+        COMMAND_BRIDGE_ENABLE=False
+        COMMAND_BRIDGE_SCALE=0.0
+        COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=True
+        FOOT_BARRIER_DESCRIPTION="lateral-only: soft 0.100 m; hard 0.045 m; weight -100"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-40}
+        ;;
+    yaw_specialist)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996YawSpecialist-v0"
+        : "${SOURCE_CHECKPOINT:?yaw_specialist requires the accepted lateral checkpoint}"
+        : "${SOURCE_SIZE:?yaw_specialist requires SOURCE_SIZE}"
+        : "${SOURCE_SHA256:?yaw_specialist requires SOURCE_SHA256}"
+        LOAD_ACTOR_AMP_ONLY=False
+        LOAD_POLICY_ONLY=True
+        COMMAND_BRIDGE_ENABLE=False
+        COMMAND_BRIDGE_SCALE=0.0
+        COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FREEZE_LATERAL_RESIDUAL=True
+        FREEZE_PURE_YAW_RESIDUAL=False
+        FOOT_BARRIER_DESCRIPTION="yaw-only: zero linear command; drift constraint unsaturated"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-40}
         ;;
     *)
-        echo "Error: STAGE must be bootstrap, corrective, or barrier_corrective." >&2
+        echo "Error: invalid STAGE for model_9996 two-goal training." >&2
         exit 1
         ;;
 esac
@@ -132,7 +168,7 @@ for arg in "$@"; do
         --task|--task=*|--resume|--resume=*|--load_run|--load_run=*|--checkpoint|--checkpoint=*|\
         --run_name|--run_name=*|agent.experiment_name=*|agent.checkpoint_output_dir=*|\
         agent.load_actor_only=*|agent.load_actor_amp_only=*|agent.load_policy_only=*|\
-        agent.freeze_base_actor=*|agent.freeze_pure_yaw_residual=*|\
+        agent.freeze_base_actor=*|agent.freeze_lateral_residual=*|agent.freeze_pure_yaw_residual=*|\
         agent.policy.fixed_command_bridge_fraction=*|\
         agent.algorithm.command_bridge_cfg.enabled=*|agent.algorithm.command_bridge_cfg.scale=*|\
         agent.algorithm.command_bridge_cfg.residual_learning_rate=*|\
@@ -190,13 +226,23 @@ bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
     agent.load_policy_only="${LOAD_POLICY_ONLY}" \
     agent.reset_iteration_on_policy_only_load=True \
     agent.freeze_base_actor=True \
-    agent.freeze_pure_yaw_residual=False \
+    agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}" \
+    agent.freeze_pure_yaw_residual="${FREEZE_PURE_YAW_RESIDUAL}" \
     agent.policy.fixed_command_bridge_fraction=0.0 \
     agent.algorithm.command_bridge_cfg.enabled="${COMMAND_BRIDGE_ENABLE}" \
     agent.algorithm.command_bridge_cfg.scale="${COMMAND_BRIDGE_SCALE}" \
     agent.algorithm.command_bridge_cfg.residual_learning_rate="${COMMAND_BRIDGE_RESIDUAL_LR}" \
     agent.algorithm.command_bridge_cfg.residual_updates_per_batch="${COMMAND_BRIDGE_RESIDUAL_UPDATES}" \
     "$@"
+
+if grep -Eq 'Traceback \(most recent call last\)|CUDA out of memory|NaN|nan detected|TypeError:' \
+    "${TRAIN_LOG_FILE}"; then
+    die "training log contains a fatal Python/CUDA/numerical error: ${TRAIN_LOG_FILE}"
+fi
+grep -q 'Learning iteration' "${TRAIN_LOG_FILE}" || \
+    die "training did not complete a PPO iteration: ${TRAIN_LOG_FILE}"
+grep -q 'Saved dedicated AMP checkpoint copy' "${TRAIN_LOG_FILE}" || \
+    die "training produced no dedicated checkpoint: ${TRAIN_LOG_FILE}"
 
 verify_all
 echo "Protected model_9996 and stage source verified unchanged after training."

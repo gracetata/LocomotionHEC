@@ -1703,6 +1703,44 @@ def two_goal_response_shortfall(
     )
 
 
+def two_goal_signed_root_response(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_lateral_command: float = 0.10,
+    min_yaw_command: float = 0.10,
+    minimum_ratio: float = -1.0,
+    maximum_ratio: float = 1.25,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward the signed root response without mixing in quality constraints.
+
+    Lateral velocity and root yaw rate are the two task objectives.  Forward
+    leakage, planar drift and sole clearance are independent constraints and
+    are deliberately scored by separate terms.  Keeping objective and
+    constraints separate avoids the vanishing learning signal produced by an
+    exponential quality gate when the initial policy is far from feasible.
+    """
+    if minimum_ratio >= maximum_ratio:
+        raise ValueError("minimum_ratio must be smaller than maximum_ratio.")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    lateral, pure_yaw = two_goal_command_masks(
+        command,
+        lateral_min_command=min_lateral_command,
+        pure_yaw_min_command=min_yaw_command,
+    )
+    lateral_ratio = (
+        torch.sign(command[:, 1]) * asset.data.root_lin_vel_b[:, 1]
+        / torch.clamp(torch.abs(command[:, 1]), min=float(min_lateral_command))
+    )
+    yaw_ratio = (
+        torch.sign(command[:, 2]) * asset.data.root_ang_vel_b[:, 2]
+        / torch.clamp(torch.abs(command[:, 2]), min=float(min_yaw_command))
+    )
+    response = lateral_ratio * lateral.float() + yaw_ratio * pure_yaw.float()
+    return torch.clamp(response, min=float(minimum_ratio), max=float(maximum_ratio))
+
+
 def pure_yaw_planar_drift_l2(
     env: ManagerBasedRLEnv,
     command_name: str,

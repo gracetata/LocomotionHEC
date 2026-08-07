@@ -70,6 +70,21 @@ def test_commands_are_strict_and_balanced_with_a_retention_anchor():
     assert "mode_probability = 0.80" in block
     assert "recorded Nav2 remainder is a retention anchor" in block
 
+    lateral = json.loads(
+        (MODE_ROOT / "task_sampling_two_goal_lateral_only_config.json").read_text()
+    )
+    yaw = json.loads(
+        (MODE_ROOT / "task_sampling_two_goal_yaw_only_config.json").read_text()
+    )
+    assert set(lateral["modes"]) == {"lateral_left", "lateral_right"}
+    assert set(yaw["modes"]) == {"turn_in_place_left", "turn_in_place_right"}
+    for mode in lateral["modes"].values():
+        assert mode["lin_vel_x"] == [0.0, 0.0]
+        assert mode["ang_vel_z"] == [0.0, 0.0]
+    for mode in yaw["modes"].values():
+        assert mode["lin_vel_x"] == [0.0, 0.0]
+        assert mode["lin_vel_y"] == [0.0, 0.0]
+
 
 def test_tasks_are_manager_amp_and_model9996_specific():
     registry = REGISTRY_FILE.read_text()
@@ -88,6 +103,16 @@ def test_tasks_are_manager_amp_and_model9996_specific():
             "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996BarrierCorrective-v0",
             "G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg",
             "G1Nav2TwoGoalModel9996BarrierCorrectiveRslRlOnPolicyRunnerAmpCfg",
+        ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0",
+            "G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg",
+            "G1Nav2TwoGoalModel9996LateralSpecialistRslRlOnPolicyRunnerAmpCfg",
+        ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996YawSpecialist-v0",
+            "G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg",
+            "G1Nav2TwoGoalModel9996YawSpecialistRslRlOnPolicyRunnerAmpCfg",
         ),
     ):
         assert f'id="{task}"' in registry
@@ -146,12 +171,32 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
     assert "swept_oriented_footprint_soft_margin_l2.weight = -4.0" in barrier
     assert "swept_oriented_footprint_hard_barrier.weight = -50.0" in barrier
 
+    lateral_start = env_text.index("class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg")
+    lateral = env_text[lateral_start: env_text.index("class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg")]
+    assert "two_goal_signed_root_response" in lateral
+    assert "two_goal_response_shortfall.weight = -80.0" in lateral
+    assert '"max_penalty": 100.0' in lateral
+    assert '"hard_clearance": 0.045' in lateral
+    assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in lateral
+
+    yaw_start = env_text.index("class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg")
+    yaw = env_text[yaw_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
+    assert "two_goal_signed_root_response" in yaw
+    assert "pure_yaw_planar_drift_l2.weight = -0.75" in yaw
+    assert '"max_penalty": 100.0' in yaw
+
 
 def test_training_script_separates_bootstrap_and_corrective_contracts():
     script = TRAIN_SCRIPT.read_text()
     assert "load_actor_amp_only=\"${LOAD_ACTOR_AMP_ONLY}\"" in script
     assert "load_policy_only=\"${LOAD_POLICY_ONLY}\"" in script
     assert "barrier_corrective" in script
+    assert "lateral_specialist" in script
+    assert "yaw_specialist" in script
+    assert 'agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}"' in script
+    assert 'agent.freeze_pure_yaw_residual="${FREEZE_PURE_YAW_RESIDUAL}"' in script
+    assert "training log contains a fatal Python/CUDA/numerical error" in script
+    assert "training produced no dedicated checkpoint" in script
     assert "agent.policy.fixed_command_bridge_fraction=0.0" in script
     assert "BASELINE_KL_CHECKPOINT=\"${PROTECTED_MODEL9996}\"" in script
     assert "RSI_ENABLE=False" in script

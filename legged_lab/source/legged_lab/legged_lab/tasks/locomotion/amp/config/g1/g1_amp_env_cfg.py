@@ -187,6 +187,24 @@ G1_NAV2_TWO_GOAL_STAGE2_MODE_CONFIG_PATH = os.path.join(
     "nav2_behavior_50hz",
     "task_sampling_two_goal_stage2_config.json",
 )
+G1_NAV2_TWO_GOAL_LATERAL_ONLY_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_two_goal_lateral_only_config.json",
+)
+G1_NAV2_TWO_GOAL_YAW_ONLY_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_two_goal_yaw_only_config.json",
+)
 G1_NAV2_BEHAVIOR_RECORDED_DATA_PATH = os.path.join(
     G1_PROJECT_ROOT_DIR,
     "legged_lab",
@@ -2157,6 +2175,89 @@ class G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg(
         self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -4.0
         self.rewards.swept_oriented_footprint_hard_barrier.weight = -50.0
         self.rewards.pure_yaw_torso_roll_l2.weight = -0.8
+
+
+@configclass
+class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
+    G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg
+):
+    """Constrained lateral optimization with the pure-yaw branch frozen.
+
+    The original saturated leakage term could not distinguish 0.06 m/s from
+    0.27 m/s forward leakage.  This stage preserves the full squared signal,
+    keeps standing more expensive than a responsive gait, and places the hard
+    sole barrier above the 0.025 m acceptance clearance.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = (
+            G1_NAV2_TWO_GOAL_LATERAL_ONLY_MODE_CONFIG_PATH
+        )
+        self.commands.base_velocity.mode_command_clip_min = (0.0, -0.35, 0.0)
+        self.commands.base_velocity.mode_command_clip_max = (0.0, 0.35, 0.0)
+        self.rewards.two_goal_signed_root_response = RewTerm(
+            func=mdp.two_goal_signed_root_response,
+            weight=12.0,
+            params={"command_name": "base_velocity", "min_lateral_command": 0.10},
+        )
+        self.rewards.two_goal_response_shortfall.weight = -80.0
+        self.rewards.two_goal_response_shortfall.params.update(
+            {"target_fraction": 0.75, "max_penalty": 1.0}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -0.50
+        self.rewards.lateral_command_leak_l2.params.update(
+            {
+                "forward_velocity_scale": 0.040,
+                "yaw_rate_scale": 0.080,
+                "max_penalty": 100.0,
+            }
+        )
+        for term in (
+            self.rewards.swept_oriented_footprint_soft_margin_l2,
+            self.rewards.swept_oriented_footprint_hard_barrier,
+        ):
+            term.params.update(
+                {
+                    "soft_clearance": 0.100,
+                    "hard_clearance": 0.045,
+                    "overlap_scale": 16.0,
+                    "interpolation_steps": 10,
+                }
+            )
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -8.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -100.0
+
+
+@configclass
+class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg(
+    G1AmpNav2TwoGoalModel9996BarrierCorrectiveEnvCfg
+):
+    """Constrained zero-linear pure-yaw optimization with lateral frozen."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = (
+            G1_NAV2_TWO_GOAL_YAW_ONLY_MODE_CONFIG_PATH
+        )
+        self.commands.base_velocity.mode_command_clip_min = (0.0, 0.0, -0.45)
+        self.commands.base_velocity.mode_command_clip_max = (0.0, 0.0, 0.45)
+        self.rewards.two_goal_signed_root_response = RewTerm(
+            func=mdp.two_goal_signed_root_response,
+            weight=14.0,
+            params={"command_name": "base_velocity", "min_yaw_command": 0.10},
+        )
+        self.rewards.two_goal_response_shortfall.weight = -80.0
+        self.rewards.two_goal_response_shortfall.params.update(
+            {"target_fraction": 0.75, "max_penalty": 1.0}
+        )
+        self.rewards.pure_yaw_planar_drift_l2.weight = -0.75
+        self.rewards.pure_yaw_planar_drift_l2.params.update(
+            {"velocity_scale": 0.035, "max_penalty": 100.0}
+        )
+        # Yaw also retains the same geometrical no-crossing constraint.
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -4.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -50.0
 
 
 @configclass
