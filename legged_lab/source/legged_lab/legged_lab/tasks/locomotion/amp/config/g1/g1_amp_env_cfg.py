@@ -2213,6 +2213,28 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
                 "max_penalty": 100.0,
             }
         )
+        # SAT distance is symmetric and therefore cannot distinguish a safely
+        # separated stance from crossed feet after they have passed each
+        # other.  This smooth auxiliary term uses ordered left/right centers
+        # and the physical sole width (2 * 0.035 m) plus 0.025 m clearance to
+        # give PPO an unambiguous outward direction.  The first stage keeps the
+        # discontinuous hard barrier moderate so stopping is not the cheapest
+        # escape from the unsafe model_9996 gait.
+        self.rewards.lateral_foot_ordering_l2 = RewTerm(
+            func=mdp.lateral_foot_ordering_l2,
+            weight=-6.0,
+            params={
+                "command_name": "base_velocity",
+                "asset_cfg": SceneEntityCfg(
+                    "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+                ),
+                "foot_half_width": 0.035,
+                "min_clearance": 0.025,
+                "shortfall_scale": 0.080,
+                "max_penalty": 100.0,
+                "min_lateral_command": 0.10,
+            },
+        )
         for term in (
             self.rewards.swept_oriented_footprint_soft_margin_l2,
             self.rewards.swept_oriented_footprint_hard_barrier,
@@ -2225,6 +2247,19 @@ class G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg(
                     "interpolation_steps": 10,
                 }
             )
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -2.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -12.0
+
+
+@configclass
+class G1AmpNav2TwoGoalModel9996LateralSafetyPolishEnvCfg(
+    G1AmpNav2TwoGoalModel9996LateralSpecialistEnvCfg
+):
+    """Enforce the final large sole barrier after ordered lateral gait exists."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.lateral_foot_ordering_l2.weight = -8.0
         self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -8.0
         self.rewards.swept_oriented_footprint_hard_barrier.weight = -100.0
 

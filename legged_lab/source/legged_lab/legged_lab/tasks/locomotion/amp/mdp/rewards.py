@@ -40,6 +40,7 @@ from .reward_math import (
     two_goal_command_masks,
     two_goal_dense_root_pose_progress,
     two_goal_response_shortfall_l2,
+    lateral_foot_ordering_shortfall_l2,
     update_footstep_cadence_state,
 )
 
@@ -1795,6 +1796,41 @@ def lateral_command_leak_l2(
     leakage = torch.square(asset.data.root_lin_vel_b[:, 0]) / float(forward_velocity_scale) ** 2
     leakage += torch.square(asset.data.root_ang_vel_b[:, 2]) / float(yaw_rate_scale) ** 2
     return torch.clamp(leakage, max=float(max_penalty)) * lateral.float()
+
+
+def lateral_foot_ordering_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    foot_half_width: float = 0.035,
+    min_clearance: float = 0.025,
+    shortfall_scale: float = 0.080,
+    max_penalty: float = 100.0,
+    min_lateral_command: float = 0.10,
+) -> torch.Tensor:
+    """Penalize a shape-aware signed left/right foot-ordering shortfall.
+
+    ``asset_cfg.body_ids`` must preserve the physical left-foot, right-foot
+    order.  Positions are transformed into the floating-base frame, so the
+    constraint is invariant to the robot's world heading.
+    """
+    if len(asset_cfg.body_ids) != 2:
+        raise ValueError("Lateral foot ordering requires exactly two ordered feet.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    root_quat_w = asset.data.root_quat_w.unsqueeze(1).expand(-1, 2, -1)
+    root_pos_w = asset.data.root_pos_w.unsqueeze(1).expand(-1, 2, -1)
+    feet_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids]
+    feet_pos_b = math_utils.quat_apply_inverse(root_quat_w, feet_pos_w - root_pos_w)
+    command = env.command_manager.get_command(command_name)
+    return lateral_foot_ordering_shortfall_l2(
+        command,
+        feet_pos_b[:, :, 1],
+        foot_half_width=foot_half_width,
+        min_clearance=min_clearance,
+        shortfall_scale=shortfall_scale,
+        max_penalty=max_penalty,
+        lateral_min_command=min_lateral_command,
+    )
 
 
 class safe_alternating_touchdown_progress(_safe_alternating_touchdown_pose_progress):

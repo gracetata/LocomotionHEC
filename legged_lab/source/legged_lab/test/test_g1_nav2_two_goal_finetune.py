@@ -174,6 +174,25 @@ def test_response_shortfall_penalizes_stillness_and_reverse_motion():
     assert penalty[2] <= 1.0
 
 
+def test_lateral_foot_ordering_is_shape_aware_directional_and_mode_gated():
+    command = torch.tensor(
+        [[0.0, 0.25, 0.0], [0.0, -0.25, 0.0], [0.0, 0.25, 0.0], [0.0, 0.0, 0.35]]
+    )
+    # Columns are deliberately ordered left foot, right foot.
+    foot_y = torch.tensor([[0.060, -0.060], [0.035, -0.035], [-0.030, 0.030], [-0.030, 0.030]])
+    penalty = REWARD_MATH.lateral_foot_ordering_shortfall_l2(
+        command,
+        foot_y,
+        foot_half_width=0.035,
+        min_clearance=0.025,
+        shortfall_scale=0.080,
+    )
+    torch.testing.assert_close(penalty[0], torch.tensor(0.0))
+    assert 0.0 < penalty[1] < penalty[2]
+    # The same crossed geometry is not charged to the separate pure-yaw goal.
+    torch.testing.assert_close(penalty[3], torch.tensor(0.0))
+
+
 def test_dense_root_pose_progress_is_directional_and_sway_neutral():
     command = torch.tensor(
         [[0.0, 0.25, 0.0], [0.0, 0.25, 0.0], [0.0, 0.0, 0.35], [0.0, 0.0, 0.35]]

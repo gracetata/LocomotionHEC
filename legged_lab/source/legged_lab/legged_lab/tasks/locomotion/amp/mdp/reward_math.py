@@ -193,6 +193,45 @@ def two_goal_command_masks(
     return lateral, pure_yaw
 
 
+def lateral_foot_ordering_shortfall_l2(
+    command: torch.Tensor,
+    foot_center_y_b: torch.Tensor,
+    *,
+    foot_half_width: float = 0.035,
+    min_clearance: float = 0.025,
+    shortfall_scale: float = 0.080,
+    max_penalty: float = 100.0,
+    lateral_min_command: float = 0.10,
+) -> torch.Tensor:
+    """Return a directional sole-width-aware no-crossing penalty.
+
+    The two columns of ``foot_center_y_b`` must be ordered left foot, right
+    foot.  A center-distance absolute value is insufficient for lateral gait:
+    after the feet cross it can report a large (apparently safe) distance.
+    This term instead requires
+
+    ``left_y - right_y >= 2 * foot_half_width + min_clearance``.
+
+    The signed ordering supplies a smooth escape direction while the oriented
+    swept-footprint SAT barrier remains the authoritative geometry check for
+    rotated toes, overlap, and between-frame crossings.
+    """
+    if foot_center_y_b.ndim != 2 or foot_center_y_b.shape != (command.shape[0], 2):
+        raise ValueError("Foot-center Y tensor must have shape [num_envs, 2].")
+    if foot_half_width <= 0.0 or min_clearance < 0.0:
+        raise ValueError("Foot half-width must be positive and clearance non-negative.")
+    if shortfall_scale <= 0.0 or max_penalty <= 0.0:
+        raise ValueError("Ordering shortfall scale and cap must be positive.")
+    lateral, _ = two_goal_command_masks(
+        command, lateral_min_command=lateral_min_command
+    )
+    required_center_separation = 2.0 * float(foot_half_width) + float(min_clearance)
+    signed_center_separation = foot_center_y_b[:, 0] - foot_center_y_b[:, 1]
+    shortfall = torch.clamp(required_center_separation - signed_center_separation, min=0.0)
+    penalty = torch.square(shortfall / float(shortfall_scale))
+    return torch.clamp(penalty, max=float(max_penalty)) * lateral.float()
+
+
 def signed_command_progress_ratio(
     command_value: torch.Tensor,
     actual_value: torch.Tensor,

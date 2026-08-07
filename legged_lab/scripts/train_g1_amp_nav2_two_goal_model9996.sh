@@ -82,7 +82,7 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
         FREEZE_LATERAL_RESIDUAL=False
         FREEZE_PURE_YAW_RESIDUAL=True
-        FOOT_BARRIER_DESCRIPTION="direct model_9996 lateral: soft 0.100 m; hard 0.045 m; weight -100"
+        FOOT_BARRIER_DESCRIPTION="direct model_9996 lateral: signed left-right sole-width guide; SAT hard weight -12"
         MAX_ITERATIONS=${MAX_ITERATIONS:-40}
         ;;
     yaw_proxy_bootstrap)
@@ -135,8 +135,27 @@ case "${STAGE}" in
         COMMAND_BRIDGE_RESIDUAL_LR=0.0
         FREEZE_LATERAL_RESIDUAL=False
         FREEZE_PURE_YAW_RESIDUAL=True
-        FOOT_BARRIER_DESCRIPTION="lateral-only: soft 0.100 m; hard 0.045 m; weight -100"
+        FOOT_BARRIER_DESCRIPTION="lateral-only: signed left-right sole-width guide; SAT hard weight -12"
         MAX_ITERATIONS=${MAX_ITERATIONS:-40}
+        ;;
+    lateral_safety_polish)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSafetyPolish-v0"
+        : "${SOURCE_CHECKPOINT:?lateral_safety_polish requires a responsive ordered-foot checkpoint}"
+        : "${SOURCE_SIZE:?lateral_safety_polish requires SOURCE_SIZE}"
+        : "${SOURCE_SHA256:?lateral_safety_polish requires SOURCE_SHA256}"
+        [[ "${SOURCE_CHECKPOINT}" != "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: lateral_safety_polish must follow the ordering curriculum." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=False
+        LOAD_POLICY_ONLY=True
+        COMMAND_BRIDGE_ENABLE=False
+        COMMAND_BRIDGE_SCALE=0.0
+        COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=True
+        FOOT_BARRIER_DESCRIPTION="final signed ordering -8; SAT soft -8; hard/overlap -100"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-30}
         ;;
     yaw_specialist)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996YawSpecialist-v0"

@@ -157,7 +157,7 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
         "swept_oriented_footprint_hard_barrier",
     ):
         assert reward in block
-    assert block.count("swept_oriented_footprint_hard_barrier.weight = -12.0") == 2
+    assert block.count("swept_oriented_footprint_hard_barrier.weight = -12.0") >= 2
     assert block.count('["overlap_scale"] = 4.0') == 2
     assert '"hard_clearance": 0.025' in env_text
     assert '"soft_clearance": 0.040' in env_text
@@ -178,7 +178,14 @@ def test_real_motion_rewards_and_large_oriented_sole_barrier_are_active():
     assert "two_goal_response_shortfall.weight = -80.0" in lateral
     assert '"max_penalty": 100.0' in lateral
     assert '"hard_clearance": 0.045' in lateral
-    assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in lateral
+    assert "lateral_foot_ordering_l2" in lateral
+    assert '"foot_half_width": 0.035' in lateral
+    assert '"min_clearance": 0.025' in lateral
+    assert "swept_oriented_footprint_hard_barrier.weight = -12.0" in lateral
+    polish_start = env_text.index("class G1AmpNav2TwoGoalModel9996LateralSafetyPolishEnvCfg")
+    polish = env_text[polish_start: env_text.index("class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg")]
+    assert "lateral_foot_ordering_l2.weight = -8.0" in polish
+    assert "swept_oriented_footprint_hard_barrier.weight = -100.0" in polish
 
     yaw_start = env_text.index("class G1AmpNav2TwoGoalModel9996YawSpecialistEnvCfg")
     yaw = env_text[yaw_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")]
@@ -206,6 +213,8 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "lateral_teacher_forward_command=-0.30" in script
     assert "teacher_delta_fraction=0.35" in script
     assert "lateral_specialist" in script
+    assert "lateral_safety_polish" in script
+    assert "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSafetyPolish-v0" in script
     assert "yaw_specialist" in script
     assert 'agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}"' in script
     assert 'agent.freeze_pure_yaw_residual="${FREEZE_PURE_YAW_RESIDUAL}"' in script
