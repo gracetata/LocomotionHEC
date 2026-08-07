@@ -80,11 +80,31 @@ if float(state["fixed_command_bridge_fraction"]) != 0.0:
 for key, value in baseline_state.items():
     if key.startswith("actor.") and not torch.equal(state[key], value):
         raise RuntimeError(f"frozen model_9996 base actor changed: {key}")
-for name in ("lateral_command_residual", "pure_yaw_command_residual"):
-    if f"{name}.0.weight" not in state:
-        raise RuntimeError(f"missing specialization adapter: {name}")
-    if float(state[f"{name}.2.weight"].norm()) <= 0.0:
-        raise RuntimeError(f"specialization adapter stayed identically zero: {name}")
+if "pure_yaw_command_residual.0.weight" not in state:
+    raise RuntimeError("missing pure-yaw specialization adapter")
+if float(state["pure_yaw_command_residual.2.weight"].norm()) <= 0.0:
+    raise RuntimeError("pure-yaw specialization adapter stayed identically zero")
+
+# A lateral specialization may be either the compact residual used during early
+# experiments or the final full-capacity expert. The latter is selected only
+# for strict [0, vy, 0] commands by the exporter; all other commands continue
+# through the bit-identical protected model_9996 actor.
+if "lateral_expert_actor.0.weight" in state:
+    if tuple(state["lateral_expert_actor.0.weight"].shape) != (512, 96):
+        raise RuntimeError("lateral expert input contract is not 96")
+    if tuple(state["lateral_expert_actor.6.weight"].shape) != (29, 128):
+        raise RuntimeError("lateral expert output contract is not 29")
+    if abs(float(state["lateral_expert_forward_command"]) + 0.14) > 1.0e-7:
+        raise RuntimeError("unexpected lateral expert forward calibration")
+    if abs(float(state["lateral_expert_same_yaw_abs"]) - 0.10) > 1.0e-7:
+        raise RuntimeError("unexpected lateral expert yaw calibration")
+    lateral_contract = "full lateral expert"
+else:
+    if "lateral_command_residual.0.weight" not in state:
+        raise RuntimeError("missing lateral specialization adapter")
+    if float(state["lateral_command_residual.2.weight"].norm()) <= 0.0:
+        raise RuntimeError("lateral specialization adapter stayed identically zero")
+    lateral_contract = "lateral residual"
 disc = candidate["amp_discriminator_state_dict"]
 disc_weight = next(
     value for key, value in disc.items()
@@ -95,7 +115,10 @@ if tuple(disc_weight.shape)[1] != 280:
 for key in ("optimizer_state_dict", "amp_discriminator_optimizer_state_dict"):
     if key not in candidate:
         raise RuntimeError(f"missing optimizer contract: {key}")
-print("[two-goal-contract] finite, 96/297/29, discriminator=280, base actor frozen, bridge=0")
+print(
+    "[two-goal-contract] finite, 96/297/29, discriminator=280, "
+    f"base actor frozen, bridge=0, {lateral_contract}"
+)
 PY
 
 export_policy() {

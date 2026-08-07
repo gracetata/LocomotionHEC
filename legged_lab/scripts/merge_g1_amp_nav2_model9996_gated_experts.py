@@ -38,7 +38,7 @@ def main() -> None:
     parser.add_argument("--lateral-expert", type=Path, required=True)
     parser.add_argument("--yaw-residual", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--lateral-forward", type=float, default=-0.10)
+    parser.add_argument("--lateral-forward", type=float, default=-0.14)
     parser.add_argument("--lateral-yaw-abs", type=float, default=0.10)
     args = parser.parse_args()
 

@@ -346,7 +346,7 @@ def test_gated_merge_preserves_model9996_and_uses_strict_lateral_calibration():
     assert 'key.startswith("actor.")' in script
     assert 'key.startswith("lateral_command_residual.")' in script
     assert 'state["fixed_command_bridge_fraction"] = torch.tensor(0.0)' in script
-    assert 'default=-0.10' in script
+    assert 'default=-0.14' in script
     assert 'default=0.10' in script
     assert "Refusing to overwrite" in script
 
@@ -364,6 +364,9 @@ def test_mujoco_acceptance_is_strict_and_bidirectional():
     ):
         assert scenario in script
     assert 'float(state["fixed_command_bridge_fraction"]) != 0.0' in script
+    assert '"lateral_expert_actor.0.weight" in state' in script
+    assert 'state["lateral_expert_forward_command"]' in script
+    assert 'state["lateral_expert_same_yaw_abs"]' in script
     assert 'signed lateral speed {signed_vy:.4f} < 0.18 m/s' in script
     assert 'signed yaw rate {signed_yaw:.4f} < 0.25 rad/s' in script
     assert 'planar drift {planar_drift:.4f} > 0.035 m/s' in script
