@@ -16,6 +16,9 @@ and zero-linear-velocity in-place yaw. The 96/297/29 policy interface and the
   Iterations 0-11 update only the fresh critic; remaining actor layers and action
   noise become trainable at iteration 12. Actor updates use `7.5e-6`, two PPO
   epochs, and clip `0.12` so the retention KL guard is approached gradually.
+- AMP style reward remains at 15% on retention samples, but is disabled on the
+  two specialization modes because the frozen forward-walking discriminator
+  has no lateral or in-place-turn demonstrations.
 - Checkpoints are saved every 10 iterations. A stage is limited to 60 iterations
   and must be evaluated before continuation.
 
@@ -30,6 +33,10 @@ for net displacement or heading change. Productive progress is quality-gated by
 undesired forward/yaw leakage or planar drift. Standing still receives a bounded
 response-shortfall penalty, and the stage-1 leak/drift penalties are themselves
 bounded so exploratory motion cannot be dominated by an unbounded quadratic.
+Before the policy can produce a touchdown, a bounded swing-cycle term rewards
+only safe single-foot swings that alternate feet. Holding one foot up stops
+earning credit after 0.35 s, and repeating the same foot earns nothing. Stage 1
+disables the cadence ceiling; stage 2 restores it after locomotion exists.
 
 The swept oriented sole geometry uses a 40 mm soft margin and a separate 25 mm
 hard barrier. Productive touchdown rewards require clearance of at least 25 mm;

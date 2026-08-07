@@ -1,6 +1,9 @@
 import torch
 
-from rsl_rl.algorithms.ppo_amp import two_goal_specialization_mask_from_policy_obs
+from rsl_rl.algorithms.ppo_amp import (
+    command_conditioned_lerp_reward,
+    two_goal_specialization_mask_from_policy_obs,
+)
 
 
 def test_command_conditioned_mask_separates_specialization_and_retention():
@@ -26,3 +29,17 @@ def test_command_conditioned_kl_weights_are_exact():
     weighted = torch.mean(scales * raw_kl)
     expected = (0.005 * 0.10 + 0.005 * 0.20 + 0.08 * 0.30 + 0.08 * 0.40) / 4.0
     torch.testing.assert_close(weighted, torch.tensor(expected))
+
+
+def test_command_conditioned_style_is_disabled_only_for_specialization():
+    task = torch.tensor([2.0, 2.0])
+    style = torch.tensor([10.0, 10.0])
+    specialization = torch.tensor([True, False])
+    mixed = command_conditioned_lerp_reward(
+        task,
+        style,
+        specialization,
+        retention_task_lerp=0.85,
+        specialization_task_lerp=1.0,
+    )
+    torch.testing.assert_close(mixed, torch.tensor([2.0, 3.2]))

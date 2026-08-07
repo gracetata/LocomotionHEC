@@ -1884,7 +1884,7 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
         )
         self.rewards.dense_root_pose_command_progress = RewTerm(
             func=mdp.dense_root_pose_command_progress,
-            weight=3.0,
+            weight=6.0,
             params={
                 "command_name": "base_velocity",
                 "min_lateral_command": 0.10,
@@ -1920,6 +1920,20 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
                 "sensor_cfg": foot_sensor_cfg,
                 "asset_cfg": foot_asset_cfg,
                 "min_air_time": 0.040,
+                "min_clearance": 0.025,
+            },
+        )
+        self.rewards.safe_alternating_swing_progress = RewTerm(
+            func=mdp.safe_alternating_swing_progress,
+            weight=2.0,
+            params={
+                "command_name": "base_velocity",
+                "sensor_cfg": foot_sensor_cfg,
+                "asset_cfg": foot_asset_cfg,
+                "min_lateral_command": 0.10,
+                "min_yaw_command": 0.10,
+                "min_air_time": 0.040,
+                "max_air_time": 0.35,
                 "min_clearance": 0.025,
             },
         )
@@ -1992,7 +2006,7 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
 
         # Pure-yaw roll and excess cadence remain guards, not stepping rewards.
         self.rewards.pure_yaw_torso_roll_l2.weight = -0.30
-        self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.15
+        self.rewards.command_conditioned_footstep_cadence_l1.weight = 0.0
         self.rewards.command_conditioned_footstep_cadence_l1.params.update(
             {"base_hz": 2.0, "linear_gain": 2.0, "yaw_gain": 1.5, "maximum_hz": 3.0}
         )

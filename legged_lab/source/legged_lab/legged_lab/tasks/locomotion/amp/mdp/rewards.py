@@ -1840,6 +1840,96 @@ class safe_step_initiation(ManagerTermBase):
         return started.float() * safe.float() * _upright_scale(env)
 
 
+class safe_alternating_swing_progress(ManagerTermBase):
+    """Reward a bounded single-foot swing only when swing feet alternate.
+
+    Holding one foot up stops earning credit after ``max_air_time``. Repeating
+    the same foot earns no credit until the opposite foot starts a safe swing,
+    which removes the stationary single-support exploit of a plain air-time
+    reward while providing a dense initiation signal before touchdown.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._last_foot = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+        self._last_mode = torch.zeros(env.num_envs, dtype=torch.int8, device=env.device)
+        self._swing_active = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self._current_swing_valid = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._last_foot[env_ids] = -1
+        self._last_mode[env_ids] = 0
+        self._swing_active[env_ids] = False
+        self._current_swing_valid[env_ids] = False
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        sensor_cfg: SceneEntityCfg,
+        asset_cfg: SceneEntityCfg,
+        min_lateral_command: float = 0.10,
+        min_yaw_command: float = 0.10,
+        min_air_time: float = 0.040,
+        max_air_time: float = 0.35,
+        min_clearance: float = 0.025,
+        center_offset_x: float = 0.035,
+        half_length: float = 0.090,
+        half_width: float = 0.035,
+    ) -> torch.Tensor:
+        if min_air_time <= 0.0 or max_air_time <= min_air_time:
+            raise ValueError("Safe swing air-time bounds are invalid.")
+        contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        asset: RigidObject = env.scene[asset_cfg.name]
+        command = env.command_manager.get_command(command_name)
+        lateral, pure_yaw = two_goal_command_masks(
+            command,
+            lateral_min_command=min_lateral_command,
+            pure_yaw_min_command=min_yaw_command,
+        )
+        mode = lateral.to(torch.int8) + 2 * pure_yaw.to(torch.int8)
+        mode_changed = mode != self._last_mode
+        self._last_foot[mode_changed] = -1
+        self._swing_active[mode_changed] = False
+        self._current_swing_valid[mode_changed] = False
+        self._last_mode.copy_(mode)
+
+        active = mode > 0
+        air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+        swing_mask = air_time >= float(min_air_time)
+        exactly_one_swing = torch.sum(swing_mask.int(), dim=1) == 1
+        swing_foot = torch.argmax(swing_mask.int(), dim=1)
+        started = exactly_one_swing & ~self._swing_active & active
+        alternating = (self._last_foot < 0) | (swing_foot != self._last_foot)
+        accepted = started & alternating
+        self._current_swing_valid[started] = accepted[started]
+        self._last_foot[accepted] = swing_foot[accepted]
+        self._current_swing_valid[~exactly_one_swing] = False
+        self._swing_active.copy_(exactly_one_swing & active)
+
+        active_air_time = torch.max(air_time, dim=1).values
+        bounded_duration = active_air_time <= float(max_air_time)
+        corners = _oriented_footprint_corners_xy(
+            asset,
+            asset_cfg,
+            center_offset_x=center_offset_x,
+            half_length=half_length,
+            half_width=half_width,
+        )
+        clearance = convex_footprint_signed_clearance_xy(corners[:, 0], corners[:, 1])
+        safe = clearance >= float(min_clearance)
+        return (
+            exactly_one_swing.float()
+            * self._current_swing_valid.float()
+            * bounded_duration.float()
+            * safe.float()
+            * active.float()
+            * _upright_scale(env)
+        )
+
+
 class swept_oriented_footprint_proximity_l2(ManagerTermBase):
     """Shape-aware soft barrier with hard close/overlap costs over a swept step."""
 

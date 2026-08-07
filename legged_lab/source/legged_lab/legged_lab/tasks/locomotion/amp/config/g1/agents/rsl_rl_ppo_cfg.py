@@ -156,6 +156,9 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.baseline_kl_cfg.adaptation_rate = 1.5
         self.algorithm.baseline_kl_cfg.hard_limit = 0.15
         self.algorithm.amp_cfg.freeze_discriminator = True
+        self.algorithm.amp_cfg.command_conditioned_style_reward = True
+        self.algorithm.amp_cfg.specialization_task_style_lerp = 1.0
+        self.algorithm.amp_cfg.command_obs_start_index = 6
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
         # In PPOAMP this is the task fraction: 0.85 task + 0.15 frozen style.
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.85

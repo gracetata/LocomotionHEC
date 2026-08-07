@@ -217,6 +217,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
         "dense_root_pose_command_progress",
         "safe_alternating_touchdown_progress",
         "safe_step_initiation",
+        "safe_alternating_swing_progress",
         "two_goal_response_shortfall",
         "swept_oriented_footprint_soft_margin_l2",
         "swept_oriented_footprint_hard_barrier",
@@ -226,6 +227,8 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert "freeze_actor_hidden_layers = 1" in agent
     assert "actor_warmup_iterations = 12" in agent
     assert "freeze_discriminator = True" in agent
+    assert "command_conditioned_style_reward = True" in agent
+    assert "specialization_task_style_lerp = 1.0" in agent
     assert "learning_rate = 7.5e-6" in agent
     assert "clip_param = 0.12" in agent
     assert "num_learning_epochs = 2" in agent
@@ -234,6 +237,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     assert 'weight=-4.0' in block
     assert 'weight=-2.0' in block
     assert '"max_penalty": 1.0' in block
+    assert "command_conditioned_footstep_cadence_l1.weight = 0.0" in block
     assert "RSI_ENABLE=False" in script
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "model_10990" not in script

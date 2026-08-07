@@ -45,6 +45,27 @@ def two_goal_specialization_mask_from_policy_obs(
     return lateral | pure_yaw
 
 
+def command_conditioned_lerp_reward(
+    task_reward: torch.Tensor,
+    style_reward: torch.Tensor,
+    specialization_mask: torch.Tensor,
+    *,
+    retention_task_lerp: float,
+    specialization_task_lerp: float,
+) -> torch.Tensor:
+    """Mix task/style rewards with a distinct specialization coefficient."""
+    if task_reward.shape != style_reward.shape or task_reward.shape != specialization_mask.shape:
+        raise ValueError("Task reward, style reward, and specialization mask shapes must match.")
+    if not 0.0 <= retention_task_lerp <= 1.0 or not 0.0 <= specialization_task_lerp <= 1.0:
+        raise ValueError("Task/style interpolation coefficients must be in [0, 1].")
+    task_lerp = torch.where(
+        specialization_mask,
+        torch.full_like(task_reward, float(specialization_task_lerp)),
+        torch.full_like(task_reward, float(retention_task_lerp)),
+    )
+    return task_lerp * task_reward + (1.0 - task_lerp) * style_reward
+
+
 class PPOAMP(PPO):
 
     policy: ActorCritic | ActorCriticRecurrent | ActorCriticCNN
@@ -154,6 +175,15 @@ class PPOAMP(PPO):
                 f"Unknown AMP discriminator normalizer mode: {self.disc_normalizer_mode}. "
                 "Should be 'policy', 'policy_demo', or 'demo_static'."
             )
+        self.command_conditioned_style_reward = bool(
+            self.amp_cfg.get("command_conditioned_style_reward", False)
+        )
+        self.specialization_task_style_lerp = float(
+            self.amp_cfg.get("specialization_task_style_lerp", 1.0)
+        )
+        self.style_command_obs_start_index = int(self.amp_cfg.get("command_obs_start_index", 6))
+        if not 0.0 <= self.specialization_task_style_lerp <= 1.0:
+            raise ValueError("specialization_task_style_lerp must be in [0, 1].")
         
         if self.amp_cfg["loss_type"] == "GAN":
             self.loss_type = LossType.GAN
@@ -223,7 +253,28 @@ class PPOAMP(PPO):
         # Compute the Style Reward
         self.style_rewards, self.disc_score = self.amp_discriminator.predict_style_reward(disc_obs, dt=self.amp_cfg["step_dt"])
         # Linearly interpolate between task reward and style reward
-        self.rewards_lerp = self.amp_discriminator.lerp_reward(task_reward=rewards, style_reward=self.style_rewards)
+        if self.command_conditioned_style_reward:
+            actor_obs = self.policy.get_actor_obs(obs)
+            specialization_mask = two_goal_specialization_mask_from_policy_obs(
+                actor_obs,
+                command_obs_start_index=self.style_command_obs_start_index,
+                lateral_min_command=self.baseline_kl_lateral_min_command,
+                pure_yaw_min_command=self.baseline_kl_pure_yaw_min_command,
+                max_forward_command=self.baseline_kl_max_forward_command,
+                max_lateral_yaw_command=self.baseline_kl_max_lateral_yaw_command,
+                max_pure_yaw_translation_command=self.baseline_kl_max_pure_yaw_translation_command,
+            )
+            self.rewards_lerp = command_conditioned_lerp_reward(
+                rewards,
+                self.style_rewards,
+                specialization_mask,
+                retention_task_lerp=float(self.amp_discriminator.task_style_lerp),
+                specialization_task_lerp=self.specialization_task_style_lerp,
+            )
+        else:
+            self.rewards_lerp = self.amp_discriminator.lerp_reward(
+                task_reward=rewards, style_reward=self.style_rewards
+            )
         # Store the un-normalized disc obs and disc demo obs into buffers
         self.disc_obs_buffer.append(disc_obs)
         self.disc_demo_obs_buffer.append(disc_demo_obs)

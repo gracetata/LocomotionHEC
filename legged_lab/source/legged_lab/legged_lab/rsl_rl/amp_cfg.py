@@ -40,6 +40,15 @@ class RslRlAmpCfg:
     demo_normalizer_init_batches: int = 8
     """Number of environment reset batches used to initialize a static demo normalizer."""
 
+    command_conditioned_style_reward: bool = False
+    """Use a separate task/style interpolation for two-goal specialization commands."""
+
+    specialization_task_style_lerp: float = 1.0
+    """Task-reward fraction on pure-lateral and exact-zero-linear pure-yaw samples."""
+
+    command_obs_start_index: int = 6
+    """Start of the ``[vx, vy, wz]`` slice in the flattened policy observation."""
+
     @configclass
     class AMPDiscriminatorCfg:
         """Configuration for the AMP discriminator network."""
