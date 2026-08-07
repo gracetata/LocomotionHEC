@@ -44,7 +44,7 @@ def test_model9996_is_the_exact_and_only_protected_origin():
     assert MODEL9996_SHA256 in script
     assert "model_10990" not in script
     assert "model_12995" not in script
-    assert "bootstrap source must be the protected model_9996" in script
+    assert '"${STAGE} source must be the protected model_9996"' in script
 
 
 def test_commands_are_strict_and_balanced_with_a_retention_anchor():
@@ -191,6 +191,8 @@ def test_training_script_separates_bootstrap_and_corrective_contracts():
     assert "load_actor_amp_only=\"${LOAD_ACTOR_AMP_ONLY}\"" in script
     assert "load_policy_only=\"${LOAD_POLICY_ONLY}\"" in script
     assert "barrier_corrective" in script
+    assert "lateral_direct" in script
+    assert "lateral_direct must start with zero residuals from protected model_9996" in script
     assert "lateral_specialist" in script
     assert "yaw_specialist" in script
     assert 'agent.freeze_lateral_residual="${FREEZE_LATERAL_RESIDUAL}"' in script

@@ -65,6 +65,25 @@ case "${STAGE}" in
         FREEZE_LATERAL_RESIDUAL=False
         FREEZE_PURE_YAW_RESIDUAL=False
         ;;
+    lateral_direct)
+        TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
+        SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-"${PROTECTED_MODEL9996}"}
+        SOURCE_SIZE=${SOURCE_SIZE:-${PROTECTED_MODEL9996_SIZE}}
+        SOURCE_SHA256=${SOURCE_SHA256:-"${PROTECTED_MODEL9996_SHA256}"}
+        [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_MODEL9996}" ]] || {
+            echo "Error: lateral_direct must start with zero residuals from protected model_9996." >&2
+            exit 1
+        }
+        LOAD_ACTOR_AMP_ONLY=True
+        LOAD_POLICY_ONLY=False
+        COMMAND_BRIDGE_ENABLE=False
+        COMMAND_BRIDGE_SCALE=0.0
+        COMMAND_BRIDGE_RESIDUAL_LR=0.0
+        FREEZE_LATERAL_RESIDUAL=False
+        FREEZE_PURE_YAW_RESIDUAL=True
+        FOOT_BARRIER_DESCRIPTION="direct model_9996 lateral: soft 0.100 m; hard 0.045 m; weight -100"
+        MAX_ITERATIONS=${MAX_ITERATIONS:-40}
+        ;;
     lateral_specialist)
         TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996LateralSpecialist-v0"
         : "${SOURCE_CHECKPOINT:?lateral_specialist requires a moving residual policy}"
@@ -154,9 +173,9 @@ verify_on_exit() {
 trap verify_on_exit EXIT
 
 verify_all
-if [[ "${STAGE}" == "bootstrap" ]]; then
+if [[ "${STAGE}" == "bootstrap" || "${STAGE}" == "lateral_direct" ]]; then
     [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_MODEL9996}" ]] || \
-        die "bootstrap source must be the protected model_9996"
+        die "${STAGE} source must be the protected model_9996"
 fi
 [[ "${NUM_ENVS}" =~ ^[1-9][0-9]*$ ]] || die "NUM_ENVS must be positive"
 [[ "${MAX_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || die "MAX_ITERATIONS must be positive"
