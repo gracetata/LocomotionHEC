@@ -159,6 +159,28 @@ def test_response_shortfall_penalizes_stillness_and_reverse_motion():
     assert penalty[2] <= 1.0
 
 
+def test_dense_root_pose_progress_is_directional_and_sway_neutral():
+    command = torch.tensor(
+        [[0.0, 0.25, 0.0], [0.0, 0.25, 0.0], [0.0, 0.0, 0.35], [0.0, 0.0, 0.35]]
+    )
+    zeros = torch.zeros(4)
+    progress = REWARD_MATH.two_goal_dense_root_pose_progress(
+        command,
+        zeros,
+        torch.tensor([0.005, -0.005, 0.0, 0.0]),
+        torch.tensor([0.0, 0.0, 0.007, -0.007]),
+        step_dt=0.02,
+    )
+    torch.testing.assert_close(progress, torch.tensor([1.0, -1.0, 1.0, -1.0]))
+    torch.testing.assert_close(progress[[0, 1]].sum(), torch.tensor(0.0))
+    torch.testing.assert_close(progress[[2, 3]].sum(), torch.tensor(0.0))
+
+    still = REWARD_MATH.two_goal_dense_root_pose_progress(
+        command, zeros, zeros, zeros, step_dt=0.02
+    )
+    torch.testing.assert_close(still, zeros)
+
+
 def test_touchdown_progress_uses_saved_heading_and_wraps_yaw():
     previous_xy = torch.tensor([[1.0, 2.0], [0.0, 0.0]])
     current_xy = torch.tensor([[0.9, 2.2], [0.0, 0.0]])
@@ -192,6 +214,7 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     for required in (
         "lateral_command_progress",
         "pure_yaw_command_progress",
+        "dense_root_pose_command_progress",
         "safe_alternating_touchdown_progress",
         "safe_step_initiation",
         "two_goal_response_shortfall",
@@ -201,14 +224,16 @@ def test_task_is_isolated_and_optimization_allows_specialization():
         assert required in block
     assert "load_actor_amp_only = True" in agent
     assert "freeze_actor_hidden_layers = 1" in agent
-    assert "actor_warmup_iterations = 10" in agent
+    assert "actor_warmup_iterations = 12" in agent
     assert "freeze_discriminator = True" in agent
-    assert "learning_rate = 1.5e-5" in agent
-    assert "num_learning_epochs = 3" in agent
+    assert "learning_rate = 7.5e-6" in agent
+    assert "clip_param = 0.12" in agent
+    assert "num_learning_epochs = 2" in agent
     assert "specialization_scale = 0.005" in agent
     assert "hard_limit = 0.15" in agent
     assert 'weight=-4.0' in block
     assert 'weight=-2.0' in block
+    assert '"max_penalty": 1.0' in block
     assert "RSI_ENABLE=False" in script
     assert "RANDOMIZATION_STRENGTH=0" in script
     assert "model_10990" not in script

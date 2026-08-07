@@ -35,10 +35,10 @@ from .reward_math import (
     convex_footprint_signed_clearance_xy,
     nonzero_single_stance_command_scale,
     relative_command_response_shortfall_l1,
-    signed_command_progress_ratio,
     swept_convex_footprint_signed_clearance_xy,
     touchdown_pose_progress,
     two_goal_command_masks,
+    two_goal_dense_root_pose_progress,
     two_goal_response_shortfall_l2,
     update_footstep_cadence_state,
 )
@@ -1596,6 +1596,90 @@ class pure_yaw_command_progress(_safe_alternating_touchdown_pose_progress):
         )
 
 
+class dense_root_pose_command_progress(ManagerTermBase):
+    """Reward command-directed root-pose progress on every control step.
+
+    This is a dense learning signal for policies that do not yet produce a
+    touchdown. It uses finite differences of the root pose rather than torso
+    velocity, so a lateral sway or yaw oscillation earns positive credit on one
+    half-cycle and an equal negative credit on the other. Safe alternating
+    touchdown terms remain the authoritative sparse completion signal.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self._previous_root_xy_w = torch.zeros(env.num_envs, 2, device=env.device)
+        self._previous_heading_w = torch.zeros(env.num_envs, device=env.device)
+        self._last_mode = torch.zeros(env.num_envs, dtype=torch.int8, device=env.device)
+        self._initialized = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._previous_root_xy_w[env_ids] = 0.0
+        self._previous_heading_w[env_ids] = 0.0
+        self._last_mode[env_ids] = 0
+        self._initialized[env_ids] = False
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        min_lateral_command: float = 0.10,
+        min_yaw_command: float = 0.10,
+        forward_leak_scale: float = 0.20,
+        yaw_leak_scale: float = 0.30,
+        planar_drift_scale: float = 0.15,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        if min_lateral_command <= 0.0 or min_yaw_command <= 0.0:
+            raise ValueError("Dense root-pose progress command thresholds must be positive.")
+        if forward_leak_scale <= 0.0 or yaw_leak_scale <= 0.0 or planar_drift_scale <= 0.0:
+            raise ValueError("Dense root-pose progress quality scales must be positive.")
+
+        asset: RigidObject = env.scene[asset_cfg.name]
+        command = env.command_manager.get_command(command_name)
+        lateral, pure_yaw = two_goal_command_masks(
+            command,
+            lateral_min_command=min_lateral_command,
+            pure_yaw_min_command=min_yaw_command,
+        )
+        mode = lateral.to(torch.int8) + 2 * pure_yaw.to(torch.int8)
+        mode_changed = mode != self._last_mode
+        active = mode > 0
+        valid = self._initialized & ~mode_changed & active
+
+        root_xy_w = asset.data.root_pos_w[:, :2]
+        heading_w = asset.data.heading_w
+        forward_delta, lateral_delta, yaw_delta = touchdown_pose_progress(
+            self._previous_root_xy_w,
+            self._previous_heading_w,
+            root_xy_w,
+            heading_w,
+        )
+        step_dt = float(env.step_dt)
+        if step_dt <= 0.0:
+            raise ValueError("Environment step_dt must be positive.")
+        progress = two_goal_dense_root_pose_progress(
+            command,
+            forward_delta,
+            lateral_delta,
+            yaw_delta,
+            step_dt=step_dt,
+            lateral_min_command=min_lateral_command,
+            pure_yaw_min_command=min_yaw_command,
+            forward_leak_scale=forward_leak_scale,
+            yaw_leak_scale=yaw_leak_scale,
+            planar_drift_scale=planar_drift_scale,
+        )
+
+        self._previous_root_xy_w.copy_(root_xy_w)
+        self._previous_heading_w.copy_(heading_w)
+        self._last_mode.copy_(mode)
+        self._initialized.fill_(True)
+        return progress * valid.float() * _upright_scale(env)
+
+
 def two_goal_response_shortfall(
     env: ManagerBasedRLEnv,
     command_name: str,
@@ -1624,16 +1708,17 @@ def pure_yaw_planar_drift_l2(
     command_name: str,
     min_yaw_command: float = 0.10,
     velocity_scale: float = 0.08,
+    max_penalty: float = 1.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Penalize translational drift only during an in-place turn command."""
-    if velocity_scale <= 0.0:
-        raise ValueError("velocity_scale must be positive.")
+    if velocity_scale <= 0.0 or max_penalty <= 0.0:
+        raise ValueError("velocity_scale and max_penalty must be positive.")
     asset: RigidObject = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
     _, pure_yaw = two_goal_command_masks(command, pure_yaw_min_command=min_yaw_command)
     drift = torch.sum(torch.square(asset.data.root_lin_vel_b[:, :2]), dim=1)
-    return drift / float(velocity_scale) ** 2 * pure_yaw.float()
+    return torch.clamp(drift / float(velocity_scale) ** 2, max=float(max_penalty)) * pure_yaw.float()
 
 
 def lateral_command_leak_l2(
@@ -1642,17 +1727,18 @@ def lateral_command_leak_l2(
     min_lateral_command: float = 0.10,
     forward_velocity_scale: float = 0.10,
     yaw_rate_scale: float = 0.15,
+    max_penalty: float = 1.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Penalize forward and yaw leakage during a pure lateral command."""
-    if forward_velocity_scale <= 0.0 or yaw_rate_scale <= 0.0:
-        raise ValueError("Lateral leakage scales must be positive.")
+    if forward_velocity_scale <= 0.0 or yaw_rate_scale <= 0.0 or max_penalty <= 0.0:
+        raise ValueError("Lateral leakage scales and max_penalty must be positive.")
     asset: RigidObject = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
     lateral, _ = two_goal_command_masks(command, lateral_min_command=min_lateral_command)
     leakage = torch.square(asset.data.root_lin_vel_b[:, 0]) / float(forward_velocity_scale) ** 2
     leakage += torch.square(asset.data.root_ang_vel_b[:, 2]) / float(yaw_rate_scale) ** 2
-    return leakage * lateral.float()
+    return torch.clamp(leakage, max=float(max_penalty)) * lateral.float()
 
 
 class safe_alternating_touchdown_progress(_safe_alternating_touchdown_pose_progress):

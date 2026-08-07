@@ -1882,6 +1882,18 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
                 "min_clearance": 0.025,
             },
         )
+        self.rewards.dense_root_pose_command_progress = RewTerm(
+            func=mdp.dense_root_pose_command_progress,
+            weight=3.0,
+            params={
+                "command_name": "base_velocity",
+                "min_lateral_command": 0.10,
+                "min_yaw_command": 0.10,
+                "forward_leak_scale": 0.20,
+                "yaw_leak_scale": 0.30,
+                "planar_drift_scale": 0.15,
+            },
+        )
         self.rewards.safe_alternating_touchdown_progress = RewTerm(
             func=mdp.safe_alternating_touchdown_progress,
             weight=2.5,
@@ -1902,7 +1914,7 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
         )
         self.rewards.safe_step_initiation = RewTerm(
             func=mdp.safe_step_initiation,
-            weight=0.30,
+            weight=0.60,
             params={
                 "command_name": "base_velocity",
                 "sensor_cfg": foot_sensor_cfg,
@@ -1929,6 +1941,7 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
                 "command_name": "base_velocity",
                 "min_yaw_command": 0.10,
                 "velocity_scale": 0.08,
+                "max_penalty": 1.0,
             },
         )
         self.rewards.lateral_command_leak_l2 = RewTerm(
@@ -1939,6 +1952,7 @@ class G1AmpNav2TwoGoalFinetuneEnvCfg(G1AmpNav2BehaviorFinetuneEnvCfg):
                 "min_lateral_command": 0.10,
                 "forward_velocity_scale": 0.10,
                 "yaw_rate_scale": 0.15,
+                "max_penalty": 1.0,
             },
         )
         self.rewards.swept_oriented_footprint_soft_margin_l2 = RewTerm(

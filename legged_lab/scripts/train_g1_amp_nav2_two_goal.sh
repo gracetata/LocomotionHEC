@@ -118,8 +118,8 @@ if [[ "${STAGE}" == "1" ]]; then
 else
     echo "Load contract     : full-state continuation from accepted stage 1"
 fi
-echo "Optimization      : lr=1.5e-5, PPO epochs=3, clip=0.15, actor first layer frozen"
-echo "Actor schedule    : stage 1 critic-only iterations 0-9, then actor enabled"
+echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, actor first layer frozen"
+echo "Actor schedule    : stage 1 critic-only iterations 0-11, then actor enabled"
 echo "Baseline KL       : specialization=0.005, retention=${BASELINE_KL_SCALE}, hard=0.15"
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "Run               : ${RUN_NAME}"

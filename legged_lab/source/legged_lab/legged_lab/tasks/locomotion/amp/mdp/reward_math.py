@@ -217,6 +217,63 @@ def signed_command_progress_ratio(
     return torch.clamp(ratio, min=float(minimum_ratio), max=float(maximum_ratio)) * active.float()
 
 
+def two_goal_dense_root_pose_progress(
+    command: torch.Tensor,
+    forward_delta: torch.Tensor,
+    lateral_delta: torch.Tensor,
+    yaw_delta: torch.Tensor,
+    *,
+    step_dt: float,
+    lateral_min_command: float = 0.10,
+    pure_yaw_min_command: float = 0.10,
+    forward_leak_scale: float = 0.20,
+    yaw_leak_scale: float = 0.30,
+    planar_drift_scale: float = 0.15,
+) -> torch.Tensor:
+    """Score finite-difference root-pose progress for the two target modes."""
+    expected_shape = command[:, 0].shape
+    if any(value.shape != expected_shape for value in (forward_delta, lateral_delta, yaw_delta)):
+        raise ValueError("Root-pose deltas must have shape [num_envs].")
+    if step_dt <= 0.0:
+        raise ValueError("step_dt must be positive.")
+    if forward_leak_scale <= 0.0 or yaw_leak_scale <= 0.0 or planar_drift_scale <= 0.0:
+        raise ValueError("Dense root-pose progress quality scales must be positive.")
+
+    lateral, pure_yaw = two_goal_command_masks(
+        command,
+        lateral_min_command=lateral_min_command,
+        pure_yaw_min_command=pure_yaw_min_command,
+    )
+    forward_rate = forward_delta / float(step_dt)
+    lateral_rate = lateral_delta / float(step_dt)
+    yaw_rate = yaw_delta / float(step_dt)
+    lateral_ratio = signed_command_progress_ratio(
+        command[:, 1],
+        lateral_rate,
+        min_command=lateral_min_command,
+        minimum_ratio=-1.25,
+        maximum_ratio=1.25,
+    )
+    yaw_ratio = signed_command_progress_ratio(
+        command[:, 2],
+        yaw_rate,
+        min_command=pure_yaw_min_command,
+        minimum_ratio=-1.25,
+        maximum_ratio=1.25,
+    )
+    planar_rate = torch.sqrt(torch.square(forward_rate) + torch.square(lateral_rate))
+    lateral_quality = torch.exp(
+        -torch.square(forward_rate / float(forward_leak_scale))
+        -torch.square(yaw_rate / float(yaw_leak_scale))
+    )
+    yaw_quality = torch.exp(-torch.square(planar_rate / float(planar_drift_scale)))
+    progress = torch.where(lateral, lateral_ratio, yaw_ratio)
+    quality = torch.where(lateral, lateral_quality, yaw_quality)
+    # Do not allow leakage to suppress punishment for wrong-direction motion.
+    progress = torch.where(progress > 0.0, progress * quality, progress)
+    return progress * (lateral | pure_yaw).float()
+
+
 def two_goal_response_shortfall_l2(
     command: torch.Tensor,
     actual_lin_vel_xy_b: torch.Tensor,

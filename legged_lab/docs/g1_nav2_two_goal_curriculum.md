@@ -13,18 +13,23 @@ and zero-linear-velocity in-place yaw. The 96/297/29 policy interface and the
   families and `0.08` on retention samples. Only retention KL is subject to the
   `0.15` hard limit.
 - The first actor hidden layer and AMP discriminator/normalizer stay frozen.
-  Iterations 0-9 update only the fresh critic; remaining actor layers and action
-  noise become trainable at iteration 10.
+  Iterations 0-11 update only the fresh critic; remaining actor layers and action
+  noise become trainable at iteration 12. Actor updates use `7.5e-6`, two PPO
+  epochs, and clip `0.12` so the retention KL guard is approached gradually.
 - Checkpoints are saved every 10 iterations. A stage is limited to 60 iterations
   and must be evaluated before continuation.
 
 ## Reward contract
 
-The main lateral and yaw rewards are calculated from actual root displacement
-and wrapped root-heading change between safe alternating touchdowns. Instantaneous
-torso sway cannot earn touchdown progress. Progress is quality-gated by undesired
-forward/yaw leakage or planar drift. Standing still receives a bounded response
-shortfall penalty.
+The authoritative lateral and yaw rewards are calculated from actual root
+displacement and wrapped root-heading change between safe alternating
+touchdowns. A second dense term uses finite differences of the same root pose to
+provide a signal before the first touchdown: static behavior gets zero and a
+periodic sway receives positive then negative progress, so it cannot substitute
+for net displacement or heading change. Productive progress is quality-gated by
+undesired forward/yaw leakage or planar drift. Standing still receives a bounded
+response-shortfall penalty, and the stage-1 leak/drift penalties are themselves
+bounded so exploratory motion cannot be dominated by an unbounded quadratic.
 
 The swept oriented sole geometry uses a 40 mm soft margin and a separate 25 mm
 hard barrier. Productive touchdown rewards require clearance of at least 25 mm;

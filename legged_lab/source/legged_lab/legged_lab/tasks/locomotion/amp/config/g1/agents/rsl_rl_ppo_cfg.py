@@ -130,7 +130,7 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
     reset_iteration_on_policy_only_load = True
     reset_amp_on_load = False
     freeze_actor_hidden_layers = 1
-    actor_warmup_iterations = 10
+    actor_warmup_iterations = 12
     save_interval = 10
 
     def __post_init__(self):
@@ -138,11 +138,11 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         if parent_post_init is not None:
             parent_post_init()
         self.policy.init_noise_std = 0.35
-        self.algorithm.learning_rate = 1.5e-5
+        self.algorithm.learning_rate = 7.5e-6
         self.algorithm.schedule = "fixed"
         self.algorithm.desired_kl = 0.01
-        self.algorithm.clip_param = 0.15
-        self.algorithm.num_learning_epochs = 3
+        self.algorithm.clip_param = 0.12
+        self.algorithm.num_learning_epochs = 2
         self.algorithm.num_mini_batches = 4
         self.algorithm.entropy_coef = 8.0e-4
         self.algorithm.max_grad_norm = 0.5
