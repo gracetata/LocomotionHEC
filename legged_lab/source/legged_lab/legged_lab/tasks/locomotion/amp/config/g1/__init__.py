@@ -338,6 +338,36 @@ gym.register(
 )
 
 gym.register(
+    id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalCarrierFinetune-v0",
+    entry_point="legged_lab.envs:ManagerBasedAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_amp_env_cfg:G1AmpNav2TwoGoalCarrierFinetuneEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalBridgeFinetune-v0",
+    entry_point="legged_lab.envs:ManagerBasedAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_amp_env_cfg:G1AmpNav2TwoGoalBridgeFinetuneEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
     id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalFinetune-Play-v0",
     entry_point="legged_lab.envs:ManagerBasedAmpEnv",
     disable_env_checker=True,

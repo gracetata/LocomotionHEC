@@ -27,6 +27,8 @@ MODE_CONFIG = (
     / "nav2_behavior_50hz"
     / "task_sampling_two_goal_config.json"
 )
+CARRIER_MODE_CONFIG = MODE_CONFIG.with_name("task_sampling_two_goal_carrier_config.json")
+BRIDGE_MODE_CONFIG = MODE_CONFIG.with_name("task_sampling_two_goal_bridge_config.json")
 SOURCE = (
     LEGGED_LAB_ROOT
     / "logs"
@@ -92,6 +94,18 @@ def test_distribution_contains_only_balanced_lateral_and_pure_yaw_modes():
             assert mode["lin_vel_x"] == [0.0, 0.0]
             assert mode["lin_vel_y"] == [0.0, 0.0]
             assert min(abs(value) for value in mode["ang_vel_z"]) >= 0.35
+
+
+def test_gait_carrier_curriculum_monotonically_approaches_zero():
+    carrier = json.loads(CARRIER_MODE_CONFIG.read_text())["modes"]
+    bridge = json.loads(BRIDGE_MODE_CONFIG.read_text())["modes"]
+    strict = json.loads(MODE_CONFIG.read_text())["modes"]
+    for name in carrier:
+        carrier_vx = carrier[name]["lin_vel_x"]
+        bridge_vx = bridge[name]["lin_vel_x"]
+        strict_vx = strict[name]["lin_vel_x"]
+        assert 0.0 < min(carrier_vx) and max(bridge_vx) <= min(carrier_vx)
+        assert 0.0 < min(bridge_vx) and strict_vx == [0.0, 0.0]
 
 
 def test_two_goal_masks_and_progress_have_no_stationary_credit():
@@ -202,6 +216,8 @@ def test_task_is_isolated_and_optimization_allows_specialization():
     block = env_text[env_text.index("class G1AmpNav2TwoGoalFinetuneEnvCfg") :]
 
     assert 'id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalFinetune-v0"' in registry
+    assert 'id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalCarrierFinetune-v0"' in registry
+    assert 'id="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalBridgeFinetune-v0"' in registry
     assert 'entry_point="legged_lab.envs:ManagerBasedAmpEnv"' in registry
     assert "mode_probability = 0.80" in block
     for disabled in (

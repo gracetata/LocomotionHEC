@@ -22,9 +22,9 @@ def two_goal_specialization_mask_from_policy_obs(
     command_obs_start_index: int = 6,
     lateral_min_command: float = 0.10,
     pure_yaw_min_command: float = 0.10,
-    max_forward_command: float = 0.02,
+    max_forward_command: float = 0.25,
     max_lateral_yaw_command: float = 0.05,
-    max_pure_yaw_translation_command: float = 0.02,
+    max_pure_yaw_translation_command: float = 0.25,
 ) -> torch.Tensor:
     """Classify pure-lateral and pure-yaw samples without changing policy I/O."""
     if policy_obs.ndim != 2:

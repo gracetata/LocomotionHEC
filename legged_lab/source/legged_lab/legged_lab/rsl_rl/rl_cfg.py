@@ -117,9 +117,9 @@ class RslRlPpoAmpAlgorithmCfg:
 
         lateral_min_command: float = 0.10
         pure_yaw_min_command: float = 0.10
-        max_forward_command: float = 0.02
+        max_forward_command: float = 0.25
         max_lateral_yaw_command: float = 0.05
-        max_pure_yaw_translation_command: float = 0.02
+        max_pure_yaw_translation_command: float = 0.25
         """Thresholds used to identify the two specialization command families."""
 
     baseline_kl_cfg: BaselineKLCfg = BaselineKLCfg()

@@ -44,6 +44,31 @@ overlap receives the strongest penalty.
 
 ## Curriculum
 
+The protected policy has a measured gait-onset threshold: lateral response is
+about 0.16 m/s at `[0.20, 0.25, 0]` but only 0.05 m/s at `[0.10, 0.25, 0]`;
+yaw response is about 0.40 rad/s at `[0.15, 0, 0.35]` but 0.11 rad/s at
+`[0.10, 0, 0.35]`. Training therefore transfers the existing forward gait
+cycle instead of attempting to discover a new cycle from double support.
+
+Carrier stage uses `vx=0.15-0.20` for lateral and `vx=0.10-0.15` for yaw:
+
+```bash
+STAGE=carrier MAX_ITERATIONS=20 RUN_NAME=nav2_two_goal_carrier \
+  bash legged_lab/scripts/train_g1_amp_nav2_two_goal.sh
+```
+
+Bridge stage lowers those ranges to `0.05-0.10` and `0.03-0.08`. It must load
+the accepted carrier checkpoint with its exact size and hash; this selects a
+full-state continuation automatically:
+
+```bash
+STAGE=bridge SOURCE_CHECKPOINT=/absolute/path/model_19.pt \
+SOURCE_SIZE=$(stat -c '%s' /absolute/path/model_19.pt) \
+SOURCE_SHA256=$(sha256sum /absolute/path/model_19.pt | awk '{print $1}') \
+MAX_ITERATIONS=20 RUN_NAME=nav2_two_goal_bridge \
+  bash legged_lab/scripts/train_g1_amp_nav2_two_goal.sh
+```
+
 Stage 1 uses `|vy|=0.25-0.45 m/s` and `|wz|=0.35-0.60 rad/s`, with reduced
 leak/drift/cadence penalties so the policy can initiate motion:
 

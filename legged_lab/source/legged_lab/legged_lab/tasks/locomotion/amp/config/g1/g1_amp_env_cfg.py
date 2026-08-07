@@ -160,6 +160,24 @@ G1_NAV2_TWO_GOAL_MODE_CONFIG_PATH = os.path.join(
     "nav2_behavior_50hz",
     "task_sampling_two_goal_config.json",
 )
+G1_NAV2_TWO_GOAL_CARRIER_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_two_goal_carrier_config.json",
+)
+G1_NAV2_TWO_GOAL_BRIDGE_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "nav2_behavior_50hz",
+    "task_sampling_two_goal_bridge_config.json",
+)
 G1_NAV2_TWO_GOAL_STAGE2_MODE_CONFIG_PATH = os.path.join(
     LEGGED_LAB_ROOT_DIR,
     "data",
@@ -2024,6 +2042,42 @@ class G1AmpNav2TwoGoalStage2FinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
         self.rewards.lateral_command_leak_l2.weight = -0.25
         self.rewards.pure_yaw_planar_drift_l2.weight = -0.35
         self.rewards.command_conditioned_footstep_cadence_l1.weight = -0.50
+
+
+@configclass
+class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
+    """Bootstrap the two target skills from the existing forward gait cycle."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = G1_NAV2_TWO_GOAL_CARRIER_MODE_CONFIG_PATH
+        self.commands.base_velocity.mode_command_clip_min = (0.10, -0.45, -0.60)
+        self.commands.base_velocity.mode_command_clip_max = (0.20, 0.45, 0.60)
+        self.rewards.lateral_command_progress.params["forward_leak_scale"] = 0.30
+        self.rewards.pure_yaw_command_progress.params["planar_drift_scale"] = 0.25
+        self.rewards.dense_root_pose_command_progress.params.update(
+            {"forward_leak_scale": 0.30, "yaw_leak_scale": 0.40, "planar_drift_scale": 0.25}
+        )
+        self.rewards.lateral_command_leak_l2.weight = 0.0
+        self.rewards.pure_yaw_planar_drift_l2.weight = 0.0
+
+
+@configclass
+class G1AmpNav2TwoGoalBridgeFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
+    """Reduce the learned gait carrier before enforcing strict zero translation."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = G1_NAV2_TWO_GOAL_BRIDGE_MODE_CONFIG_PATH
+        self.commands.base_velocity.mode_command_clip_min = (0.03, -0.45, -0.60)
+        self.commands.base_velocity.mode_command_clip_max = (0.10, 0.45, 0.60)
+        self.rewards.lateral_command_progress.params["forward_leak_scale"] = 0.15
+        self.rewards.pure_yaw_command_progress.params["planar_drift_scale"] = 0.12
+        self.rewards.dense_root_pose_command_progress.params.update(
+            {"forward_leak_scale": 0.20, "yaw_leak_scale": 0.35, "planar_drift_scale": 0.12}
+        )
+        self.rewards.lateral_command_leak_l2.weight = -0.02
+        self.rewards.pure_yaw_planar_drift_l2.weight = -0.02
 
 
 @configclass

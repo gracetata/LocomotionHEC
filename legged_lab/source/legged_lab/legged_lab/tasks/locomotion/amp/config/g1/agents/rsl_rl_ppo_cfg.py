@@ -150,6 +150,8 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.baseline_kl_cfg.command_conditioned = True
         self.algorithm.baseline_kl_cfg.command_obs_start_index = 6
         self.algorithm.baseline_kl_cfg.specialization_scale = 0.005
+        self.algorithm.baseline_kl_cfg.max_forward_command = 0.25
+        self.algorithm.baseline_kl_cfg.max_pure_yaw_translation_command = 0.25
         self.algorithm.baseline_kl_cfg.target = 0.0
         self.algorithm.baseline_kl_cfg.min_scale = 0.08
         self.algorithm.baseline_kl_cfg.max_scale = 0.08

@@ -17,6 +17,13 @@ def test_command_conditioned_mask_separates_specialization_and_retention():
     mask = two_goal_specialization_mask_from_policy_obs(policy_obs)
     torch.testing.assert_close(mask, torch.tensor([True, True, True, False, False]))
 
+    carrier_obs = torch.zeros(2, 96)
+    carrier_obs[0, 6:9] = torch.tensor([0.20, 0.30, 0.0])
+    carrier_obs[1, 6:9] = torch.tensor([0.15, 0.0, 0.40])
+    torch.testing.assert_close(
+        two_goal_specialization_mask_from_policy_obs(carrier_obs), torch.tensor([True, True])
+    )
+
 
 def test_command_conditioned_kl_weights_are_exact():
     raw_kl = torch.tensor([0.10, 0.20, 0.30, 0.40])

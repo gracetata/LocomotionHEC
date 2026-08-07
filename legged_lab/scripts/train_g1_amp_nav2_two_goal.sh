@@ -8,12 +8,16 @@ LEGGED_LAB_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 PROJECT_ROOT=$(cd "${LEGGED_LAB_DIR}/.." && pwd)
 
 STAGE=${STAGE:-1}
-if [[ "${STAGE}" == "1" ]]; then
+if [[ "${STAGE}" == "carrier" ]]; then
+    TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalCarrierFinetune-v0"
+elif [[ "${STAGE}" == "bridge" ]]; then
+    TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalBridgeFinetune-v0"
+elif [[ "${STAGE}" == "1" ]]; then
     TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalFinetune-v0"
 elif [[ "${STAGE}" == "2" ]]; then
     TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalStage2Finetune-v0"
 else
-    echo "Error: STAGE must be 1 or 2." >&2
+    echo "Error: STAGE must be carrier, bridge, 1, or 2." >&2
     exit 1
 fi
 EXPERIMENT_NAME="g1_amp_nav2_two_goal"
@@ -23,7 +27,7 @@ PROTECTED_BASELINE_SHA256="6862627cdfe5cc95a1c0916c17bbde50d320c0a551da0ab8312bf
 SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-"${PROTECTED_BASELINE}"}
 SOURCE_SIZE=${SOURCE_SIZE:-${PROTECTED_BASELINE_SIZE}}
 SOURCE_SHA256=${SOURCE_SHA256:-"${PROTECTED_BASELINE_SHA256}"}
-STAGING_RUN="_source_two_goal_stage${STAGE}"
+STAGING_RUN="_source_two_goal_${STAGE}"
 STAGING_DIR="${LEGGED_LAB_DIR}/logs/rsl_rl/${EXPERIMENT_NAME}/${STAGING_RUN}"
 OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalFinetune"
 
@@ -44,15 +48,15 @@ die() {
 
 verify_source() {
     [[ -f "${SOURCE_CHECKPOINT}" ]] || {
-        echo "Error: protected model_12995 is missing: ${SOURCE_CHECKPOINT}" >&2
+        echo "Error: source checkpoint is missing: ${SOURCE_CHECKPOINT}" >&2
         return 1
     }
     [[ "$(stat -c '%s' "${SOURCE_CHECKPOINT}")" == "${SOURCE_SIZE}" ]] || {
-        echo "Error: protected model_12995 size changed." >&2
+        echo "Error: source checkpoint size does not match SOURCE_SIZE." >&2
         return 1
     }
     [[ "$(sha256sum "${SOURCE_CHECKPOINT}" | awk '{print $1}')" == "${SOURCE_SHA256}" ]] || {
-        echo "Error: protected model_12995 SHA-256 changed." >&2
+        echo "Error: source checkpoint SHA-256 does not match SOURCE_SHA256." >&2
         return 1
     }
 }
@@ -83,9 +87,6 @@ trap verify_on_exit EXIT
 
 verify_source
 verify_baseline
-if [[ "${STAGE}" == "2" && "${SOURCE_CHECKPOINT}" == "${PROTECTED_BASELINE}" ]]; then
-    die "STAGE=2 requires SOURCE_CHECKPOINT, SOURCE_SIZE, and SOURCE_SHA256 from an accepted stage-1 checkpoint"
-fi
 [[ "${NUM_ENVS}" =~ ^[1-9][0-9]*$ ]] || die "NUM_ENVS must be positive"
 [[ "${MAX_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || die "MAX_ITERATIONS must be positive"
 [[ "${RUN_NAME}" != */* ]] || die "RUN_NAME must not contain a path separator"
@@ -113,20 +114,20 @@ echo "Source checkpoint : ${SOURCE_CHECKPOINT}"
 echo "Source SHA-256    : ${SOURCE_SHA256}"
 echo "Goals             : safe pure lateral + zero-linear pure yaw"
 echo "Distribution      : 80% balanced goals + 20% recorded Nav2 anchor"
-if [[ "${STAGE}" == "1" ]]; then
+if [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_BASELINE}" ]]; then
     echo "Load contract     : actor + frozen AMP; fresh critic/optimizers"
 else
-    echo "Load contract     : full-state continuation from accepted stage 1"
+    echo "Load contract     : full-state continuation from accepted prior curriculum stage"
 fi
 echo "Optimization      : lr=7.5e-6, PPO epochs=2, clip=0.12, actor first layer frozen"
-echo "Actor schedule    : stage 1 critic-only iterations 0-11, then actor enabled"
+echo "Actor schedule    : fresh-load iterations 0-11 critic-only, then actor enabled"
 echo "Baseline KL       : specialization=0.005, retention=${BASELINE_KL_SCALE}, hard=0.15"
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "Run               : ${RUN_NAME}"
 echo "Output            : ${OUTPUT_DIR}"
 echo "=================================================="
 
-if [[ "${STAGE}" == "1" ]]; then
+if [[ "${SOURCE_CHECKPOINT}" == "${PROTECTED_BASELINE}" ]]; then
     LOAD_ACTOR_AMP_ONLY=True
 else
     LOAD_ACTOR_AMP_ONLY=False

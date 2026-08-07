@@ -170,10 +170,10 @@ def two_goal_command_masks(
     command: torch.Tensor,
     *,
     lateral_min_command: float = 0.10,
-    lateral_max_forward_command: float = 0.02,
+    lateral_max_forward_command: float = 0.25,
     lateral_max_yaw_command: float = 0.05,
     pure_yaw_min_command: float = 0.10,
-    pure_yaw_max_translation_command: float = 0.02,
+    pure_yaw_max_translation_command: float = 0.25,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Classify the two explicit refinement modes without a privileged mode id."""
     if command.ndim != 2 or command.shape[1] != 3:
