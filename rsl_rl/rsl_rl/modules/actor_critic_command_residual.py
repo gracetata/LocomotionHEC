@@ -44,6 +44,8 @@ class ActorCriticCommandResidual(ActorCritic):
         fixed_command_bridge_fraction: float = 0.0,
         lateral_teacher_forward_command: float = 0.20,
         pure_yaw_teacher_forward_command: float = 0.15,
+        pure_yaw_positive_teacher_yaw_scale: float = 1.0,
+        pure_yaw_negative_teacher_yaw_scale: float = 1.0,
         activation: str = "elu",
         state_dependent_std: bool = False,
         **kwargs: dict[str, Any],
@@ -74,6 +76,10 @@ class ActorCriticCommandResidual(ActorCritic):
             raise ValueError("lateral teacher command must exceed the strict forward band.")
         if float(pure_yaw_teacher_forward_command) <= self.max_pure_yaw_translation_command:
             raise ValueError("pure-yaw teacher command must exceed the strict translation band.")
+        if float(pure_yaw_positive_teacher_yaw_scale) <= 0.0:
+            raise ValueError("positive pure-yaw teacher scale must be positive.")
+        if float(pure_yaw_negative_teacher_yaw_scale) <= 0.0:
+            raise ValueError("negative pure-yaw teacher scale must be positive.")
         # Buffers make the deployed analytical bridge self-describing in a
         # checkpoint without adding trainable parameters.
         self.register_buffer(
@@ -87,6 +93,14 @@ class ActorCriticCommandResidual(ActorCritic):
         self.register_buffer(
             "pure_yaw_teacher_forward_command",
             torch.tensor(float(pure_yaw_teacher_forward_command)),
+        )
+        self.register_buffer(
+            "pure_yaw_positive_teacher_yaw_scale",
+            torch.tensor(float(pure_yaw_positive_teacher_yaw_scale)),
+        )
+        self.register_buffer(
+            "pure_yaw_negative_teacher_yaw_scale",
+            torch.tensor(float(pure_yaw_negative_teacher_yaw_scale)),
         )
 
         def make_residual() -> nn.Sequential:
@@ -138,6 +152,17 @@ class ActorCriticCommandResidual(ActorCritic):
             command_x,
         )
         teacher_obs[..., self.command_obs_start_index] = command_x
+        command_yaw = teacher_obs[..., self.command_obs_start_index + 2]
+        yaw_scale = torch.where(
+            command_yaw >= 0.0,
+            self.pure_yaw_positive_teacher_yaw_scale.to(command_yaw.dtype),
+            self.pure_yaw_negative_teacher_yaw_scale.to(command_yaw.dtype),
+        )
+        teacher_obs[..., self.command_obs_start_index + 2] = torch.where(
+            pure_yaw,
+            command_yaw * yaw_scale,
+            command_yaw,
+        )
         teacher_mean = self.actor(self.actor_obs_normalizer(teacher_obs))
         bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(mean.dtype)
         mean = mean + bridge_mask * self.fixed_command_bridge_fraction.to(mean.dtype) * (

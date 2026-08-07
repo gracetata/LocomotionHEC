@@ -144,7 +144,9 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         command_residual_hidden_dim=64,
         fixed_command_bridge_fraction=1.0,
         lateral_teacher_forward_command=0.20,
-        pure_yaw_teacher_forward_command=0.15,
+        pure_yaw_teacher_forward_command=0.10,
+        pure_yaw_positive_teacher_yaw_scale=1.657142857,
+        pure_yaw_negative_teacher_yaw_scale=1.428571429,
     )
     freeze_actor_hidden_layers = 0
     freeze_base_actor = True
@@ -183,7 +185,9 @@ class G1Nav2TwoGoalFinetuneRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.command_bridge_cfg.max_student_forward_command = 0.02
         self.algorithm.command_bridge_cfg.max_student_pure_yaw_translation_command = 0.02
         self.algorithm.command_bridge_cfg.lateral_teacher_forward_command = 0.20
-        self.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command = 0.15
+        self.algorithm.command_bridge_cfg.pure_yaw_teacher_forward_command = 0.10
+        self.algorithm.command_bridge_cfg.pure_yaw_positive_teacher_yaw_scale = 1.657142857
+        self.algorithm.command_bridge_cfg.pure_yaw_negative_teacher_yaw_scale = 1.428571429
         self.algorithm.command_bridge_cfg.teacher_delta_fraction = 0.60
         self.algorithm.amp_cfg.freeze_discriminator = True
         self.algorithm.amp_cfg.command_conditioned_style_reward = True

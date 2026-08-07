@@ -56,6 +56,8 @@ def build_two_goal_carrier_teacher_obs(
     max_student_pure_yaw_translation_command: float = 0.02,
     lateral_teacher_forward_command: float = 0.20,
     pure_yaw_teacher_forward_command: float = 0.15,
+    pure_yaw_positive_teacher_yaw_scale: float = 1.0,
+    pure_yaw_negative_teacher_yaw_scale: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pair strict commands with baseline commands known to start the gait.
 
@@ -72,6 +74,8 @@ def build_two_goal_carrier_teacher_obs(
         raise ValueError("Lateral teacher command must exceed the student dead-zone band.")
     if pure_yaw_teacher_forward_command <= max_student_pure_yaw_translation_command:
         raise ValueError("Pure-yaw teacher command must exceed the student dead-zone band.")
+    if pure_yaw_positive_teacher_yaw_scale <= 0.0 or pure_yaw_negative_teacher_yaw_scale <= 0.0:
+        raise ValueError("Pure-yaw teacher yaw scales must be positive.")
 
     command = policy_obs[:, start : start + 3]
     lateral = (
@@ -87,6 +91,12 @@ def build_two_goal_carrier_teacher_obs(
     teacher_obs = policy_obs.detach().clone()
     teacher_obs[lateral, start] = float(lateral_teacher_forward_command)
     teacher_obs[pure_yaw, start] = float(pure_yaw_teacher_forward_command)
+    yaw_scale = torch.where(
+        teacher_obs[:, start + 2] >= 0.0,
+        float(pure_yaw_positive_teacher_yaw_scale),
+        float(pure_yaw_negative_teacher_yaw_scale),
+    )
+    teacher_obs[pure_yaw, start + 2] *= yaw_scale[pure_yaw]
     return teacher_obs, lateral, pure_yaw
 
 
@@ -378,6 +388,12 @@ class PPOAMP(PPO):
             ),
             pure_yaw_teacher_forward_command=float(
                 self.command_bridge_cfg.get("pure_yaw_teacher_forward_command", 0.15)
+            ),
+            pure_yaw_positive_teacher_yaw_scale=float(
+                self.command_bridge_cfg.get("pure_yaw_positive_teacher_yaw_scale", 1.0)
+            ),
+            pure_yaw_negative_teacher_yaw_scale=float(
+                self.command_bridge_cfg.get("pure_yaw_negative_teacher_yaw_scale", 1.0)
             ),
         )
         bridge_mask = lateral_bridge | pure_yaw_bridge

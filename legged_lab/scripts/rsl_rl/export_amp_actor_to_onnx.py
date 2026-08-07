@@ -273,6 +273,14 @@ class AmpActorExporter(torch.nn.Module):
             "pure_yaw_teacher_forward_command",
             model_state.get("pure_yaw_teacher_forward_command", torch.tensor(0.15)).float(),
         )
+        self.register_buffer(
+            "pure_yaw_positive_teacher_yaw_scale",
+            model_state.get("pure_yaw_positive_teacher_yaw_scale", torch.tensor(1.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_negative_teacher_yaw_scale",
+            model_state.get("pure_yaw_negative_teacher_yaw_scale", torch.tensor(1.0)).float(),
+        )
         if self.has_command_residual:
             self.lateral_command_residual = build_named_mlp(
                 model_state, "lateral_command_residual", activation_name
@@ -313,6 +321,17 @@ class AmpActorExporter(torch.nn.Module):
                 teacher_x,
             )
             teacher_obs[..., 6] = teacher_x
+            teacher_yaw = teacher_obs[..., 8]
+            teacher_yaw_scale = torch.where(
+                teacher_yaw >= 0.0,
+                self.pure_yaw_positive_teacher_yaw_scale.to(teacher_yaw.dtype),
+                self.pure_yaw_negative_teacher_yaw_scale.to(teacher_yaw.dtype),
+            )
+            teacher_obs[..., 8] = torch.where(
+                pure_yaw,
+                teacher_yaw * teacher_yaw_scale,
+                teacher_yaw,
+            )
             teacher_actions = self.actor(self.normalizer(teacher_obs))
             bridge_mask = (lateral | pure_yaw).unsqueeze(-1).to(actions.dtype)
             actions = actions + bridge_mask * self.fixed_command_bridge_fraction.to(actions.dtype) * (
