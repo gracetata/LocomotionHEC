@@ -140,6 +140,11 @@ def test_tasks_are_manager_amp_and_model9996_specific():
             "G1AmpNav2TwoGoalModel9996FullActorLateralFinalEnvCfg",
             "G1Nav2TwoGoalModel9996FullActorLateralFinalRslRlOnPolicyRunnerAmpCfg",
         ),
+        (
+            "LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateralRobust-v0",
+            "G1AmpNav2TwoGoalModel9996FullActorLateralRobustEnvCfg",
+            "G1Nav2TwoGoalModel9996FullActorLateralRobustRslRlOnPolicyRunnerAmpCfg",
+        ),
     ):
         assert f'id="{task}"' in registry
         task_block = registry[registry.index(f'id="{task}"') :]
@@ -325,6 +330,33 @@ def test_full_actor_escape_stage_is_exact_model9996_and_safety_constrained():
     assert "two_goal_response_shortfall.weight = -400.0" in final
     assert "lateral_command_leak_l2.weight = -20.0" in final
     assert "swept_oriented_footprint_hard_barrier.weight = -150.0" in final
+
+    robust_start = env_text.index(
+        "class G1AmpNav2TwoGoalModel9996FullActorLateralRobustEnvCfg"
+    )
+    robust = env_text[
+        robust_start: env_text.index("class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg")
+    ]
+    assert '"hard_clearance": 0.030' in robust
+    assert "swept_oriented_footprint_hard_barrier.weight = -300.0" in robust
+    assert '"overlap_scale": 16.0' in robust
+    assert '"static_friction_range": (0.55, 1.25)' in robust
+    assert '"mass_distribution_params"] = (-1.0, 1.0)' in robust
+    assert '"stiffness_distribution_params": (0.90, 1.10)' in robust
+    assert "self.events.push_robot.interval_range_s = (8.0, 12.0)" in robust
+
+    assert 'STAGE must be spacing, final, or robust' in lateral_script
+    assert "FullActorLateralRobust-v0" in lateral_script
+    assert "RANDOMIZATION_STRENGTH=1" in lateral_script
+    assert 'RANDOMIZATION_STRENGTH="${RANDOMIZATION_STRENGTH}"' in lateral_script
+
+    robust_agent_start = agent.index(
+        "class G1Nav2TwoGoalModel9996FullActorLateralRobustRslRlOnPolicyRunnerAmpCfg"
+    )
+    robust_agent = agent[robust_agent_start:]
+    assert "self.algorithm.learning_rate = 2.5e-6" in robust_agent
+    assert "self.algorithm.clip_param = 0.05" in robust_agent
+    assert "self.algorithm.num_learning_epochs = 2" in robust_agent
 
 
 def test_residual_calibration_preserves_base_and_scales_only_final_layer():

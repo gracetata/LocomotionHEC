@@ -13,12 +13,21 @@ if [[ "${STAGE}" == "spacing" ]]; then
     TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateral-v0"
 elif [[ "${STAGE}" == "final" ]]; then
     TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateralFinal-v0"
+elif [[ "${STAGE}" == "robust" ]]; then
+    TASK="LeggedLab-Isaac-AMP-G1-Nav2TwoGoalModel9996FullActorLateralRobust-v0"
 else
-    echo "Error: STAGE must be spacing or final." >&2
+    echo "Error: STAGE must be spacing, final, or robust." >&2
     exit 1
 fi
-EXPERIMENT_NAME="g1_amp_nav2_two_goal_model9996_full_actor_lateral"
-OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996FullActorLateral"
+if [[ "${STAGE}" == "robust" ]]; then
+    EXPERIMENT_NAME="g1_amp_nav2_two_goal_model9996_full_actor_lateral_robust"
+    OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996FullActorLateralRobust"
+    RANDOMIZATION_STRENGTH=1
+else
+    EXPERIMENT_NAME="g1_amp_nav2_two_goal_model9996_full_actor_lateral"
+    OUTPUT_DIR="${LEGGED_LAB_DIR}/Nav2TwoGoalModel9996FullActorLateral"
+    RANDOMIZATION_STRENGTH=0
+fi
 
 : "${SOURCE_CHECKPOINT:?set SOURCE_CHECKPOINT to a finite full-actor lateral candidate}"
 : "${SOURCE_SIZE:?set SOURCE_SIZE}"
@@ -67,8 +76,13 @@ if [[ "${STAGE}" == "spacing" ]]; then
     echo "Foot barrier      : hard -150 below 0.025 m; ordering -30"
     echo "Response          : signed +100; stationary shortfall -300"
 else
-    echo "Foot barrier      : hard -150; safe-set shaping reduced"
-    echo "Response/leak     : signed +80; shortfall -400; leak -20"
+    if [[ "${STAGE}" == "final" ]]; then
+        echo "Foot barrier      : hard -150; safe-set shaping reduced"
+        echo "Response/leak     : signed +80; shortfall -400; leak -20"
+    else
+        echo "Foot barrier      : hard -300 below 0.030 m; overlap x16"
+        echo "Randomization     : moderate friction/mass/COM/actuator/joint/push"
+    fi
 fi
 echo "Training          : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations"
 echo "=================================================="
@@ -76,7 +90,7 @@ echo "=================================================="
 TASK="${TASK}" NUM_ENVS="${NUM_ENVS}" MAX_ITERATIONS="${MAX_ITERATIONS}" \
 RUN_NAME="${RUN_NAME}" RESUME=True LOAD_RUN="^${STAGING_RUN}$" CHECKPOINT="^model_source.pt$" \
 HEADLESS=True QUIET_TERMINAL=True TRAIN_LOG_FILE="${TRAIN_LOG_FILE}" ROBOT_ASSET=s3_g1_29dof \
-RSI_ENABLE=False RANDOMIZATION_STRENGTH=0 STYLE_REWARD_SCALE=5.0 TASK_STYLE_LERP=1.0 \
+RSI_ENABLE=False RANDOMIZATION_STRENGTH="${RANDOMIZATION_STRENGTH}" STYLE_REWARD_SCALE=5.0 TASK_STYLE_LERP=1.0 \
 AMP_GRAD_PENALTY_SCALE=20.0 BASELINE_KL_ENABLE=False \
 bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
     agent.experiment_name="${EXPERIMENT_NAME}" \

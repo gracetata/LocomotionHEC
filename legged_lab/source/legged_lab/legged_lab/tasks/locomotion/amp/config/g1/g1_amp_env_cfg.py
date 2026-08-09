@@ -2456,6 +2456,84 @@ class G1AmpNav2TwoGoalModel9996FullActorLateralFinalEnvCfg(
 
 
 @configclass
+class G1AmpNav2TwoGoalModel9996FullActorLateralRobustEnvCfg(
+    G1AmpNav2TwoGoalModel9996FullActorLateralFinalEnvCfg
+):
+    """Safety-margin polish under moderate dynamics randomization.
+
+    The deployed lateral expert already clears the physical soles, so this
+    stage does not relearn the task.  It moves the policy away from the
+    25-mm acceptance boundary and makes that margin insensitive to plausible
+    friction, inertia, actuator and push variations.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # A 30-mm hard set leaves 5 mm of reserve above the deployment
+        # acceptance threshold.  The swept oriented rectangles include the
+        # complete conservative sole envelope, not just ankle centers.
+        for term in (
+            self.rewards.swept_oriented_footprint_soft_margin_l2,
+            self.rewards.swept_oriented_footprint_hard_barrier,
+        ):
+            term.params.update(
+                {
+                    "soft_clearance": 0.065,
+                    "hard_clearance": 0.030,
+                    "overlap_scale": 16.0,
+                    "soft_max_penalty": 100.0,
+                    "interpolation_steps": 12,
+                }
+            )
+        self.rewards.swept_oriented_footprint_soft_margin_l2.weight = -3.0
+        self.rewards.swept_oriented_footprint_hard_barrier.weight = -300.0
+        self.rewards.lateral_foot_ordering_l2.weight = -10.0
+        self.rewards.lateral_foot_ordering_l2.params.update(
+            {"min_clearance": 0.050, "shortfall_scale": 0.040}
+        )
+
+        # Moderate domain randomization: broad enough to prevent a single
+        # nominal-physics contact sequence, but deliberately narrower than the
+        # generic locomotion defaults so a short safety polish cannot erase the
+        # already validated lateral response.
+        self.events.physics_material.params.update(
+            {
+                "static_friction_range": (0.55, 1.25),
+                "dynamic_friction_range": (0.50, 1.10),
+                "restitution_range": (0.0, 0.10),
+                "num_buckets": 64,
+                "make_consistent": True,
+            }
+        )
+        self.events.add_base_mass.params["mass_distribution_params"] = (-1.0, 1.0)
+        self.events.randomize_rigid_body_com.params["com_range"] = {
+            "x": (-0.015, 0.015),
+            "y": (-0.015, 0.015),
+            "z": (-0.010, 0.010),
+        }
+        self.events.scale_link_mass.params["mass_distribution_params"] = (0.90, 1.10)
+        self.events.scale_actuator_gains.params.update(
+            {
+                "stiffness_distribution_params": (0.90, 1.10),
+                "damping_distribution_params": (0.90, 1.10),
+            }
+        )
+        self.events.scale_joint_parameters.params.update(
+            {
+                "friction_distribution_params": (0.80, 1.20),
+                "armature_distribution_params": (0.90, 1.10),
+            }
+        )
+        self.events.push_robot.interval_range_s = (8.0, 12.0)
+        self.events.push_robot.params["velocity_range"] = {
+            "x": (-0.15, 0.15),
+            "y": (-0.15, 0.15),
+            "yaw": (-0.30, 0.30),
+        }
+
+
+@configclass
 class G1AmpNav2TwoGoalCarrierFinetuneEnvCfg(G1AmpNav2TwoGoalFinetuneEnvCfg):
     """Bootstrap the two target skills from the existing forward gait cycle."""
 

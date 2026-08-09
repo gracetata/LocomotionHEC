@@ -423,3 +423,21 @@ class G1Nav2TwoGoalModel9996FullActorLateralFinalRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.clip_param = 0.08
         self.algorithm.num_learning_epochs = 3
         self.algorithm.entropy_coef = 1.0e-4
+
+
+@configclass
+class G1Nav2TwoGoalModel9996FullActorLateralRobustRslRlOnPolicyRunnerAmpCfg(
+    G1Nav2TwoGoalModel9996FullActorLateralFinalRslRlOnPolicyRunnerAmpCfg
+):
+    """Conservative randomized safety polish for the gated lateral expert."""
+
+    experiment_name = "g1_amp_nav2_two_goal_model9996_full_actor_lateral_robust"
+    checkpoint_output_dir = "Nav2TwoGoalModel9996FullActorLateralRobust"
+    save_interval = 1
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 2.5e-6
+        self.algorithm.clip_param = 0.05
+        self.algorithm.num_learning_epochs = 2
+        self.algorithm.entropy_coef = 5.0e-5
