@@ -378,11 +378,12 @@ def test_gated_merge_preserves_model9996_and_uses_strict_lateral_calibration():
     assert 'key.startswith("actor.")' in script
     assert 'key.startswith("lateral_command_residual.")' in script
     assert 'state["fixed_command_bridge_fraction"] = torch.tensor(0.0)' in script
-    assert 'default=-0.14' in script
-    assert 'default=0.10' in script
+    assert 'default=-0.16' in script
+    assert 'default=0.15' in script
     assert "Refusing to overwrite" in script
     exporter = (LEGGED_LAB_ROOT / "scripts" / "rsl_rl" / "export_amp_actor_to_onnx.py").read_text()
-    assert 'torch.tensor(-0.14)' in exporter
+    assert 'torch.tensor(-0.16)' in exporter
+    assert 'torch.tensor(0.15)' in exporter
 
 
 def test_mujoco_acceptance_is_strict_and_bidirectional():
@@ -405,7 +406,8 @@ def test_mujoco_acceptance_is_strict_and_bidirectional():
     assert 'signed yaw rate {signed_yaw:.4f} < 0.25 rad/s' in script
     assert 'planar drift {planar_drift:.4f} > 0.035 m/s' in script
     assert 'health["sole_clearance_violation_fraction"] != 0.0' in script
-    assert 'health["min_signed_sole_clearance_m"] < 0.025' in script
+    assert "minimum_clearance=0.030" in script
+    assert "minimum_clearance=0.025" in script
     assert "forward retention degraded by more than 15%" in script
 
 

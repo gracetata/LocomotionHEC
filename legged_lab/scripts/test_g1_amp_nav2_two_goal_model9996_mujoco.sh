@@ -94,9 +94,9 @@ if "lateral_expert_actor.0.weight" in state:
         raise RuntimeError("lateral expert input contract is not 96")
     if tuple(state["lateral_expert_actor.6.weight"].shape) != (29, 128):
         raise RuntimeError("lateral expert output contract is not 29")
-    if abs(float(state["lateral_expert_forward_command"]) + 0.14) > 1.0e-7:
+    if abs(float(state["lateral_expert_forward_command"]) + 0.16) > 1.0e-7:
         raise RuntimeError("unexpected lateral expert forward calibration")
-    if abs(float(state["lateral_expert_same_yaw_abs"]) - 0.10) > 1.0e-7:
+    if abs(float(state["lateral_expert_same_yaw_abs"]) - 0.15) > 1.0e-7:
         raise RuntimeError("unexpected lateral expert yaw calibration")
     lateral_contract = "full lateral expert"
 else:
@@ -183,7 +183,7 @@ def require_basic_health(name, metrics):
     if not health["healthy"] or health["fallen"]:
         raise RuntimeError(f"{name}: unhealthy rollout: {health}")
 
-def require_two_goal_safety(name, metrics):
+def require_two_goal_safety(name, metrics, minimum_clearance):
     require_basic_health(name, metrics)
     health = metrics["health"]
     if health["sole_clearance_violation_fraction"] != 0.0:
@@ -191,16 +191,17 @@ def require_two_goal_safety(name, metrics):
             f"{name}: hard sole-clearance violation fraction is "
             f"{health['sole_clearance_violation_fraction']:.6f}"
         )
-    if health["min_signed_sole_clearance_m"] < 0.025:
+    if health["min_signed_sole_clearance_m"] < minimum_clearance:
         raise RuntimeError(
             f"{name}: min oriented sole clearance "
-            f"{health['min_signed_sole_clearance_m']:.6f} m < 0.025 m"
+            f"{health['min_signed_sole_clearance_m']:.6f} m < "
+            f"{minimum_clearance:.3f} m"
         )
 
 summary = {}
 for name, sign in (("lateral_left", 1.0), ("lateral_right", -1.0)):
     metrics = load(name)
-    require_two_goal_safety(name, metrics)
+    require_two_goal_safety(name, metrics, minimum_clearance=0.030)
     tracking, health = metrics["task_tracking"], metrics["health"]
     signed_vy = sign * tracking["mean_lin_vel_y"]
     if signed_vy < 0.18:
@@ -220,7 +221,7 @@ for name, sign in (("lateral_left", 1.0), ("lateral_right", -1.0)):
 
 for name, sign in (("yaw_left", 1.0), ("yaw_right", -1.0)):
     metrics = load(name)
-    require_two_goal_safety(name, metrics)
+    require_two_goal_safety(name, metrics, minimum_clearance=0.025)
     tracking, health = metrics["task_tracking"], metrics["health"]
     signed_yaw = sign * tracking["mean_yaw_rate"]
     planar_drift = math.hypot(tracking["mean_lin_vel_x"], tracking["mean_lin_vel_y"])
