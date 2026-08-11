@@ -86,3 +86,58 @@ class G1WalkBehaviorFinetuneRslRlOnPolicyRunnerAmpCfg(
         # walking-only discriminator.  The launcher raises style weight later.
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 0.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
+
+
+@configclass
+class G1WalkTwoGoalExpertRslRlOnPolicyRunnerAmpCfg(
+    G1WalkBehaviorFinetuneRslRlOnPolicyRunnerAmpCfg
+):
+    """Full-capacity gated expert initialized from the ArmHack model_10990 actor."""
+
+    experiment_name = "g1_armhack_walk_two_goal_expert"
+    checkpoint_output_dir = "ArmHack Checkpoints/WalkTwoGoalFinetune"
+    load_policy_only = True
+    reset_iteration_on_policy_only_load = True
+    reset_amp_on_load = False
+    freeze_actor_hidden_layers = 1
+    freeze_base_actor = False
+    actor_warmup_iterations = 0
+    restore_configured_learning_rate_on_load = True
+    save_interval = 1
+
+    def __post_init__(self):
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
+        self.algorithm.learning_rate = 1.0e-5
+        self.algorithm.schedule = "fixed"
+        self.algorithm.desired_kl = 0.01
+        self.algorithm.clip_param = 0.10
+        self.algorithm.num_learning_epochs = 3
+        self.algorithm.num_mini_batches = 4
+        self.algorithm.entropy_coef = 3.0e-4
+        self.algorithm.max_grad_norm = 0.5
+        self.algorithm.baseline_kl_cfg.enabled = False
+        self.algorithm.baseline_kl_cfg.scale = 0.0
+        self.algorithm.command_bridge_cfg.enabled = False
+        self.algorithm.command_bridge_cfg.scale = 0.0
+        self.algorithm.amp_cfg.freeze_discriminator = True
+        self.algorithm.amp_cfg.command_conditioned_style_reward = True
+        self.algorithm.amp_cfg.specialization_task_style_lerp = 1.0
+        self.algorithm.amp_cfg.command_obs_start_index = 6
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 5.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
+
+
+@configclass
+class G1WalkTwoGoalRobustRslRlOnPolicyRunnerAmpCfg(
+    G1WalkTwoGoalExpertRslRlOnPolicyRunnerAmpCfg
+):
+    """Conservative one-checkpoint-per-iteration safety-margin polish."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 2.5e-6
+        self.algorithm.clip_param = 0.05
+        self.algorithm.num_learning_epochs = 2
+        self.algorithm.entropy_coef = 5.0e-5

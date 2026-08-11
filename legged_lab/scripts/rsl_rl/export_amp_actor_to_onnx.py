@@ -267,6 +267,16 @@ class AmpActorExporter(torch.nn.Module):
             # Keep a shape-compatible module so TorchScript can compile the
             # gated branch even for ordinary checkpoints.
             self.lateral_expert_actor = build_actor(model_state, activation_name)
+        self.has_pure_yaw_expert = "pure_yaw_expert_actor.0.weight" in model_state
+        if self.has_pure_yaw_expert:
+            pure_yaw_expert_state = {
+                "actor." + key[len("pure_yaw_expert_actor.") :]: value
+                for key, value in model_state.items()
+                if key.startswith("pure_yaw_expert_actor.")
+            }
+            self.pure_yaw_expert_actor = build_actor(pure_yaw_expert_state, activation_name)
+        else:
+            self.pure_yaw_expert_actor = build_actor(model_state, activation_name)
         normalizer = build_actor_normalizer(model_state)
         self.normalizer = normalizer if normalizer is not None else torch.nn.Identity()
         self.has_command_residual = (
@@ -296,6 +306,18 @@ class AmpActorExporter(torch.nn.Module):
         self.register_buffer(
             "lateral_expert_same_yaw_abs",
             model_state.get("lateral_expert_same_yaw_abs", torch.tensor(0.15)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_expert_forward_command",
+            model_state.get("pure_yaw_expert_forward_command", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_expert_lateral_command",
+            model_state.get("pure_yaw_expert_lateral_command", torch.tensor(0.0)).float(),
+        )
+        self.register_buffer(
+            "pure_yaw_expert_yaw_scale",
+            model_state.get("pure_yaw_expert_yaw_scale", torch.tensor(1.0)).float(),
         )
         self.register_buffer(
             "lateral_teacher_mixture_enabled",
@@ -398,6 +420,25 @@ class AmpActorExporter(torch.nn.Module):
             )
             lateral_actions = self.lateral_expert_actor(self.normalizer(lateral_obs))
             actions = torch.where(lateral.unsqueeze(-1), lateral_actions, actions)
+        if self.has_pure_yaw_expert:
+            pure_yaw_obs = obs.clone()
+            pure_yaw_obs[..., 6] = torch.where(
+                pure_yaw,
+                self.pure_yaw_expert_forward_command.to(pure_yaw_obs.dtype),
+                pure_yaw_obs[..., 6],
+            )
+            pure_yaw_obs[..., 7] = torch.where(
+                pure_yaw,
+                self.pure_yaw_expert_lateral_command.to(pure_yaw_obs.dtype),
+                pure_yaw_obs[..., 7],
+            )
+            pure_yaw_obs[..., 8] = torch.where(
+                pure_yaw,
+                command[..., 2] * self.pure_yaw_expert_yaw_scale.to(pure_yaw_obs.dtype),
+                pure_yaw_obs[..., 8],
+            )
+            pure_yaw_actions = self.pure_yaw_expert_actor(self.normalizer(pure_yaw_obs))
+            actions = torch.where(pure_yaw.unsqueeze(-1), pure_yaw_actions, actions)
         if self.has_command_residual:
             teacher_obs = obs.clone()
             teacher_x = teacher_obs[..., 6]
