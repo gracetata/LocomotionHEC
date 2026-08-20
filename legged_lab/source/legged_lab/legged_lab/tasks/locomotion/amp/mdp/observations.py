@@ -94,7 +94,7 @@ def sequential_phase_augmented_last_action(
     phase_action_index: int = 27,
     lifted_action_index: int = 28,
 ) -> torch.Tensor:
-    """Encode ordered-step state in two hijacked wrist-action history slots.
+    """Encode selected swing foot and lift state in two hijacked action slots.
 
     ArmHack replaces the commanded arm targets downstream, so these two actor
     action-history entries do not control the robot.  Reusing them keeps the
@@ -116,12 +116,17 @@ def sequential_phase_augmented_last_action(
         lifted_signal = torch.zeros(env.num_envs, device=env.device)
     else:
         phase = state["phase"]
+        active_index = state["active_index"]
+        # -1 means physical left is active, +1 means physical right is active;
+        # completed double support is 0.  This lets one policy execute either
+        # contact-force-selected order without adding observations.
         phase_signal = torch.where(
-            phase == 1,
-            torch.ones(env.num_envs, device=env.device),
-            torch.where(phase >= 2, -torch.ones(env.num_envs, device=env.device), torch.zeros(env.num_envs, device=env.device)),
+            phase >= 2,
+            torch.zeros(env.num_envs, device=env.device),
+            2.0 * active_index.float() - 1.0,
         )
-        lifted_signal = torch.where(phase == 0, state["left_lifted"], state["right_lifted"]).float()
+        lifted = torch.stack((state["left_lifted"], state["right_lifted"]), dim=1)
+        lifted_signal = lifted.gather(1, active_index.unsqueeze(1)).squeeze(1).float()
     actions[:, phase_action_index] = phase_signal
     actions[:, lifted_action_index] = lifted_signal
     return actions

@@ -80,6 +80,26 @@ gym.register(
 )
 
 gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandAdaptiveSwitch-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_stand_adaptive_switch_env_cfg:G1StandAdaptiveSwitchEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg",
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandAdaptiveSwitch-Play-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_stand_adaptive_switch_env_cfg:G1StandAdaptiveSwitchEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg",
+    },
+)
+
+gym.register(
     id="LeggedLab-Isaac-AMP-G1-StandRobust-v0",
     entry_point="legged_lab.envs:G1PerturbAmpEnv",
     disable_env_checker=True,
@@ -254,3 +274,23 @@ for branch, env_cfg_name in (
             ),
         },
     )
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkPrecisionSwitch-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_walk_precision_switch_env_cfg:G1WalkPrecisionSwitchEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkPrecisionSwitch-Play-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_walk_precision_switch_env_cfg:G1WalkPrecisionSwitchEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
+    },
+)

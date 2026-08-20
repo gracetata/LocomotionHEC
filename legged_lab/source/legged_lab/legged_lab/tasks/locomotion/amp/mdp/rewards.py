@@ -730,6 +730,63 @@ def track_torso_yaw_rate_exp(
     return torch.exp(-yaw_rate_error / std**2) * _body_upright_scale(asset, body_id)
 
 
+def precision_torso_velocity_tracking_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_command: float = 0.04,
+    max_command: float = 0.40,
+    lin_std: float = 0.05,
+    yaw_std: float = 0.08,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
+) -> torch.Tensor:
+    """Reward precise torso tracking inside the useful low-speed command cube.
+
+    Commands below ``min_command`` are deliberately ignored because their
+    residual error is dominated by the real-robot deadband.  Commands outside
+    ``max_command`` continue to use the inherited broad-range rewards.
+    """
+    if not 0.0 <= min_command < max_command:
+        raise ValueError("precision tracking requires 0 <= min_command < max_command")
+    if lin_std <= 0.0 or yaw_std <= 0.0:
+        raise ValueError("precision tracking standard deviations must be positive")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    body_id = _single_body_id(asset_cfg)
+    command = env.command_manager.get_command(command_name)
+    active = (torch.amax(torch.abs(command), dim=1) >= float(min_command)) & (
+        torch.amax(torch.abs(command), dim=1) <= float(max_command)
+    )
+    lin_vel = _body_lin_vel_yaw_frame(asset, body_id)[:, :2]
+    yaw_rate = _body_ang_vel_body_frame(asset, body_id)[:, 2]
+    lin_error = torch.sum(torch.square(command[:, :2] - lin_vel), dim=1)
+    yaw_error = torch.square(command[:, 2] - yaw_rate)
+    score = torch.exp(-lin_error / float(lin_std) ** 2 - yaw_error / float(yaw_std) ** 2)
+    return score * active.float() * _body_upright_scale(asset, body_id)
+
+
+def precision_torso_velocity_error_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_command: float = 0.04,
+    max_command: float = 0.40,
+    yaw_scale: float = 0.35,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
+) -> torch.Tensor:
+    """Dense low-speed velocity error with a deadband around exact zero."""
+    if not 0.0 <= min_command < max_command or yaw_scale < 0.0:
+        raise ValueError("invalid precision velocity error parameters")
+    asset: RigidObject = env.scene[asset_cfg.name]
+    body_id = _single_body_id(asset_cfg)
+    command = env.command_manager.get_command(command_name)
+    active = (torch.amax(torch.abs(command), dim=1) >= float(min_command)) & (
+        torch.amax(torch.abs(command), dim=1) <= float(max_command)
+    )
+    lin_vel = _body_lin_vel_yaw_frame(asset, body_id)[:, :2]
+    yaw_rate = _body_ang_vel_body_frame(asset, body_id)[:, 2]
+    error = torch.sum(torch.square(command[:, :2] - lin_vel), dim=1)
+    error += float(yaw_scale) * torch.square(command[:, 2] - yaw_rate)
+    return error * active.float()
+
+
 def torso_roll_pitch_l2(
     env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link")
 ) -> torch.Tensor:
@@ -1079,7 +1136,7 @@ def _sequential_foot_step_state(
     landing_tolerance_m: float,
     min_step_duration_s: float = 0.0,
 ) -> dict[str, torch.Tensor]:
-    """Update and return the reset-relative left-then-right stepping state."""
+    """Update a reset-relative two-step state, starting with the less-loaded foot."""
     if len(pelvis_cfg.body_ids) != 1:
         raise ValueError("Sequential foot stepping requires exactly one pelvis body.")
     if len(foot_cfg.body_ids) != 2 or len(sensor_cfg.body_ids) != 2:
@@ -1100,6 +1157,9 @@ def _sequential_foot_step_state(
     _, _, pelvis_yaw = math_utils.euler_xyz_from_quat(asset.data.body_quat_w[:, pelvis_id, :])
     foot_pos = asset.data.body_pos_w[:, foot_ids, :]
     contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0.0
+    contact_force = torch.linalg.norm(
+        contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :], dim=-1
+    )
     episode_step = env.episode_length_buf
     state_attr = "_armhack_sequential_foot_step_state"
     state = getattr(env, state_attr, None)
@@ -1107,6 +1167,8 @@ def _sequential_foot_step_state(
     if state is None or state["phase"].shape[0] != env.num_envs:
         state = {
             "phase": torch.zeros(env.num_envs, dtype=torch.long, device=env.device),
+            "first_foot_index": torch.zeros(env.num_envs, dtype=torch.long, device=env.device),
+            "second_foot_index": torch.ones(env.num_envs, dtype=torch.long, device=env.device),
             "phase_start_step": torch.zeros(
                 env.num_envs, dtype=episode_step.dtype, device=env.device
             ),
@@ -1158,6 +1220,17 @@ def _sequential_foot_step_state(
         lateral_axis = torch.stack(
             (-torch.sin(reset_pelvis_yaw), torch.cos(reset_pelvis_yaw)), dim=1
         )
+        # A Walk->Stand switch may arrive in either support phase.  Selecting
+        # the less-loaded foot makes the first swing physically feasible and
+        # removes the old hard-coded left-foot assumption.  Exact ties retain
+        # left-first behavior for deterministic symmetric resets.
+        first_foot = torch.where(
+            contact_force[:, 0] <= contact_force[:, 1],
+            torch.zeros(env.num_envs, dtype=torch.long, device=env.device),
+            torch.ones(env.num_envs, dtype=torch.long, device=env.device),
+        )
+        state["first_foot_index"][reset_mask] = first_foot[reset_mask]
+        state["second_foot_index"][reset_mask] = 1 - first_foot[reset_mask]
         state["pelvis_xy"][reset_mask] = reset_pelvis_pos[reset_mask, :2].detach()
         state["pelvis_yaw"][reset_mask] = reset_pelvis_yaw[reset_mask].detach()
         state["targets_xy"][reset_mask, 0, :] = (
@@ -1187,9 +1260,15 @@ def _sequential_foot_step_state(
         right_error = torch.linalg.norm(
             foot_pos[reset_mask, 1, :2] - state["targets_xy"][reset_mask, 1, :], dim=1
         )
-        state["previous_active_error"][reset_mask] = torch.where(
-            requested_phase[reset_mask] >= 1, right_error, left_error
-        ).detach()
+        reset_errors = torch.stack((left_error, right_error), dim=1)
+        reset_active_index = torch.where(
+            requested_phase[reset_mask] >= 1,
+            state["second_foot_index"][reset_mask],
+            state["first_foot_index"][reset_mask],
+        )
+        state["previous_active_error"][reset_mask] = reset_errors.gather(
+            1, reset_active_index.unsqueeze(1)
+        ).squeeze(1).detach()
         state["last_episode_step"][reset_mask] = -1
 
     update_mask = state["last_episode_step"] != episode_step
@@ -1205,71 +1284,96 @@ def _sequential_foot_step_state(
         phase_elapsed_s = (
             episode_step - state["phase_start_step"]
         ).to(dtype=foot_pos.dtype) * float(env.step_dt)
-        left_new_lift = (
+        first_index = state["first_foot_index"]
+        second_index = state["second_foot_index"]
+        lifted = torch.stack((state["left_lifted"], state["right_lifted"]), dim=1)
+        first_lifted = lifted.gather(1, first_index.unsqueeze(1)).squeeze(1)
+        second_lifted = lifted.gather(1, second_index.unsqueeze(1)).squeeze(1)
+        first_clearance = clearance.gather(1, first_index.unsqueeze(1)).squeeze(1)
+        second_clearance = clearance.gather(1, second_index.unsqueeze(1)).squeeze(1)
+        first_new_lift = (
             update_mask
             & (phase_before == 0)
-            & (~state["left_lifted"])
-            & (clearance[:, 0] >= float(min_clearance_m))
+            & (~first_lifted)
+            & (first_clearance >= float(min_clearance_m))
         )
-        right_new_lift = (
+        second_new_lift = (
             update_mask
             & (phase_before == 1)
-            & (~state["right_lifted"])
-            & (clearance[:, 1] >= float(min_clearance_m))
+            & (~second_lifted)
+            & (second_clearance >= float(min_clearance_m))
         )
-        state["left_lift_event"][left_new_lift] = True
-        state["right_lift_event"][right_new_lift] = True
-        state["left_lifted"] |= left_new_lift
-        state["right_lifted"] |= right_new_lift
+        state["left_lift_event"][first_new_lift & (first_index == 0)] = True
+        state["right_lift_event"][first_new_lift & (first_index == 1)] = True
+        state["left_lift_event"][second_new_lift & (second_index == 0)] = True
+        state["right_lift_event"][second_new_lift & (second_index == 1)] = True
+        state["left_lifted"] |= (first_new_lift & (first_index == 0)) | (
+            second_new_lift & (second_index == 0)
+        )
+        state["right_lifted"] |= (first_new_lift & (first_index == 1)) | (
+            second_new_lift & (second_index == 1)
+        )
 
-        left_complete = (
+        lifted = torch.stack((state["left_lifted"], state["right_lifted"]), dim=1)
+        first_lifted = lifted.gather(1, first_index.unsqueeze(1)).squeeze(1)
+        second_lifted = lifted.gather(1, second_index.unsqueeze(1)).squeeze(1)
+        landing_first = landing_event.gather(1, first_index.unsqueeze(1)).squeeze(1)
+        landing_second = landing_event.gather(1, second_index.unsqueeze(1)).squeeze(1)
+        first_error = foot_error.gather(1, first_index.unsqueeze(1)).squeeze(1)
+        second_error = foot_error.gather(1, second_index.unsqueeze(1)).squeeze(1)
+        first_complete = (
             update_mask
             & (phase_before == 0)
-            & state["left_lifted"]
-            & landing_event[:, 0]
-            & (foot_error[:, 0] <= float(landing_tolerance_m))
+            & first_lifted
+            & landing_first
+            & (first_error <= float(landing_tolerance_m))
             & (phase_elapsed_s >= float(min_step_duration_s))
         )
-        left_failed_landing = (
+        first_failed_landing = (
             update_mask
             & (phase_before == 0)
-            & state["left_lifted"]
-            & landing_event[:, 0]
-            & (~left_complete)
+            & first_lifted
+            & landing_first
+            & (~first_complete)
         )
-        state["left_lifted"][left_failed_landing] = False
-        state["phase"][left_complete] = 1
-        state["phase_start_step"][left_complete] = episode_step[left_complete]
-        state["left_complete_event"][left_complete] = True
-        state["right_lifted"][left_complete] = False
+        state["left_lifted"][first_failed_landing & (first_index == 0)] = False
+        state["right_lifted"][first_failed_landing & (first_index == 1)] = False
+        state["phase"][first_complete] = 1
+        state["phase_start_step"][first_complete] = episode_step[first_complete]
+        state["left_complete_event"][first_complete & (first_index == 0)] = True
+        state["right_complete_event"][first_complete & (first_index == 1)] = True
+        state["left_lifted"][first_complete & (second_index == 0)] = False
+        state["right_lifted"][first_complete & (second_index == 1)] = False
 
-        right_complete = (
+        second_complete = (
             update_mask
             & (phase_before == 1)
-            & state["right_lifted"]
-            & landing_event[:, 1]
-            & (foot_error[:, 1] <= float(landing_tolerance_m))
+            & second_lifted
+            & landing_second
+            & (second_error <= float(landing_tolerance_m))
             & (phase_elapsed_s >= float(min_step_duration_s))
         )
-        right_failed_landing = (
+        second_failed_landing = (
             update_mask
             & (phase_before == 1)
-            & state["right_lifted"]
-            & landing_event[:, 1]
-            & (~right_complete)
+            & second_lifted
+            & landing_second
+            & (~second_complete)
         )
-        state["right_lifted"][right_failed_landing] = False
-        state["phase"][right_complete] = 2
-        state["right_complete_event"][right_complete] = True
+        state["left_lifted"][second_failed_landing & (second_index == 0)] = False
+        state["right_lifted"][second_failed_landing & (second_index == 1)] = False
+        state["phase"][second_complete] = 2
+        state["left_complete_event"][second_complete & (second_index == 0)] = True
+        state["right_complete_event"][second_complete & (second_index == 1)] = True
 
-        active_index = torch.where(phase_before == 0, 0, 1)
+        active_index = torch.where(phase_before == 0, first_index, second_index)
         active_error = foot_error.gather(1, active_index.unsqueeze(1)).squeeze(1)
         progress = state["previous_active_error"] - active_error
         state["progress"] = torch.where(update_mask & (phase_before < 2), progress, 0.0)
         state["previous_active_error"] = torch.where(
             update_mask & (phase_before < 2), active_error.detach(), state["previous_active_error"]
         )
-        state["previous_active_error"][left_complete] = foot_error[left_complete, 1].detach()
+        state["previous_active_error"][first_complete] = second_error[first_complete].detach()
         state["last_episode_step"][update_mask] = episode_step[update_mask]
         state["previous_contact"][update_mask] = contact[update_mask].detach()
 
@@ -1277,6 +1381,10 @@ def _sequential_foot_step_state(
     state["foot_error"] = torch.linalg.norm(foot_pos[:, :, :2] - state["targets_xy"], dim=2)
     state["clearance"] = foot_pos[:, :, 2] - state["initial_foot_z"]
     state["contact"] = contact
+    state["contact_force"] = contact_force
+    state["active_index"] = torch.where(
+        state["phase"] == 0, state["first_foot_index"], state["second_foot_index"]
+    )
     state["phase_elapsed_s"] = (
         episode_step - state["phase_start_step"]
     ).to(dtype=foot_pos.dtype) * float(env.step_dt)
@@ -1299,7 +1407,7 @@ def sequential_foot_step_progress(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     active_airborne = ~state["contact"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     progress_reward = torch.clamp(state["progress"], min=0.0, max=float(progress_scale_m)) / max(
         float(progress_scale_m), 1.0e-6
@@ -1325,7 +1433,7 @@ def sequential_foot_step_target_exp(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     active_error = state["foot_error"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_airborne = ~state["contact"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_reward = torch.exp(-torch.square(active_error / float(std))) * active_airborne.float()
@@ -1353,7 +1461,7 @@ def sequential_foot_step_clearance_exp(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     clearance = state["clearance"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     in_contact = state["contact"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_lifted = torch.where(state["phase"] == 0, state["left_lifted"], state["right_lifted"])
@@ -1379,7 +1487,7 @@ def sequential_active_foot_contact(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     active_contact = state["contact"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_lifted = torch.where(state["phase"] == 0, state["left_lifted"], state["right_lifted"])
     return active_contact.float() * (~active_lifted).float() * (state["phase"] < 2).float()
@@ -1404,7 +1512,7 @@ def sequential_active_foot_clearance_l2(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     clearance = state["clearance"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     low_error = torch.clamp(float(target_clearance_m) - clearance, min=0.0)
     high_error = torch.clamp(clearance - float(max_clearance_m), min=0.0)
@@ -1434,7 +1542,7 @@ def sequential_active_foot_upward_velocity(
         landing_tolerance_m, min_step_duration_s
     )
     asset: Articulation = env.scene[foot_cfg.name]
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     foot_vertical_velocity = asset.data.body_lin_vel_w[:, foot_cfg.body_ids, 2]
     active_upward_velocity = foot_vertical_velocity.gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_lifted = torch.where(state["phase"] == 0, state["left_lifted"], state["right_lifted"])
@@ -1479,7 +1587,7 @@ def sequential_active_foot_velocity_l2(
         landing_tolerance_m, min_step_duration_s
     )
     asset: Articulation = env.scene[foot_cfg.name]
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     foot_velocity = asset.data.body_lin_vel_w[:, foot_cfg.body_ids, :]
     active_velocity = foot_velocity.gather(
         1, active_index.view(-1, 1, 1).expand(-1, 1, 3)
@@ -1512,7 +1620,7 @@ def sequential_active_foot_single_support(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     support_index = 1 - active_index
     active_contact = state["contact"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     support_contact = state["contact"].gather(1, support_index.unsqueeze(1)).squeeze(1)
@@ -1539,7 +1647,7 @@ def sequential_foot_step_landing_exp(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_index = state["active_index"]
     active_error = state["foot_error"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_clearance = state["clearance"].gather(1, active_index.unsqueeze(1)).squeeze(1)
     active_lifted = torch.where(state["phase"] == 0, state["left_lifted"], state["right_lifted"])
@@ -1601,13 +1709,15 @@ def sequential_foot_step_order_violation(
     landing_tolerance_m: float = 0.035,
     min_step_duration_s: float = 0.0,
 ) -> torch.Tensor:
-    """Penalize lifting the right foot before the left step has landed."""
+    """Penalize lifting the second-selected foot before the first step lands."""
     state = _sequential_foot_step_state(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    right_airborne = ~state["contact"][:, 1]
-    return right_airborne.float() * (state["phase"] == 0).float()
+    second_contact = state["contact"].gather(
+        1, state["second_foot_index"].unsqueeze(1)
+    ).squeeze(1)
+    return (~second_contact).float() * (state["phase"] == 0).float()
 
 
 def sequential_foot_final_target_l2(
@@ -1679,15 +1789,23 @@ def sequential_support_foot_drift_l2(
         env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
         landing_tolerance_m, min_step_duration_s
     )
-    right_initial_error = state["foot_pos"][:, 1, :2] - state["initial_foot_xy"][:, 1, :]
-    left_target_error = state["foot_pos"][:, 0, :2] - state["targets_xy"][:, 0, :]
-    left_initial_error = state["foot_pos"][:, 0, :2] - state["initial_foot_xy"][:, 0, :]
+    first_index = state["first_foot_index"]
+    second_index = state["second_foot_index"]
+    first_selector = first_index.view(-1, 1, 1).expand(-1, 1, 2)
+    second_selector = second_index.view(-1, 1, 1).expand(-1, 1, 2)
+    first_pos = state["foot_pos"][:, :, :2].gather(1, first_selector).squeeze(1)
+    second_pos = state["foot_pos"][:, :, :2].gather(1, second_selector).squeeze(1)
+    first_initial = state["initial_foot_xy"].gather(1, first_selector).squeeze(1)
+    second_initial = state["initial_foot_xy"].gather(1, second_selector).squeeze(1)
+    first_target = state["targets_xy"].gather(1, first_selector).squeeze(1)
     phase_one_support_error = torch.where(
-        state["phase_one_training_reset"].unsqueeze(1), left_initial_error, left_target_error
+        state["phase_one_training_reset"].unsqueeze(1),
+        first_pos - first_initial,
+        first_pos - first_target,
     )
     support_error_l2 = torch.where(
         state["phase"] == 0,
-        torch.sum(torch.square(right_initial_error), dim=1),
+        torch.sum(torch.square(second_pos - second_initial), dim=1),
         torch.sum(torch.square(phase_one_support_error), dim=1),
     )
     return support_error_l2 * (state["phase"] < 2).float()
