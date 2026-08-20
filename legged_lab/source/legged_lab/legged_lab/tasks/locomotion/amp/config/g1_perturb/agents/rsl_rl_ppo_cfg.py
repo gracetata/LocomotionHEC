@@ -12,6 +12,7 @@ class G1PerturbRslRlOnPolicyRunnerAmpCfg(G1RslRlOnPolicyRunnerAmpCfg):
     experiment_name = "g1_perturb"
     load_policy_only = False
     reset_iteration_on_policy_only_load = True
+    policy_only_noise_std_override: float = -1.0
     reset_amp_on_load = False
 
 

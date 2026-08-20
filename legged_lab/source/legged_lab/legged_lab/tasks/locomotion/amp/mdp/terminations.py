@@ -6,12 +6,32 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
 from .rewards import DEFAULT_TARGET_KEY_BODY_REFERENCE_ATTR, target_pose_success_mask
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+def sequential_pelvis_xy_out_of_bounds(
+    env: ManagerBasedRLEnv,
+    max_displacement_m: float = 0.20,
+    pelvis_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="pelvis"),
+) -> torch.Tensor:
+    """Terminate ordered-step attempts that translate the pelvis excessively."""
+    if max_displacement_m <= 0.0:
+        raise ValueError("max_displacement_m must be positive.")
+    state = getattr(env, "_armhack_sequential_foot_step_state", None)
+    if state is None:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    if len(pelvis_cfg.body_ids) != 1:
+        raise ValueError("sequential_pelvis_xy_out_of_bounds requires exactly one pelvis body.")
+    asset: Articulation = env.scene[pelvis_cfg.name]
+    pelvis_xy = asset.data.body_pos_w[:, pelvis_cfg.body_ids[0], :2]
+    displacement = torch.linalg.norm(pelvis_xy - state["pelvis_xy"], dim=1)
+    return displacement > float(max_displacement_m)
 
 
 def target_pose_success_hold(

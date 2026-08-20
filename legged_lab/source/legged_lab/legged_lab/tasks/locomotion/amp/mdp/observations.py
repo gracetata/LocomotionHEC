@@ -87,3 +87,41 @@ def ray_caster(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor
     hits = sensor.data.ray_hits_w  # [num_envs, num_rays, 3]
     distances = torch.norm(hits - origin, dim=-1).clamp(min=0.2, max=5)  # [num_envs, num_rays]
     return distances
+
+
+def sequential_phase_augmented_last_action(
+    env: ManagerBasedEnv,
+    phase_action_index: int = 27,
+    lifted_action_index: int = 28,
+) -> torch.Tensor:
+    """Encode ordered-step state in two hijacked wrist-action history slots.
+
+    ArmHack replaces the commanded arm targets downstream, so these two actor
+    action-history entries do not control the robot.  Reusing them keeps the
+    policy input at 96 dimensions and therefore permits policy-only loading of
+    all existing checkpoints.
+    """
+    actions = env.action_manager.action.clone()
+    if phase_action_index < 0 or lifted_action_index < 0:
+        raise ValueError("Sequential phase observation indices must be non-negative.")
+    if phase_action_index >= actions.shape[1] or lifted_action_index >= actions.shape[1]:
+        raise ValueError(
+            f"Sequential phase observation indices {(phase_action_index, lifted_action_index)} "
+            f"exceed action dimension {actions.shape[1]}."
+        )
+
+    state = getattr(env, "_armhack_sequential_foot_step_state", None)
+    if state is None:
+        phase_signal = torch.zeros(env.num_envs, device=env.device)
+        lifted_signal = torch.zeros(env.num_envs, device=env.device)
+    else:
+        phase = state["phase"]
+        phase_signal = torch.where(
+            phase == 1,
+            torch.ones(env.num_envs, device=env.device),
+            torch.where(phase >= 2, -torch.ones(env.num_envs, device=env.device), torch.zeros(env.num_envs, device=env.device)),
+        )
+        lifted_signal = torch.where(phase == 0, state["left_lifted"], state["right_lifted"]).float()
+    actions[:, phase_action_index] = phase_signal
+    actions[:, lifted_action_index] = lifted_signal
+    return actions

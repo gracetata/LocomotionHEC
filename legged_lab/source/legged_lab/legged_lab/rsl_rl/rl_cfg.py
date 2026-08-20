@@ -113,6 +113,18 @@ class RslRlPpoAmpAlgorithmCfg:
         min_std: float = 1.0e-4
         """Minimum standard deviation used in the analytic Gaussian KL."""
 
+        exempt_obs_index: int = -1
+        """Observation slot whose high-valued samples are exempt from baseline KL; -1 disables masking."""
+
+        exempt_obs_threshold: float = 0.5
+        """Samples at or above this value in ``exempt_obs_index`` are excluded from baseline KL."""
+
+        mirror_phase_one: bool = False
+        """Use the frozen phase-zero policy, mirrored left/right, as the phase-one KL teacher."""
+
+        lift_obs_index: int = 95
+        """Observation slot containing the active-foot lifted flag used by the mirrored teacher."""
+
         mean_only: bool = False
         """Constrain actor means while allowing a fresh exploration standard deviation."""
 
