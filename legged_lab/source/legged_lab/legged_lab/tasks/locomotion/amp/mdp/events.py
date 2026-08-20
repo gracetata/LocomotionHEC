@@ -43,6 +43,23 @@ def cache_default_key_body_offsets(
     setattr(env, reference_attr, body_offsets_b.detach().clone())
 
 
+def sample_sequential_step_training_phase(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    phase_one_probability: float = 0.0,
+):
+    """Select phase-one reset environments for right-step skill oversampling."""
+    if not 0.0 <= float(phase_one_probability) <= 1.0:
+        raise ValueError("phase_one_probability must be in [0, 1].")
+    reset_phase_one = getattr(env, "_armhack_sequential_phase_one_reset", None)
+    if reset_phase_one is None or reset_phase_one.shape[0] != env.num_envs:
+        reset_phase_one = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        setattr(env, "_armhack_sequential_phase_one_reset", reset_phase_one)
+    reset_phase_one[env_ids] = (
+        torch.rand(env_ids.numel(), device=env.device) < float(phase_one_probability)
+    )
+
+
 def ref_state_init_root(
     env: ManagerBasedAmpEnv, 
     env_ids: torch.Tensor,
@@ -144,6 +161,161 @@ def ref_state_init_subset(
 
     joint_pos, joint_vel, joint_ids = _select_motion_joint_state(asset, asset_cfg, rsi_env_ids, motion_state_dict)
     asset.write_joint_state_to_sim(joint_pos, joint_vel, joint_ids=joint_ids, env_ids=rsi_env_ids)
+
+
+def reset_joints_with_random_stance(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    distance_range: tuple[float, float] = (0.08, 0.48),
+    close_distance_range: tuple[float, float] = (0.08, 0.14),
+    close_stance_probability: float = 0.40,
+    nominal_distance_range: tuple[float, float] = (0.28, 0.32),
+    nominal_stance_probability: float = 0.10,
+    asymmetric_support_probability: float = 0.0,
+    phase_one_probability: float = 0.0,
+    phase_two_probability: float = 0.0,
+    support_distance_range: tuple[float, float] = (0.20, 0.32),
+    kinematic_nominal_distance: float = 0.237,
+    kinematic_distance_per_rad: float = 1.22,
+    position_scale_range: tuple[float, float] = (0.95, 1.05),
+    velocity_range: tuple[float, float] = (0.0, 0.0),
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """Reset G1 joints with symmetric or support-foot-wide ankle spacing.
+
+    The sampled spacing is converted to a symmetric hip-roll angle using a
+    locally calibrated G1 kinematic slope. Opposite ankle-roll angles keep
+    both feet approximately parallel to the floor. Close stances are
+    deliberately oversampled to cover the difficult feet-together case.
+    """
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    if env_ids.numel() == 0:
+        return
+
+    distance_min, distance_max = (float(value) for value in distance_range)
+    close_min, close_max = (float(value) for value in close_distance_range)
+    nominal_min, nominal_max = (float(value) for value in nominal_distance_range)
+    close_probability = float(close_stance_probability)
+    nominal_probability = float(nominal_stance_probability)
+    asymmetric_probability = float(asymmetric_support_probability)
+    phase_one_probability = float(phase_one_probability)
+    phase_two_probability = float(phase_two_probability)
+    support_distance_min, support_distance_max = (float(value) for value in support_distance_range)
+    if not 0.0 < distance_min <= distance_max:
+        raise ValueError("distance_range must satisfy 0 < min <= max.")
+    if not distance_min <= close_min <= close_max <= distance_max:
+        raise ValueError("close_distance_range must be contained in distance_range.")
+    if not distance_min <= nominal_min <= nominal_max <= distance_max:
+        raise ValueError("nominal_distance_range must be contained in distance_range.")
+    if close_probability < 0.0 or nominal_probability < 0.0 or close_probability + nominal_probability > 1.0:
+        raise ValueError("Stance mixture probabilities must be non-negative and sum to <= 1.")
+    if not 0.0 <= asymmetric_probability <= 1.0:
+        raise ValueError("asymmetric_support_probability must be in [0, 1].")
+    if not 0.0 <= phase_one_probability <= 1.0:
+        raise ValueError("phase_one_probability must be in [0, 1].")
+    if not 0.0 <= phase_two_probability <= 1.0 or phase_one_probability + phase_two_probability > 1.0:
+        raise ValueError("phase reset probabilities must be non-negative and sum to <= 1.")
+    if not 0.0 < support_distance_min <= support_distance_max:
+        raise ValueError("support_distance_range must satisfy 0 < min <= max.")
+    if float(kinematic_distance_per_rad) <= 0.0:
+        raise ValueError("kinematic_distance_per_rad must be positive.")
+
+    joint_pos = asset.data.default_joint_pos[env_ids].clone()
+    joint_vel = asset.data.default_joint_vel[env_ids].clone()
+    joint_pos *= math_utils.sample_uniform(*position_scale_range, joint_pos.shape, joint_pos.device)
+    joint_vel += math_utils.sample_uniform(*velocity_range, joint_vel.shape, joint_vel.device)
+
+    sample_count = env_ids.numel()
+    mixture = torch.rand(sample_count, device=asset.device)
+    sampled_distance = math_utils.sample_uniform(distance_min, distance_max, (sample_count,), asset.device)
+    close_distance = math_utils.sample_uniform(close_min, close_max, (sample_count,), asset.device)
+    nominal_distance = math_utils.sample_uniform(nominal_min, nominal_max, (sample_count,), asset.device)
+    sampled_distance = torch.where(mixture < close_probability, close_distance, sampled_distance)
+    sampled_distance = torch.where(
+        (mixture >= close_probability) & (mixture < close_probability + nominal_probability),
+        nominal_distance,
+        sampled_distance,
+    )
+
+    roll_angle = (sampled_distance - float(kinematic_nominal_distance)) / float(kinematic_distance_per_rad)
+    phase_draw = torch.rand(sample_count, device=asset.device)
+    phase_two_mask = phase_draw < phase_two_probability
+    phase_one_mask = (phase_draw >= phase_two_probability) & (
+        phase_draw < phase_two_probability + phase_one_probability
+    )
+    reset_phase = getattr(env, "_armhack_sequential_reset_phase", None)
+    if reset_phase is None or reset_phase.shape[0] != env.num_envs:
+        reset_phase = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        setattr(env, "_armhack_sequential_reset_phase", reset_phase)
+    reset_phase[env_ids] = phase_one_mask.long() + 2 * phase_two_mask.long()
+    reset_phase_one = getattr(env, "_armhack_sequential_phase_one_reset", None)
+    if reset_phase_one is None or reset_phase_one.shape[0] != env.num_envs:
+        reset_phase_one = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        setattr(env, "_armhack_sequential_phase_one_reset", reset_phase_one)
+    reset_phase_one[env_ids] = phase_one_mask
+
+    asymmetric_mask = (
+        (torch.rand(sample_count, device=asset.device) < asymmetric_probability) | phase_one_mask
+    ) & (~phase_two_mask)
+    # In phase zero the active left foot is close and the right support foot
+    # is at -15 cm.  A phase-one reset must be the physical continuation of a
+    # completed left step: left support at +15 cm and active right foot close.
+    active_roll_angle = (close_distance - float(kinematic_nominal_distance)) / float(
+        kinematic_distance_per_rad
+    )
+    support_distance = math_utils.sample_uniform(
+        support_distance_min, support_distance_max, (sample_count,), asset.device
+    )
+    support_roll_angles = (support_distance - float(kinematic_nominal_distance)) / float(
+        kinematic_distance_per_rad
+    )
+    asymmetric_left_roll = torch.where(phase_one_mask, support_roll_angles, active_roll_angle)
+    asymmetric_right_roll = torch.where(phase_one_mask, active_roll_angle, support_roll_angles)
+    left_roll_angle = torch.where(asymmetric_mask, asymmetric_left_roll, roll_angle)
+    right_roll_angle = torch.where(
+        asymmetric_mask, asymmetric_right_roll, roll_angle
+    )
+    final_roll_angles = torch.full_like(
+        roll_angle,
+        (0.30 - float(kinematic_nominal_distance)) / float(kinematic_distance_per_rad),
+    )
+    left_roll_angle = torch.where(phase_two_mask, final_roll_angles, left_roll_angle)
+    right_roll_angle = torch.where(phase_two_mask, final_roll_angles, right_roll_angle)
+    joint_index = {name: index for index, name in enumerate(asset.joint_names)}
+    stance_joint_names = (
+        "left_hip_roll_joint",
+        "right_hip_roll_joint",
+        "left_ankle_roll_joint",
+        "right_ankle_roll_joint",
+    )
+    missing = [name for name in stance_joint_names if name not in joint_index]
+    if missing:
+        raise ValueError(f"Random stance reset is missing G1 joints: {missing}")
+
+    signed_targets = {
+        "left_hip_roll_joint": left_roll_angle,
+        "right_hip_roll_joint": -right_roll_angle,
+        "left_ankle_roll_joint": -left_roll_angle,
+        "right_ankle_roll_joint": right_roll_angle,
+    }
+    for joint_name, values in signed_targets.items():
+        joint_pos[:, joint_index[joint_name]] = values
+
+    joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids]
+    joint_vel_limits = asset.data.soft_joint_vel_limits[env_ids]
+    joint_pos.clamp_(joint_pos_limits[..., 0], joint_pos_limits[..., 1])
+    joint_vel.clamp_(-joint_vel_limits, joint_vel_limits)
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+    asset.set_joint_position_target(joint_pos, env_ids=env_ids)
+
+    state = getattr(env, "_armhack_initial_stance_distance_m", None)
+    if state is None or state.shape != (env.num_envs,) or state.device != asset.device:
+        state = torch.zeros(env.num_envs, dtype=torch.float32, device=asset.device)
+        setattr(env, "_armhack_initial_stance_distance_m", state)
+    asymmetric_distance = 0.5 * (close_distance + support_distance)
+    reset_distance = torch.where(asymmetric_mask, asymmetric_distance, sampled_distance)
+    state[env_ids] = torch.where(phase_two_mask, torch.full_like(reset_distance, 0.30), reset_distance)
 
 
 def _select_motion_joint_state(

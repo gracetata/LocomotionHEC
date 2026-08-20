@@ -11,7 +11,7 @@ Core functions:
     health, Important Metrics analogs, and scores.
 
 Inputs/outputs:
-    Input is a TorchScript policy exported by scripts/export_g1_amp_policy.sh
+    Input is a TorchScript or ONNX policy exported by scripts/export_g1_amp_policy.sh
     and a Unitree G1 29DoF MuJoCo XML. Output is a GLFW visualization or a
     headless MuJoCo rollout plus scalar evaluation metrics. The source XML is
     never modified; any missing floor is written to a generated temporary scene.
@@ -31,6 +31,7 @@ import math
 import os
 import struct
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -40,7 +41,7 @@ import numpy as np
 import torch
 import yaml  # type: ignore[reportMissingImports]
 
-from armhack_stand import ArmHackStandReplay
+from armhack_stand import ARM_JOINT_NAMES, ArmHackStandReplay
 
 
 UNITREE_ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -141,11 +142,70 @@ def _env_yaml_vector(name: str, default: list[float], length: int) -> list[float
     return [float(value) for value in values]
 
 
+class PolicyRunner:
+    def __init__(self, policy_path: str, runtime: str) -> None:
+        self.runtime = runtime.strip().lower()
+        if self.runtime == "auto":
+            self.runtime = "onnx" if policy_path.endswith(".onnx") else "torchscript"
+        if self.runtime in {"torch", "jit"}:
+            self.runtime = "torchscript"
+
+        if self.runtime == "torchscript":
+            self.policy = torch.jit.load(policy_path, map_location="cpu")
+            self.policy.eval()
+            self.session = None
+            self.input_name = ""
+            self.output_name = ""
+        elif self.runtime == "onnx":
+            try:
+                import onnxruntime as ort
+            except ImportError as exc:
+                raise RuntimeError(
+                    "onnxruntime is required for ONNX MuJoCo rollout. "
+                    "Install it in the UNITREE_PYTHON environment."
+                ) from exc
+            session_options = ort.SessionOptions()
+            session_options.intra_op_num_threads = 1
+            session_options.inter_op_num_threads = 1
+            session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            self.policy = None
+            self.session = ort.InferenceSession(
+                policy_path,
+                sess_options=session_options,
+                providers=["CPUExecutionProvider"],
+            )
+            inputs = self.session.get_inputs()
+            outputs = self.session.get_outputs()
+            if len(inputs) != 1 or len(outputs) != 1:
+                raise RuntimeError(
+                    f"Policy must have one input and one output, got {len(inputs)} inputs and {len(outputs)} outputs."
+                )
+            self.input_name = inputs[0].name
+            self.output_name = outputs[0].name
+        else:
+            raise ValueError(f"Invalid policy_runtime: {runtime}")
+
+    def infer(self, obs: np.ndarray) -> np.ndarray:
+        obs_batch = np.asarray(obs, dtype=np.float32).reshape(1, -1)
+        if self.runtime == "torchscript":
+            with torch.inference_mode():
+                action = self.policy(torch.from_numpy(obs_batch)).detach().cpu().numpy()
+        else:
+            action = self.session.run([self.output_name], {self.input_name: obs_batch})[0]
+        action = np.asarray(action, dtype=np.float32).squeeze()
+        if action.shape != (29,):
+            raise RuntimeError(f"Policy output shape must be (29,), got {action.shape}")
+        if not np.all(np.isfinite(action)):
+            raise RuntimeError("Policy output contains non-finite values.")
+        return action
+
+
 def load_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
 
     config["policy_path"] = _resolve_path(os.environ.get("G1_AMP_POLICY_PATH", config["policy_path"]))
+    config["policy_runtime"] = os.environ.get("G1_AMP_POLICY_RUNTIME", str(config.get("policy_runtime", "auto")))
     config["robot_asset"], config["xml_path"] = _resolve_robot_xml(config)
     config["simulation_duration"] = float(os.environ.get("G1_AMP_SIMULATION_DURATION", config["simulation_duration"]))
     config["use_glfw"] = _env_bool("G1_AMP_USE_GLFW", bool(config.get("use_glfw", True)))
@@ -256,6 +316,134 @@ def load_config(config_path: str) -> dict:
     )
     config["early_motion_window_s"] = _env_float(
         "G1_AMP_EARLY_MOTION_WINDOW_S", float(config.get("early_motion_window_s", 1.0))
+    )
+    config["joint_random_enable"] = _env_bool(
+        "G1_AMP_JOINT_RANDOM_ENABLE", bool(config.get("joint_random_enable", False))
+    )
+    config["joint_random_seed"] = _env_int("G1_AMP_JOINT_RANDOM_SEED", int(config.get("joint_random_seed", 20260718)))
+    config["joint_pos_noise_rad"] = _env_float(
+        "G1_AMP_JOINT_POS_NOISE_RAD", float(config.get("joint_pos_noise_rad", 0.0))
+    )
+    config["joint_vel_noise_rad_per_s"] = _env_float(
+        "G1_AMP_JOINT_VEL_NOISE_RAD_PER_S", float(config.get("joint_vel_noise_rad_per_s", 0.0))
+    )
+    config["non_arm_joint_target_noise_enable"] = _env_bool(
+        "G1_AMP_NON_ARM_JOINT_TARGET_NOISE_ENABLE",
+        bool(config.get("non_arm_joint_target_noise_enable", False)),
+    )
+    config["non_arm_joint_target_noise_seed"] = _env_int(
+        "G1_AMP_NON_ARM_JOINT_TARGET_NOISE_SEED",
+        int(config.get("non_arm_joint_target_noise_seed", 20260719)),
+    )
+    config["non_arm_joint_target_noise_rad"] = _env_float(
+        "G1_AMP_NON_ARM_JOINT_TARGET_NOISE_RAD",
+        float(config.get("non_arm_joint_target_noise_rad", 0.0)),
+    )
+    config["foot_recovery_enable"] = _env_bool(
+        "G1_AMP_FOOT_RECOVERY_ENABLE", bool(config.get("foot_recovery_enable", False))
+    )
+    config["ordered_step_observation_enable"] = _env_bool(
+        "G1_AMP_ORDERED_STEP_OBSERVATION_ENABLE",
+        bool(config.get("ordered_step_observation_enable", False)),
+    )
+    config["ordered_step_mirror_policy_enable"] = _env_bool(
+        "G1_AMP_ORDERED_STEP_MIRROR_POLICY_ENABLE",
+        bool(config.get("ordered_step_mirror_policy_enable", False)),
+    )
+    config["ordered_step_hold_last_action_enable"] = _env_bool(
+        "G1_AMP_ORDERED_STEP_HOLD_LAST_ACTION_ENABLE",
+        bool(config.get("ordered_step_hold_last_action_enable", False)),
+    )
+    config["ordered_step_hold_policy_path"] = os.environ.get(
+        "G1_AMP_ORDERED_STEP_HOLD_POLICY_PATH",
+        str(config.get("ordered_step_hold_policy_path", "")),
+    )
+    config["ordered_step_hold_blend_duration_s"] = _env_float(
+        "G1_AMP_ORDERED_STEP_HOLD_BLEND_DURATION_S",
+        float(config.get("ordered_step_hold_blend_duration_s", 1.0)),
+    )
+    config["ordered_step_transition_tolerance_m"] = _env_float(
+        "G1_AMP_ORDERED_STEP_TRANSITION_TOLERANCE_M",
+        float(config.get("ordered_step_transition_tolerance_m", 0.055)),
+    )
+    config["ordered_step_min_clearance_m"] = _env_float(
+        "G1_AMP_ORDERED_STEP_MIN_CLEARANCE_M",
+        float(config.get("ordered_step_min_clearance_m", 0.035)),
+    )
+    config["ordered_step_min_duration_s"] = _env_float(
+        "G1_AMP_ORDERED_STEP_MIN_DURATION_S",
+        float(config.get("ordered_step_min_duration_s", 0.0)),
+    )
+    config["ordered_step_action_smoothing_alpha"] = _env_float(
+        "G1_AMP_ORDERED_STEP_ACTION_SMOOTHING_ALPHA",
+        float(config.get("ordered_step_action_smoothing_alpha", 1.0)),
+    )
+    config["initial_ankle_distance_m"] = _env_float(
+        "G1_AMP_INITIAL_ANKLE_DISTANCE_M", float(config.get("initial_ankle_distance_m", 0.30))
+    )
+    config["interactive_stance_reset"] = _env_bool(
+        "G1_AMP_INTERACTIVE_STANCE_RESET", bool(config.get("interactive_stance_reset", False))
+    )
+    config["interactive_stance_distance_range_m"] = _env_yaml_list(
+        "G1_AMP_INTERACTIVE_STANCE_DISTANCE_RANGE_M",
+        list(config.get("interactive_stance_distance_range_m", [0.08, 0.48])),
+    )
+    config["interactive_stance_seed"] = _env_int(
+        "G1_AMP_INTERACTIVE_STANCE_SEED", int(config.get("interactive_stance_seed", 20260814))
+    )
+    config["position_recovery_command_enable"] = _env_bool(
+        "G1_AMP_POSITION_RECOVERY_COMMAND_ENABLE",
+        bool(config.get("position_recovery_command_enable", False)),
+    )
+    config["position_recovery_command_xy_clip_m"] = _env_float(
+        "G1_AMP_POSITION_RECOVERY_COMMAND_XY_CLIP_M",
+        float(config.get("position_recovery_command_xy_clip_m", 0.50)),
+    )
+    config["position_recovery_command_yaw_clip_rad"] = _env_float(
+        "G1_AMP_POSITION_RECOVERY_COMMAND_YAW_CLIP_RAD",
+        float(config.get("position_recovery_command_yaw_clip_rad", 0.60)),
+    )
+    config["position_recovery_command_xy_gain"] = _env_float(
+        "G1_AMP_POSITION_RECOVERY_COMMAND_XY_GAIN",
+        float(config.get("position_recovery_command_xy_gain", 2.0)),
+    )
+    config["position_recovery_command_yaw_gain"] = _env_float(
+        "G1_AMP_POSITION_RECOVERY_COMMAND_YAW_GAIN",
+        float(config.get("position_recovery_command_yaw_gain", 1.5)),
+    )
+    config["target_ankle_distance_m"] = _env_float(
+        "G1_AMP_TARGET_ANKLE_DISTANCE_M", float(config.get("target_ankle_distance_m", 0.30))
+    )
+    config["ankle_distance_tolerance_m"] = _env_float(
+        "G1_AMP_ANKLE_DISTANCE_TOLERANCE_M", float(config.get("ankle_distance_tolerance_m", 0.03))
+    )
+    config["ankle_convergence_hold_s"] = _env_float(
+        "G1_AMP_ANKLE_CONVERGENCE_HOLD_S", float(config.get("ankle_convergence_hold_s", 0.50))
+    )
+    config["recovery_settle_time_s"] = _env_float(
+        "G1_AMP_RECOVERY_SETTLE_TIME_S", float(config.get("recovery_settle_time_s", 5.0))
+    )
+    config["mujoco_push_enable"] = _env_bool(
+        "G1_AMP_MUJOCO_PUSH_ENABLE", bool(config.get("mujoco_push_enable", False))
+    )
+    config["mujoco_push_seed"] = _env_int(
+        "G1_AMP_MUJOCO_PUSH_SEED", int(config.get("mujoco_push_seed", 20260814))
+    )
+    config["mujoco_push_first_time_s"] = _env_float(
+        "G1_AMP_MUJOCO_PUSH_FIRST_TIME_S", float(config.get("mujoco_push_first_time_s", 6.0))
+    )
+    config["mujoco_push_interval_range_s"] = _env_yaml_list(
+        "G1_AMP_MUJOCO_PUSH_INTERVAL_RANGE_S", list(config.get("mujoco_push_interval_range_s", [3.0, 6.0]))
+    )
+    config["mujoco_push_duration_s"] = _env_float(
+        "G1_AMP_MUJOCO_PUSH_DURATION_S", float(config.get("mujoco_push_duration_s", 0.12))
+    )
+    config["mujoco_push_force_range_n"] = _env_yaml_list(
+        "G1_AMP_MUJOCO_PUSH_FORCE_RANGE_N", list(config.get("mujoco_push_force_range_n", [80.0, 120.0]))
+    )
+    config["mujoco_push_yaw_torque_range_nm"] = _env_yaml_list(
+        "G1_AMP_MUJOCO_PUSH_YAW_TORQUE_RANGE_NM",
+        list(config.get("mujoco_push_yaw_torque_range_nm", [-8.0, 8.0])),
     )
     config["armhack_stand_enable"] = _env_bool(
         "G1_AMP_ARMHACK_STAND_ENABLE", bool(config.get("armhack_stand_enable", False))
@@ -643,6 +831,241 @@ def make_joint_address_maps(model: mujoco.MjModel, joint_names: list[str]) -> tu
     return qpos_addresses, qvel_addresses
 
 
+def apply_initial_joint_randomization(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    joint_names: list[str],
+    qpos_addresses: dict[str, int],
+    qvel_addresses: dict[str, int],
+    config: dict,
+) -> dict:
+    if not bool(config.get("joint_random_enable", False)):
+        return {"enabled": False}
+
+    pos_noise_rad = float(config.get("joint_pos_noise_rad", 0.0))
+    vel_noise_rad_per_s = float(config.get("joint_vel_noise_rad_per_s", 0.0))
+    if pos_noise_rad < 0.0 or vel_noise_rad_per_s < 0.0:
+        raise ValueError("Joint randomization noise magnitudes must be non-negative.")
+    if pos_noise_rad == 0.0 and vel_noise_rad_per_s == 0.0:
+        return {"enabled": False}
+
+    rng = np.random.default_rng(int(config.get("joint_random_seed", 20260718)))
+    pos_noise_by_joint: dict[str, float] = {}
+    vel_noise_by_joint: dict[str, float] = {}
+    for joint_name in joint_names:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id < 0:
+            raise ValueError(f"Joint '{joint_name}' not found for randomization.")
+
+        pos_noise = float(rng.uniform(-pos_noise_rad, pos_noise_rad)) if pos_noise_rad > 0.0 else 0.0
+        qpos_address = qpos_addresses[joint_name]
+        randomized_qpos = float(data.qpos[qpos_address]) + pos_noise
+        if int(model.jnt_limited[joint_id]):
+            lower, upper = (float(value) for value in model.jnt_range[joint_id])
+            randomized_qpos = float(np.clip(randomized_qpos, lower, upper))
+            pos_noise = randomized_qpos - float(data.qpos[qpos_address])
+        data.qpos[qpos_address] = randomized_qpos
+        pos_noise_by_joint[joint_name] = pos_noise
+
+        vel_noise = float(rng.uniform(-vel_noise_rad_per_s, vel_noise_rad_per_s)) if vel_noise_rad_per_s > 0.0 else 0.0
+        data.qvel[qvel_addresses[joint_name]] = vel_noise
+        vel_noise_by_joint[joint_name] = vel_noise
+
+    return {
+        "enabled": True,
+        "seed": int(config.get("joint_random_seed", 20260718)),
+        "joint_count": len(joint_names),
+        "pos_noise_rad": pos_noise_rad,
+        "vel_noise_rad_per_s": vel_noise_rad_per_s,
+        "max_abs_applied_pos_noise_rad": float(max(abs(value) for value in pos_noise_by_joint.values())),
+        "max_abs_applied_vel_noise_rad_per_s": float(max(abs(value) for value in vel_noise_by_joint.values())),
+        "pos_noise_by_joint_rad": pos_noise_by_joint,
+        "vel_noise_by_joint_rad_per_s": vel_noise_by_joint,
+    }
+
+
+def apply_initial_foot_recovery_stance(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    qpos_addresses: dict[str, int],
+    config: dict,
+) -> dict:
+    """Set a symmetric G1 stance corresponding to a requested ankle distance."""
+    if not bool(config.get("foot_recovery_enable", False)):
+        return {"enabled": False}
+
+    requested_distance = float(config.get("initial_ankle_distance_m", 0.30))
+    if not 0.05 <= requested_distance <= 0.60:
+        raise ValueError("initial_ankle_distance_m must be within [0.05, 0.60].")
+    nominal_distance = 0.237
+    distance_per_rad = 1.22
+    roll_angle = (requested_distance - nominal_distance) / distance_per_rad
+    signed_targets = {
+        "left_hip_roll_joint": roll_angle,
+        "right_hip_roll_joint": -roll_angle,
+        "left_ankle_roll_joint": -roll_angle,
+        "right_ankle_roll_joint": roll_angle,
+    }
+    applied_targets: dict[str, float] = {}
+    for joint_name, target in signed_targets.items():
+        if joint_name not in qpos_addresses:
+            raise ValueError(f"MuJoCo foot recovery is missing joint: {joint_name}")
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id < 0:
+            raise ValueError(f"MuJoCo foot recovery is missing joint model entry: {joint_name}")
+        if int(model.jnt_limited[joint_id]):
+            target = float(np.clip(target, model.jnt_range[joint_id, 0], model.jnt_range[joint_id, 1]))
+        data.qpos[qpos_addresses[joint_name]] = target
+        applied_targets[joint_name] = float(target)
+
+    mujoco.mj_forward(model, data)
+    left_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "left_ankle_roll_link")
+    right_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "right_ankle_roll_link")
+    if left_body_id < 0 or right_body_id < 0:
+        raise ValueError("MuJoCo foot recovery requires both ankle_roll_link bodies.")
+    actual_distance = float(np.linalg.norm(data.xpos[left_body_id, :2] - data.xpos[right_body_id, :2]))
+    return {
+        "enabled": True,
+        "requested_distance_m": requested_distance,
+        "actual_distance_m": actual_distance,
+        "roll_angle_rad": float(roll_angle),
+        "joint_targets_rad": applied_targets,
+    }
+
+
+class MujocoPushScheduler:
+    """Apply deterministic, finite-duration horizontal pushes to the torso."""
+
+    def __init__(self, config: dict, torso_body_id: int):
+        self.enabled = bool(config.get("mujoco_push_enable", False))
+        self.torso_body_id = int(torso_body_id)
+        self.rng = np.random.default_rng(int(config.get("mujoco_push_seed", 20260814)))
+        self.interval_range = tuple(float(value) for value in config.get("mujoco_push_interval_range_s", [3.0, 6.0]))
+        self.force_range = tuple(float(value) for value in config.get("mujoco_push_force_range_n", [80.0, 120.0]))
+        self.yaw_torque_range = tuple(
+            float(value) for value in config.get("mujoco_push_yaw_torque_range_nm", [-8.0, 8.0])
+        )
+        self.duration_s = float(config.get("mujoco_push_duration_s", 0.12))
+        self.next_start_s = float(config.get("mujoco_push_first_time_s", 6.0))
+        self.active_until_s = -1.0
+        self.active_wrench = np.zeros(6, dtype=np.float64)
+        self.events: list[dict] = []
+        if self.interval_range[0] <= 0.0 or self.interval_range[1] < self.interval_range[0]:
+            raise ValueError("mujoco_push_interval_range_s must satisfy 0 < min <= max.")
+        if self.force_range[0] < 0.0 or self.force_range[1] < self.force_range[0]:
+            raise ValueError("mujoco_push_force_range_n must satisfy 0 <= min <= max.")
+        if self.duration_s <= 0.0:
+            raise ValueError("mujoco_push_duration_s must be positive.")
+
+    def apply(self, data: mujoco.MjData, sim_time: float) -> None:
+        data.xfrc_applied[self.torso_body_id, :] = 0.0
+        if not self.enabled:
+            return
+        if sim_time >= self.next_start_s and sim_time >= self.active_until_s:
+            direction = float(self.rng.uniform(-math.pi, math.pi))
+            magnitude = float(self.rng.uniform(self.force_range[0], self.force_range[1]))
+            yaw_torque = float(self.rng.uniform(self.yaw_torque_range[0], self.yaw_torque_range[1]))
+            self.active_wrench[:] = [
+                magnitude * math.cos(direction),
+                magnitude * math.sin(direction),
+                0.0,
+                0.0,
+                0.0,
+                yaw_torque,
+            ]
+            self.active_until_s = sim_time + self.duration_s
+            self.next_start_s = self.active_until_s + float(
+                self.rng.uniform(self.interval_range[0], self.interval_range[1])
+            )
+            self.events.append(
+                {
+                    "start_time_s": float(sim_time),
+                    "duration_s": self.duration_s,
+                    "force_w_n": [float(value) for value in self.active_wrench[:3]],
+                    "torque_w_nm": [float(value) for value in self.active_wrench[3:]],
+                }
+            )
+        if sim_time < self.active_until_s:
+            data.xfrc_applied[self.torso_body_id, :] = self.active_wrench
+
+
+def apply_non_arm_target_noise(
+    action: np.ndarray,
+    non_arm_policy_indices: np.ndarray,
+    rng: np.random.Generator,
+    config: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    noise_raw = np.zeros_like(action, dtype=np.float32)
+    if not bool(config.get("non_arm_joint_target_noise_enable", False)):
+        return action, noise_raw
+
+    noise_rad = float(config.get("non_arm_joint_target_noise_rad", 0.0))
+    if noise_rad < 0.0:
+        raise ValueError("non_arm_joint_target_noise_rad must be non-negative.")
+    if noise_rad == 0.0 or non_arm_policy_indices.size == 0:
+        return action, noise_raw
+
+    action_scale = float(config["action_scale"])
+    if action_scale <= 0.0:
+        raise ValueError("action_scale must be positive for target noise.")
+    noise_raw[non_arm_policy_indices] = (
+        rng.uniform(-noise_rad, noise_rad, size=non_arm_policy_indices.size).astype(np.float32) / action_scale
+    )
+    return (action + noise_raw).astype(np.float32), noise_raw
+
+
+def init_policy_application_metrics(policy_joint_names: list[str], non_arm_policy_indices: np.ndarray) -> dict:
+    return {
+        "sample_count": 0,
+        "non_arm_joint_names": [policy_joint_names[int(index)] for index in non_arm_policy_indices],
+        "network_non_arm_mean_abs": [],
+        "executed_non_arm_mean_abs": [],
+        "target_noise_non_arm_mean_abs": [],
+        "ctrl_non_arm_mean_abs": [],
+        "network_all_max_abs": [],
+        "executed_all_max_abs": [],
+        "first_network_action": None,
+        "first_executed_action": None,
+        "first_target_noise_raw": None,
+        "first_ctrl_by_policy_order": None,
+    }
+
+
+def record_policy_application(
+    metrics: dict,
+    data: mujoco.MjData,
+    actuator_ids_by_joint: dict[str, int],
+    policy_joint_names: list[str],
+    non_arm_policy_indices: np.ndarray,
+    network_action: np.ndarray,
+    executed_action: np.ndarray,
+    target_noise_raw: np.ndarray,
+) -> None:
+    policy_metrics = metrics.setdefault(
+        "policy_application", init_policy_application_metrics(policy_joint_names, non_arm_policy_indices)
+    )
+    ctrl_by_policy_order = np.asarray(
+        [float(data.ctrl[actuator_ids_by_joint[joint_name]]) for joint_name in policy_joint_names], dtype=np.float32
+    )
+    non_arm_network = network_action[non_arm_policy_indices]
+    non_arm_executed = executed_action[non_arm_policy_indices]
+    non_arm_noise = target_noise_raw[non_arm_policy_indices]
+    non_arm_ctrl = ctrl_by_policy_order[non_arm_policy_indices]
+
+    policy_metrics["sample_count"] += 1
+    policy_metrics["network_non_arm_mean_abs"].append(float(np.mean(np.abs(non_arm_network))))
+    policy_metrics["executed_non_arm_mean_abs"].append(float(np.mean(np.abs(non_arm_executed))))
+    policy_metrics["target_noise_non_arm_mean_abs"].append(float(np.mean(np.abs(non_arm_noise))))
+    policy_metrics["ctrl_non_arm_mean_abs"].append(float(np.mean(np.abs(non_arm_ctrl))))
+    policy_metrics["network_all_max_abs"].append(float(np.max(np.abs(network_action))))
+    policy_metrics["executed_all_max_abs"].append(float(np.max(np.abs(executed_action))))
+    if policy_metrics["first_network_action"] is None:
+        policy_metrics["first_network_action"] = [float(value) for value in network_action]
+        policy_metrics["first_executed_action"] = [float(value) for value in executed_action]
+        policy_metrics["first_target_noise_raw"] = [float(value) for value in target_noise_raw]
+        policy_metrics["first_ctrl_by_policy_order"] = [float(value) for value in ctrl_by_policy_order]
+
+
 def make_actuator_id_map(model: mujoco.MjModel, joint_names: list[str]) -> dict[str, int]:
     actuator_ids: dict[str, int] = {}
     requested_joint_names = set(joint_names)
@@ -716,7 +1139,37 @@ def contact_force_with_floor(model: mujoco.MjModel, data: mujoco.MjData, floor_g
     return total_force, foot_contact_count
 
 
-def init_rollout_metrics(data: mujoco.MjData, torso_body_id: int, config: dict) -> dict:
+def foot_bodies_in_contact_with_floor(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    floor_geom_ids: set[int],
+    foot_body_ids: set[int],
+) -> set[int]:
+    """Return foot body IDs that currently have at least one floor contact."""
+    contact_body_ids: set[int] = set()
+    for contact_id in range(data.ncon):
+        contact = data.contact[contact_id]
+        geom1 = int(contact.geom1)
+        geom2 = int(contact.geom2)
+        if geom1 in floor_geom_ids:
+            other_geom = geom2
+        elif geom2 in floor_geom_ids:
+            other_geom = geom1
+        else:
+            continue
+        other_body = int(model.geom_bodyid[other_geom])
+        if other_body in foot_body_ids:
+            contact_body_ids.add(other_body)
+    return contact_body_ids
+
+
+def init_rollout_metrics(
+    data: mujoco.MjData,
+    torso_body_id: int,
+    pelvis_body_id: int,
+    ankle_body_ids: tuple[int, int],
+    config: dict,
+) -> dict:
     torso_pos_w = data.xpos[torso_body_id].copy().astype(np.float32)
     torso_quat_w = data.xquat[torso_body_id].copy().astype(np.float32)
     _, _, initial_yaw = quat_to_roll_pitch_yaw(data.qpos[3:7].copy())
@@ -726,6 +1179,13 @@ def init_rollout_metrics(data: mujoco.MjData, torso_body_id: int, config: dict) 
         [float(torso_trace_point_w[0]), float(torso_trace_point_w[1]), float(config.get("task_trace_height", 0.05))],
         dtype=np.float32,
     )
+    pelvis_pos_w = data.xpos[pelvis_body_id].copy().astype(np.float64)
+    _, _, pelvis_yaw = quat_to_roll_pitch_yaw(data.xquat[pelvis_body_id].copy())
+    lateral_axis_xy = np.asarray([-math.sin(pelvis_yaw), math.cos(pelvis_yaw)], dtype=np.float64)
+    ordered_targets_xy = np.stack(
+        [pelvis_pos_w[:2] + 0.15 * lateral_axis_xy, pelvis_pos_w[:2] - 0.15 * lateral_axis_xy]
+    )
+    initial_ankle_z = np.asarray([data.xpos[body_id, 2] for body_id in ankle_body_ids], dtype=np.float64)
     return {
         "root_heights": [],
         "torso_heights": [],
@@ -780,6 +1240,37 @@ def init_rollout_metrics(data: mujoco.MjData, torso_body_id: int, config: dict) 
             "command": [],
         },
         "step_count": 0,
+        "initial_torso_pos_w": torso_pos_w.copy(),
+        "initial_torso_yaw_rad": float(initial_yaw),
+        "foot_recovery_time_s": [],
+        "ankle_distance_m": [],
+        "ankle_distance_error_m": [],
+        "torso_xy_displacement_m": [],
+        "torso_yaw_error_rad": [],
+        "ankle_torque_nm": [],
+        "lower_body_joint_names": [],
+        "lower_body_joint_vel_rad_s": [],
+        "lower_body_joint_acc_rad_s2": [],
+        "prev_lower_body_joint_vel_rad_s": None,
+        "foot_ground_force_n": [],
+        "foot_ground_force_rate_n_per_s": [],
+        "prev_foot_ground_force_n": None,
+        "ordered_foot_steps": {
+            "pelvis_reference_xy_m": pelvis_pos_w[:2].tolist(),
+            "pelvis_reference_yaw_rad": float(pelvis_yaw),
+            "target_xy_m": ordered_targets_xy.tolist(),
+            "initial_ankle_z_m": initial_ankle_z.tolist(),
+            "max_clearance_m": [0.0, 0.0],
+            "left_lifted": False,
+            "right_lifted": False,
+            "left_airborne_after_lift": False,
+            "right_airborne_after_lift": False,
+            "phase_start_time_s": 0.0,
+            "left_completion_time_s": None,
+            "right_completion_time_s": None,
+            "right_lifted_before_left": False,
+            "final_target_error_m": [0.0, 0.0],
+        },
     }
 
 
@@ -826,11 +1317,12 @@ def update_rollout_metrics(
     floor_geom_ids: set[int],
     foot_body_ids: set[int],
     torso_body_id: int,
+    ankle_body_ids: tuple[int, int],
+    ankle_actuator_ids: tuple[int, int, int, int],
     config: dict,
     sim_time: float,
     segment_id: int,
 ) -> None:
-    del qvel_addresses, policy_joint_names
     dt = float(model.opt.timestep)
     torso_pos_w = data.xpos[torso_body_id].copy().astype(np.float32)
     torso_quat_w = data.xquat[torso_body_id].copy().astype(np.float32)
@@ -871,6 +1363,47 @@ def update_rollout_metrics(
     metrics["command_samples"].append([float(command[0]), float(command[1]), float(command[2])])
     metrics["segment_ids"].append(int(segment_id))
 
+    ankle_distance = float(
+        np.linalg.norm(data.xpos[ankle_body_ids[0], :2] - data.xpos[ankle_body_ids[1], :2])
+    )
+    target_ankle_distance = float(config.get("target_ankle_distance_m", 0.30))
+    metrics["foot_recovery_time_s"].append(float(sim_time))
+    metrics["ankle_distance_m"].append(ankle_distance)
+    metrics["ankle_distance_error_m"].append(abs(ankle_distance - target_ankle_distance))
+    metrics["torso_xy_displacement_m"].append(
+        float(np.linalg.norm(torso_pos_w[:2] - metrics["initial_torso_pos_w"][:2]))
+    )
+    metrics["torso_yaw_error_rad"].append(
+        abs(
+            math.atan2(
+                math.sin(float(yaw - metrics["initial_torso_yaw_rad"])),
+                math.cos(float(yaw - metrics["initial_torso_yaw_rad"])),
+            )
+        )
+    )
+    metrics["ankle_torque_nm"].append(
+        [float(data.actuator_force[actuator_id]) for actuator_id in ankle_actuator_ids]
+    )
+
+    lower_body_joint_names = metrics["lower_body_joint_names"]
+    if not lower_body_joint_names:
+        lower_body_joint_names.extend(
+            name
+            for name in policy_joint_names
+            if any(token in name for token in ("hip_", "knee_", "ankle_"))
+        )
+    lower_body_joint_vel = np.asarray(
+        [float(data.qvel[qvel_addresses[name]]) for name in lower_body_joint_names], dtype=np.float64
+    )
+    prev_lower_body_joint_vel = metrics["prev_lower_body_joint_vel_rad_s"]
+    if prev_lower_body_joint_vel is None:
+        lower_body_joint_acc = np.zeros_like(lower_body_joint_vel)
+    else:
+        lower_body_joint_acc = (lower_body_joint_vel - prev_lower_body_joint_vel) / dt
+    metrics["lower_body_joint_vel_rad_s"].append(lower_body_joint_vel.tolist())
+    metrics["lower_body_joint_acc_rad_s2"].append(lower_body_joint_acc.tolist())
+    metrics["prev_lower_body_joint_vel_rad_s"] = lower_body_joint_vel
+
     if (
         not metrics["fallen"]
         and (root_height < float(config["healthy_min_root_height"]) or abs(roll) > float(config["healthy_max_roll_pitch"]) or abs(pitch) > float(config["healthy_max_roll_pitch"]))
@@ -889,7 +1422,69 @@ def update_rollout_metrics(
     metrics["forward_path"] += abs(float(np.dot(torso_delta_xy, task_forward_xy)))
     metrics["lateral_path"] += abs(float(np.dot(torso_delta_xy, task_lateral_xy)))
 
-    _, foot_contact_count = contact_force_with_floor(model, data, floor_geom_ids, foot_body_ids)
+    foot_ground_force, foot_contact_count = contact_force_with_floor(
+        model, data, floor_geom_ids, foot_body_ids
+    )
+    contacted_foot_body_ids = foot_bodies_in_contact_with_floor(
+        model, data, floor_geom_ids, foot_body_ids
+    )
+    prev_foot_ground_force = metrics["prev_foot_ground_force_n"]
+    foot_ground_force_rate = (
+        0.0
+        if prev_foot_ground_force is None
+        else abs(float(foot_ground_force) - float(prev_foot_ground_force)) / dt
+    )
+    metrics["foot_ground_force_n"].append(float(foot_ground_force))
+    metrics["foot_ground_force_rate_n_per_s"].append(float(foot_ground_force_rate))
+    metrics["prev_foot_ground_force_n"] = float(foot_ground_force)
+    ordered_steps = metrics["ordered_foot_steps"]
+    ordered_targets_xy = np.asarray(ordered_steps["target_xy_m"], dtype=np.float64)
+    initial_ankle_z = np.asarray(ordered_steps["initial_ankle_z_m"], dtype=np.float64)
+    ankle_xy = np.stack([data.xpos[body_id, :2] for body_id in ankle_body_ids])
+    ankle_z = np.asarray([data.xpos[body_id, 2] for body_id in ankle_body_ids], dtype=np.float64)
+    clearance = ankle_z - initial_ankle_z
+    target_error = np.linalg.norm(ankle_xy - ordered_targets_xy, axis=1)
+    ordered_steps["max_clearance_m"] = [
+        max(float(ordered_steps["max_clearance_m"][index]), float(clearance[index])) for index in range(2)
+    ]
+    min_clearance_m = float(config.get("ordered_step_min_clearance_m", 0.035))
+    min_duration_s = float(config.get("ordered_step_min_duration_s", 0.0))
+    if min_clearance_m <= 0.0:
+        raise ValueError("ordered_step_min_clearance_m must be positive.")
+    if min_duration_s < 0.0:
+        raise ValueError("ordered_step_min_duration_s must be non-negative.")
+    if float(clearance[0]) >= min_clearance_m:
+        ordered_steps["left_lifted"] = True
+    if ordered_steps["left_completion_time_s"] is None:
+        if ordered_steps["left_lifted"] and ankle_body_ids[0] not in contacted_foot_body_ids:
+            ordered_steps["left_airborne_after_lift"] = True
+        if float(clearance[1]) >= min_clearance_m:
+            ordered_steps["right_lifted_before_left"] = True
+        if (
+            ordered_steps["left_lifted"]
+            and ordered_steps["left_airborne_after_lift"]
+            and float(target_error[0]) <= float(config.get("ordered_step_transition_tolerance_m", 0.055))
+            and ankle_body_ids[0] in contacted_foot_body_ids
+            and float(sim_time - ordered_steps["phase_start_time_s"]) >= min_duration_s
+        ):
+            ordered_steps["left_completion_time_s"] = float(sim_time)
+            ordered_steps["right_lifted"] = False
+            ordered_steps["right_airborne_after_lift"] = False
+            ordered_steps["phase_start_time_s"] = float(sim_time)
+    elif ordered_steps["right_completion_time_s"] is None:
+        if float(clearance[1]) >= min_clearance_m:
+            ordered_steps["right_lifted"] = True
+        if ordered_steps["right_lifted"] and ankle_body_ids[1] not in contacted_foot_body_ids:
+            ordered_steps["right_airborne_after_lift"] = True
+        if (
+            ordered_steps["right_lifted"]
+            and ordered_steps["right_airborne_after_lift"]
+            and float(target_error[1]) <= float(config.get("ordered_step_transition_tolerance_m", 0.055))
+            and ankle_body_ids[1] in contacted_foot_body_ids
+            and float(sim_time - ordered_steps["phase_start_time_s"]) >= min_duration_s
+        ):
+            ordered_steps["right_completion_time_s"] = float(sim_time)
+    ordered_steps["final_target_error_m"] = [float(value) for value in target_error]
     if foot_contact_count > 0:
         metrics["foot_contact_steps"] += 1
     update_early_motion_metrics(
@@ -1064,7 +1659,196 @@ def score_rollout(health: dict, tracking: dict, important_metrics: dict, sim_tim
     }
 
 
+def summarize_foot_recovery(metrics: dict, config: dict) -> dict:
+    times = np.asarray(metrics.get("foot_recovery_time_s", []), dtype=np.float64)
+    distances = np.asarray(metrics.get("ankle_distance_m", []), dtype=np.float64)
+    errors = np.asarray(metrics.get("ankle_distance_error_m", []), dtype=np.float64)
+    torso_xy = np.asarray(metrics.get("torso_xy_displacement_m", []), dtype=np.float64)
+    torso_yaw = np.asarray(metrics.get("torso_yaw_error_rad", []), dtype=np.float64)
+    torques = np.asarray(metrics.get("ankle_torque_nm", []), dtype=np.float64)
+    lower_body_joint_vel = np.asarray(metrics.get("lower_body_joint_vel_rad_s", []), dtype=np.float64)
+    lower_body_joint_acc = np.asarray(metrics.get("lower_body_joint_acc_rad_s2", []), dtype=np.float64)
+    foot_ground_force = np.asarray(metrics.get("foot_ground_force_n", []), dtype=np.float64)
+    foot_ground_force_rate = np.asarray(metrics.get("foot_ground_force_rate_n_per_s", []), dtype=np.float64)
+    enabled = bool(config.get("foot_recovery_enable", False))
+    if times.size == 0:
+        return {"enabled": enabled, "sample_count": 0, "passed": False}
+
+    tolerance = float(config.get("ankle_distance_tolerance_m", 0.03))
+    hold_s = float(config.get("ankle_convergence_hold_s", 0.50))
+    settle_s = float(config.get("recovery_settle_time_s", 5.0))
+    dt = float(config.get("simulation_dt", 0.002))
+    hold_steps = max(int(math.ceil(hold_s / max(dt, 1.0e-9))), 1)
+    within = errors <= tolerance
+    convergence_time = None
+    if hold_steps <= within.size:
+        consecutive = np.convolve(within.astype(np.int32), np.ones(hold_steps, dtype=np.int32), mode="valid")
+        indices = np.flatnonzero(consecutive == hold_steps)
+        if indices.size:
+            convergence_time = float(times[int(indices[0])])
+
+    settled_mask = times >= settle_s
+    if not np.any(settled_mask):
+        settled_mask = np.ones_like(times, dtype=bool)
+    torque_abs = np.abs(torques) if torques.size else np.zeros((1, 4), dtype=np.float64)
+    smoothness_window_s = float(config.get("recovery_smoothness_window_s", 2.0))
+    smoothness_mask = times <= smoothness_window_s
+    if not np.any(smoothness_mask):
+        smoothness_mask = np.ones_like(times, dtype=bool)
+    smooth_vel = lower_body_joint_vel[smoothness_mask]
+    smooth_acc = lower_body_joint_acc[smoothness_mask]
+    smooth_force = foot_ground_force[smoothness_mask]
+    smooth_force_rate = foot_ground_force_rate[smoothness_mask]
+    ankle_distance_velocity = np.gradient(distances, times) if times.size > 1 else np.zeros_like(times)
+    ankle_distance_acceleration = (
+        np.gradient(ankle_distance_velocity, times) if times.size > 2 else np.zeros_like(times)
+    )
+    smooth_times = times[smoothness_mask]
+    velocity_peak_sample, velocity_peak_joint = np.unravel_index(
+        np.argmax(np.abs(smooth_vel)), smooth_vel.shape
+    )
+    acceleration_peak_sample, acceleration_peak_joint = np.unravel_index(
+        np.argmax(np.abs(smooth_acc)), smooth_acc.shape
+    )
+    velocity_peak_sample = int(velocity_peak_sample)
+    velocity_peak_joint = int(velocity_peak_joint)
+    acceleration_peak_sample = int(acceleration_peak_sample)
+    acceleration_peak_joint = int(acceleration_peak_joint)
+    ankle_speed_peak_sample = int(np.argmax(np.abs(ankle_distance_velocity[smoothness_mask])))
+    force_peak_sample = int(np.argmax(smooth_force))
+    max_torso_xy = float(np.max(torso_xy))
+    max_torso_yaw = float(np.max(torso_yaw))
+    settled_error = float(np.mean(errors[settled_mask]))
+    passed = bool(
+        enabled
+        and convergence_time is not None
+        and settled_error <= tolerance
+        and max_torso_xy <= float(config.get("foot_recovery_max_torso_xy_m", 0.30))
+        and max_torso_yaw <= float(config.get("foot_recovery_max_torso_yaw_rad", 0.35))
+    )
+    return {
+        "enabled": enabled,
+        "sample_count": int(times.size),
+        "target_distance_m": float(config.get("target_ankle_distance_m", 0.30)),
+        "tolerance_m": tolerance,
+        "initial_distance_m": float(distances[0]),
+        "final_distance_m": float(distances[-1]),
+        "final_abs_error_m": float(errors[-1]),
+        "mean_abs_error_m": float(np.mean(errors)),
+        "settled_mean_abs_error_m": settled_error,
+        "within_tolerance_fraction": float(np.mean(within)),
+        "convergence_hold_s": hold_s,
+        "convergence_time_s": convergence_time,
+        "torso_xy_displacement_final_m": float(torso_xy[-1]),
+        "torso_xy_displacement_max_m": max_torso_xy,
+        "torso_yaw_error_final_rad": float(torso_yaw[-1]),
+        "torso_yaw_error_max_rad": max_torso_yaw,
+        "ankle_torque_mean_abs_nm": float(np.mean(torque_abs)),
+        "ankle_torque_rms_nm": float(np.sqrt(np.mean(np.square(torques)))) if torques.size else 0.0,
+        "ankle_torque_max_abs_nm": float(np.max(torque_abs)),
+        "smoothness_window_s": smoothness_window_s,
+        "lower_body_joint_names": list(metrics.get("lower_body_joint_names", [])),
+        "lower_body_joint_velocity_mean_abs_rad_per_s": float(np.mean(np.abs(smooth_vel))),
+        "lower_body_joint_velocity_rms_rad_per_s": float(np.sqrt(np.mean(np.square(smooth_vel)))),
+        "lower_body_joint_velocity_p95_abs_rad_per_s": float(np.percentile(np.abs(smooth_vel), 95.0)),
+        "lower_body_joint_velocity_max_abs_rad_per_s": float(np.max(np.abs(smooth_vel))),
+        "lower_body_joint_velocity_peak_time_s": float(smooth_times[velocity_peak_sample]),
+        "lower_body_joint_velocity_peak_joint": metrics["lower_body_joint_names"][velocity_peak_joint],
+        "lower_body_joint_acceleration_mean_abs_rad_per_s2": float(np.mean(np.abs(smooth_acc))),
+        "lower_body_joint_acceleration_rms_rad_per_s2": float(np.sqrt(np.mean(np.square(smooth_acc)))),
+        "lower_body_joint_acceleration_p95_abs_rad_per_s2": float(np.percentile(np.abs(smooth_acc), 95.0)),
+        "lower_body_joint_acceleration_max_abs_rad_per_s2": float(np.max(np.abs(smooth_acc))),
+        "lower_body_joint_acceleration_peak_time_s": float(smooth_times[acceleration_peak_sample]),
+        "lower_body_joint_acceleration_peak_joint": metrics["lower_body_joint_names"][acceleration_peak_joint],
+        "ankle_distance_velocity_max_abs_m_per_s": float(np.max(np.abs(ankle_distance_velocity[smoothness_mask]))),
+        "ankle_distance_velocity_peak_time_s": float(smooth_times[ankle_speed_peak_sample]),
+        "ankle_distance_acceleration_max_abs_m_per_s2": float(np.max(np.abs(ankle_distance_acceleration[smoothness_mask]))),
+        "foot_ground_force_mean_n": float(np.mean(smooth_force)),
+        "foot_ground_force_rms_n": float(np.sqrt(np.mean(np.square(smooth_force)))),
+        "foot_ground_force_p95_n": float(np.percentile(smooth_force, 95.0)),
+        "foot_ground_force_max_n": float(np.max(smooth_force)),
+        "foot_ground_force_peak_time_s": float(smooth_times[force_peak_sample]),
+        "foot_ground_force_rate_p95_n_per_s": float(np.percentile(smooth_force_rate, 95.0)),
+        "foot_ground_force_rate_max_n_per_s": float(np.max(smooth_force_rate)),
+        "passed": passed,
+    }
+
+
+def summarize_ordered_step_dynamics(metrics: dict) -> dict[str, dict[str, float]]:
+    """Report impact and torso motion separately for each commanded step."""
+    times = np.asarray(metrics.get("foot_recovery_time_s", []), dtype=np.float64)
+    if times.size == 0:
+        return {}
+    torso_xy = np.asarray(metrics.get("torso_xy_displacement_m", []), dtype=np.float64)
+    torques = np.asarray(metrics.get("ankle_torque_nm", []), dtype=np.float64)
+    joint_vel = np.asarray(metrics.get("lower_body_joint_vel_rad_s", []), dtype=np.float64)
+    joint_acc = np.asarray(metrics.get("lower_body_joint_acc_rad_s2", []), dtype=np.float64)
+    foot_force = np.asarray(metrics.get("foot_ground_force_n", []), dtype=np.float64)
+    ordered = metrics.get("ordered_foot_steps", {})
+    left_end = ordered.get("left_completion_time_s")
+    right_end = ordered.get("right_completion_time_s")
+
+    def summarize_window(mask: np.ndarray, start_s: float, end_s: float) -> dict[str, float]:
+        if not np.any(mask):
+            return {}
+        window_torso = torso_xy[mask]
+        window_torque = torques[mask]
+        window_vel = joint_vel[mask]
+        window_acc = joint_acc[mask]
+        window_force = foot_force[mask]
+        return {
+            "start_time_s": float(start_s),
+            "end_time_s": float(end_s),
+            "duration_s": float(max(end_s - start_s, 0.0)),
+            "torso_xy_displacement_end_m": float(window_torso[-1]),
+            "torso_xy_displacement_max_m": float(np.max(window_torso)),
+            "lower_body_joint_velocity_p95_abs_rad_per_s": float(
+                np.percentile(np.abs(window_vel), 95.0)
+            ),
+            "lower_body_joint_velocity_max_abs_rad_per_s": float(np.max(np.abs(window_vel))),
+            "lower_body_joint_acceleration_p95_abs_rad_per_s2": float(
+                np.percentile(np.abs(window_acc), 95.0)
+            ),
+            "lower_body_joint_acceleration_max_abs_rad_per_s2": float(np.max(np.abs(window_acc))),
+            "foot_ground_force_p95_n": float(np.percentile(window_force, 95.0)),
+            "foot_ground_force_max_n": float(np.max(window_force)),
+            "ankle_torque_rms_nm": float(np.sqrt(np.mean(np.square(window_torque)))),
+            "ankle_torque_max_abs_nm": float(np.max(np.abs(window_torque))),
+        }
+
+    result: dict[str, dict[str, float]] = {}
+    if left_end is not None:
+        left_end = float(left_end)
+        result["left_step"] = summarize_window(times <= left_end, 0.0, left_end)
+    if left_end is not None and right_end is not None:
+        right_end = float(right_end)
+        result["right_step"] = summarize_window(
+            (times > float(left_end)) & (times <= right_end), float(left_end), right_end
+        )
+        result["two_step_transition"] = summarize_window(times <= right_end, 0.0, right_end)
+    return result
+
+
 def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarray, config: dict) -> dict:
+    policy_application_metrics = metrics.get("policy_application", {})
+    policy_application = {
+        "sample_count": int(policy_application_metrics.get("sample_count", 0)),
+        "non_arm_joint_names": list(policy_application_metrics.get("non_arm_joint_names", [])),
+        "network_non_arm_mean_abs": _safe_mean(policy_application_metrics.get("network_non_arm_mean_abs", [])),
+        "executed_non_arm_mean_abs": _safe_mean(policy_application_metrics.get("executed_non_arm_mean_abs", [])),
+        "target_noise_non_arm_mean_abs": _safe_mean(
+            policy_application_metrics.get("target_noise_non_arm_mean_abs", [])
+        ),
+        "ctrl_non_arm_mean_abs": _safe_mean(policy_application_metrics.get("ctrl_non_arm_mean_abs", [])),
+        "network_all_max_abs": _safe_max(policy_application_metrics.get("network_all_max_abs", [])),
+        "executed_all_max_abs": _safe_max(policy_application_metrics.get("executed_all_max_abs", [])),
+        "first_network_action": policy_application_metrics.get("first_network_action"),
+        "first_executed_action": policy_application_metrics.get("first_executed_action"),
+        "first_target_noise_raw": policy_application_metrics.get("first_target_noise_raw"),
+        "first_ctrl_by_policy_order": policy_application_metrics.get("first_ctrl_by_policy_order"),
+        "non_arm_target_noise_enabled": bool(config.get("non_arm_joint_target_noise_enable", False)),
+        "non_arm_target_noise_rad": float(config.get("non_arm_joint_target_noise_rad", 0.0)),
+    }
     important_metrics = {
         "torso_roll_error_rad": _safe_mean(metrics["roll_abs"]),
         "torso_pitch_error_rad": _safe_mean(metrics["pitch_abs"]),
@@ -1133,6 +1917,23 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
         }
     )
     score = score_rollout(health, task_tracking, important_metrics, sim_time)
+    ordered_foot_steps = dict(metrics["ordered_foot_steps"])
+    ordered_foot_steps["target_offset_m"] = 0.15
+    ordered_foot_steps["min_clearance_m"] = float(config.get("ordered_step_min_clearance_m", 0.035))
+    ordered_foot_steps["landing_tolerance_m"] = float(
+        config.get("ordered_step_transition_tolerance_m", 0.055)
+    )
+    ordered_foot_steps["final_target_tolerance_m"] = 0.035
+    ordered_foot_steps["left_completed"] = ordered_foot_steps["left_completion_time_s"] is not None
+    ordered_foot_steps["right_completed"] = ordered_foot_steps["right_completion_time_s"] is not None
+    ordered_foot_steps["order_valid"] = not bool(ordered_foot_steps["right_lifted_before_left"])
+    ordered_foot_steps["passed"] = bool(
+        ordered_foot_steps["left_completed"]
+        and ordered_foot_steps["right_completed"]
+        and ordered_foot_steps["order_valid"]
+        and max(ordered_foot_steps["final_target_error_m"]) <= 0.035
+    )
+    ordered_foot_steps["transition_dynamics"] = summarize_ordered_step_dynamics(metrics)
     return {
         "sim_time": float(sim_time),
         "task_tracking": task_tracking,
@@ -1164,6 +1965,9 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
             "ranges": config.get("joystick_ranges", {}),
             "deadzone": float(config.get("joystick_deadzone", 0.05)),
         },
+        "policy_application": policy_application,
+        "foot_recovery": summarize_foot_recovery(metrics, config),
+        "ordered_foot_steps": ordered_foot_steps,
         "scene": config.get("_scene_report", {}),
     }
 
@@ -1229,6 +2033,71 @@ def print_rollout_report(report: dict) -> None:
             "[METRIC] MuJoCo task trace: enabled={enabled} samples={sample_count} "
             "path_length_m={path_length_m:.3f} height_m={height_m:.3f} csv={csv_path}".format(**trace)
         )
+    if report.get("policy_application"):
+        policy_application = report["policy_application"]
+        print("[METRIC] MuJoCo policy application:")
+        print(
+            "  samples={sample_count} network_nonarm_abs={network_non_arm_mean_abs:.4f} "
+            "executed_nonarm_abs={executed_non_arm_mean_abs:.4f} noise_nonarm_abs={target_noise_non_arm_mean_abs:.4f} "
+            "ctrl_nonarm_abs={ctrl_non_arm_mean_abs:.4f}".format(**policy_application)
+        )
+    if report.get("foot_recovery", {}).get("enabled", False):
+        recovery = report["foot_recovery"]
+        print("[METRIC] MuJoCo foot recovery:")
+        print(
+            "  initial={initial_distance_m:.3f}m target={target_distance_m:.3f}m "
+            "final={final_distance_m:.3f}m settled_error={settled_mean_abs_error_m:.3f}m "
+            "convergence={convergence_time_s} passed={passed}".format(**recovery)
+        )
+        print(
+            "  torso_xy_max={torso_xy_displacement_max_m:.3f}m torso_yaw_max={torso_yaw_error_max_rad:.3f}rad "
+            "ankle_torque_mean_abs={ankle_torque_mean_abs_nm:.3f}Nm "
+            "ankle_torque_max_abs={ankle_torque_max_abs_nm:.3f}Nm".format(**recovery)
+        )
+        print(
+            "  smooth[{smoothness_window_s:.1f}s] lower_qvel_mean={lower_body_joint_velocity_mean_abs_rad_per_s:.3f} "
+            "max={lower_body_joint_velocity_max_abs_rad_per_s:.3f}rad/s@"
+            "{lower_body_joint_velocity_peak_time_s:.3f}s({lower_body_joint_velocity_peak_joint}) lower_qacc_p95="
+            "{lower_body_joint_acceleration_p95_abs_rad_per_s2:.1f} max="
+            "{lower_body_joint_acceleration_max_abs_rad_per_s2:.1f}rad/s2@"
+            "{lower_body_joint_acceleration_peak_time_s:.3f}s({lower_body_joint_acceleration_peak_joint})".format(
+                **recovery
+            )
+        )
+        print(
+            "  ankle_speed_max={ankle_distance_velocity_max_abs_m_per_s:.3f}m/s@"
+            "{ankle_distance_velocity_peak_time_s:.3f}s "
+            "foot_force_mean={foot_ground_force_mean_n:.1f} p95={foot_ground_force_p95_n:.1f} "
+            "max={foot_ground_force_max_n:.1f}N@{foot_ground_force_peak_time_s:.3f}s force_rate_p95="
+            "{foot_ground_force_rate_p95_n_per_s:.1f}N/s".format(**recovery)
+        )
+    if report.get("ordered_foot_steps"):
+        ordered = report["ordered_foot_steps"]
+        print("[METRIC] MuJoCo ordered foot steps:")
+        print(
+            "  left_done={left_completed} t_left={left_completion_time_s} "
+            "right_done={right_completed} t_right={right_completion_time_s} "
+            "order_valid={order_valid} passed={passed}".format(**ordered)
+        )
+        print(
+            "  clearance_left={left:.3f}m clearance_right={right:.3f}m "
+            "target_error_left={err_left:.3f}m target_error_right={err_right:.3f}m".format(
+                left=float(ordered["max_clearance_m"][0]),
+                right=float(ordered["max_clearance_m"][1]),
+                err_left=float(ordered["final_target_error_m"][0]),
+                err_right=float(ordered["final_target_error_m"][1]),
+            )
+        )
+        transition = ordered.get("transition_dynamics", {}).get("two_step_transition", {})
+        if transition:
+            print(
+                "  two_step[{duration_s:.3f}s] torso_end={torso_xy_displacement_end_m:.3f}m "
+                "qvel_p95={lower_body_joint_velocity_p95_abs_rad_per_s:.2f}rad/s "
+                "qacc_p95={lower_body_joint_acceleration_p95_abs_rad_per_s2:.1f}rad/s2 "
+                "force_max={foot_ground_force_max_n:.1f}N ankle_tau_rms={ankle_torque_rms_nm:.2f}Nm".format(
+                    **transition
+                )
+            )
     print("[METRIC] MuJoCo score:")
     print(
         "  total={total_score:.1f} health={health_score:.1f} tracking={tracking_score:.1f} "
@@ -1362,6 +2231,34 @@ def build_observation(
     obs[9 + num_actions : 9 + 2 * num_actions] = joint_vel * float(config["dof_vel_scale"])
     obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
     return obs
+
+
+def mirror_g1_joint_vector_left_right(values: np.ndarray) -> np.ndarray:
+    """Apply the G1 29-DoF left/right reflection used by Isaac training."""
+    mirrored = np.zeros_like(values)
+    left = np.asarray([0, 3, 6, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27], dtype=np.int64)
+    right = np.asarray([1, 4, 7, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28], dtype=np.int64)
+    mirrored[left] = values[right]
+    mirrored[right] = values[left]
+    mirrored[[2, 5, 8]] = values[[2, 5, 8]]
+    mirrored[[3, 4, 15, 16, 17, 18, 23, 24]] *= -1.0
+    mirrored[[6, 7, 19, 20, 27, 28]] *= -1.0
+    mirrored[[2, 5]] *= -1.0
+    return mirrored
+
+
+def mirror_g1_policy_observation_left_right(obs: np.ndarray) -> np.ndarray:
+    """Mirror a 96-D G1 policy observation without changing its schema."""
+    if obs.shape != (96,):
+        raise ValueError(f"Expected a 96-D G1 observation, got shape {obs.shape}.")
+    mirrored = obs.copy()
+    mirrored[0:3] *= np.asarray([-1.0, 1.0, -1.0], dtype=np.float32)
+    mirrored[3:6] *= np.asarray([1.0, -1.0, 1.0], dtype=np.float32)
+    mirrored[6:9] *= np.asarray([1.0, -1.0, -1.0], dtype=np.float32)
+    mirrored[9:38] = mirror_g1_joint_vector_left_right(obs[9:38])
+    mirrored[38:67] = mirror_g1_joint_vector_left_right(obs[38:67])
+    mirrored[67:96] = mirror_g1_joint_vector_left_right(obs[67:96])
+    return mirrored
 
 
 def apply_pd_control(
@@ -1684,6 +2581,34 @@ def smooth_command(current_command: np.ndarray, target_command: np.ndarray, dt: 
     return (current_command + delta).astype(np.float32)
 
 
+def reset_pose_recovery_command(
+    data: mujoco.MjData,
+    reference_xy_w: np.ndarray,
+    reference_yaw_w: float,
+    config: dict,
+) -> np.ndarray:
+    """Return reset-relative [dx_b, dy_b, dyaw] with Isaac command semantics."""
+    _, _, current_yaw = quat_to_roll_pitch_yaw(data.qpos[3:7].copy())
+    delta_w = np.asarray(reference_xy_w, dtype=np.float64) - data.qpos[:2]
+    cos_yaw = math.cos(current_yaw)
+    sin_yaw = math.sin(current_yaw)
+    command = np.asarray(
+        [
+            cos_yaw * delta_w[0] + sin_yaw * delta_w[1],
+            -sin_yaw * delta_w[0] + cos_yaw * delta_w[1],
+            (float(reference_yaw_w) - current_yaw + math.pi) % (2.0 * math.pi) - math.pi,
+        ],
+        dtype=np.float32,
+    )
+    command[:2] *= float(config.get("position_recovery_command_xy_gain", 2.0))
+    command[2] *= float(config.get("position_recovery_command_yaw_gain", 1.5))
+    xy_clip = max(float(config.get("position_recovery_command_xy_clip_m", 0.50)), 0.0)
+    yaw_clip = max(float(config.get("position_recovery_command_yaw_clip_rad", 0.60)), 0.0)
+    command[:2] = np.clip(command[:2], -xy_clip, xy_clip)
+    command[2] = np.clip(command[2], -yaw_clip, yaw_clip)
+    return command
+
+
 def run_mujoco(config: dict) -> None:
     policy_joint_names = list(config["policy_joint_names"])
     actuator_joint_names = list(config["actuator_joint_names"])
@@ -1700,10 +2625,14 @@ def run_mujoco(config: dict) -> None:
     )
     if armhack_stand is not None:
         if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
-            raise ValueError("ArmHack Stand MuJoCo replay requires fixed independent zero commands.")
+            raise ValueError("ArmHack Stand MuJoCo replay requires independent commands.")
         if not np.allclose(np.asarray(config["cmd_init"], dtype=np.float32), 0.0, atol=1.0e-8):
             raise ValueError("ArmHack Stand MuJoCo replay requires cmd_init=[0, 0, 0].")
     rng = np.random.default_rng(int(config.get("command_seed", 1)))
+    interactive_stance_rng = np.random.default_rng(int(config.get("interactive_stance_seed", 20260814)))
+    interactive_reset_requested = threading.Event()
+    interactive_arm_pose_requested = threading.Event()
+    target_noise_rng = np.random.default_rng(int(config.get("non_arm_joint_target_noise_seed", 20260719)))
     command_mode = str(config.get("command_mode", "independent")).lower()
     joystick = JoystickCommandReader(config) if command_mode == "joystick" else None
     nav2_replay = Nav2CommandReplay(config, rng) if command_mode == "nav2" else None
@@ -1717,6 +2646,16 @@ def run_mujoco(config: dict) -> None:
         target_command = sample_random_command(rng, config)
     command = np.zeros(3, dtype=np.float32) if bool(config.get("command_ramp", False)) else target_command.copy()
     action = np.zeros(len(policy_joint_names), dtype=np.float32)
+    last_network_action = np.zeros(len(policy_joint_names), dtype=np.float32)
+    phase_one_canonical_action_history = np.zeros(len(policy_joint_names), dtype=np.float32)
+    hold_policy_action_history = np.zeros(len(policy_joint_names), dtype=np.float32)
+    completion_latched_action = None
+    last_target_noise_raw = np.zeros(len(policy_joint_names), dtype=np.float32)
+    arm_joint_names = set(ARM_JOINT_NAMES)
+    non_arm_policy_indices = np.asarray(
+        [index for index, joint_name in enumerate(policy_joint_names) if joint_name not in arm_joint_names],
+        dtype=np.int64,
+    )
 
     kp_by_joint = dict(zip(policy_joint_names, kps))
     kd_by_joint = dict(zip(policy_joint_names, kds))
@@ -1731,12 +2670,26 @@ def run_mujoco(config: dict) -> None:
     floor_geom_ids = find_floor_geom_ids(model)
     foot_body_ids = find_foot_body_ids(model)
     torso_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, str(config.get("torso_body_name", "torso_link")))
+    pelvis_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+    left_ankle_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "left_ankle_roll_link")
+    right_ankle_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "right_ankle_roll_link")
+    ankle_joint_names = (
+        "left_ankle_pitch_joint",
+        "right_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_ankle_roll_joint",
+    )
+    ankle_actuator_ids = tuple(actuator_ids_by_joint[name] for name in ankle_joint_names)
     if not floor_geom_ids:
         raise RuntimeError("MuJoCo model has no floor/ground plane; set add_floor: true or provide a scene XML with a floor.")
     if not foot_body_ids:
         raise RuntimeError("MuJoCo model has no ankle_roll_link/foot_link bodies for contact metrics.")
     if torso_body_id < 0:
         raise RuntimeError(f"MuJoCo model has no torso body named '{config.get('torso_body_name', 'torso_link')}'.")
+    if pelvis_body_id < 0:
+        raise RuntimeError("MuJoCo model has no pelvis body for ordered foot-step targets.")
+    if left_ankle_body_id < 0 or right_ankle_body_id < 0:
+        raise RuntimeError("MuJoCo model is missing left/right ankle_roll_link bodies.")
 
     data.qpos[0:3] = np.asarray(config["root_pos_init"], dtype=np.float32)
     data.qpos[3:7] = np.asarray(config["root_quat_init"], dtype=np.float32)
@@ -1746,7 +2699,36 @@ def run_mujoco(config: dict) -> None:
         armhack_stand.initialize_model_and_state(mujoco, model, data, qpos_addresses, torso_body_id)
     else:
         mujoco.mj_forward(model, data)
-    rollout_metrics = init_rollout_metrics(data, torso_body_id, config)
+    foot_recovery_initialization = apply_initial_foot_recovery_stance(
+        model, data, qpos_addresses, config
+    )
+    joint_randomization_report = apply_initial_joint_randomization(
+        model,
+        data,
+        policy_joint_names,
+        qpos_addresses,
+        qvel_addresses,
+        config,
+    )
+    if joint_randomization_report.get("enabled", False):
+        mujoco.mj_forward(model, data)
+        print(
+            "[INFO] Applied initial joint randomization: "
+            f"seed={joint_randomization_report['seed']} "
+            f"pos=+/-{joint_randomization_report['pos_noise_rad']}rad "
+            f"vel=+/-{joint_randomization_report['vel_noise_rad_per_s']}rad/s "
+            f"joints={joint_randomization_report['joint_count']}"
+        )
+    rollout_metrics = init_rollout_metrics(
+        data,
+        torso_body_id,
+        pelvis_body_id,
+        (left_ankle_body_id, right_ankle_body_id),
+        config,
+    )
+    recovery_reference_xy_w = data.qpos[:2].copy()
+    _, _, recovery_reference_yaw_w = quat_to_roll_pitch_yaw(data.qpos[3:7].copy())
+    rollout_metrics["policy_application"] = init_policy_application_metrics(policy_joint_names, non_arm_policy_indices)
     current_segment_id = 0
     next_command_time = max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
     initial_segment = {
@@ -1758,12 +2740,142 @@ def run_mujoco(config: dict) -> None:
         initial_segment.update(nav2_segment_info)
     rollout_metrics["command_segments"].append(initial_segment)
 
-    policy = torch.jit.load(config["policy_path"], map_location="cpu")
-    policy.eval()
+    policy = PolicyRunner(config["policy_path"], str(config.get("policy_runtime", "auto")))
+    hold_policy_path = str(config.get("ordered_step_hold_policy_path", "")).strip()
+    hold_policy = (
+        PolicyRunner(hold_policy_path, str(config.get("policy_runtime", "auto")))
+        if hold_policy_path
+        else None
+    )
+    push_scheduler = MujocoPushScheduler(config, torso_body_id)
+
+    def sample_interactive_stance_distance() -> float:
+        distance_range = np.asarray(config.get("interactive_stance_distance_range_m", [0.08, 0.48]), dtype=float)
+        if distance_range.shape != (2,) or distance_range[0] < 0.05 or distance_range[1] > 0.60:
+            raise ValueError("interactive_stance_distance_range_m must be [min, max] within [0.05, 0.60].")
+        if distance_range[0] >= distance_range[1]:
+            raise ValueError("interactive_stance_distance_range_m requires min < max.")
+        draw = float(interactive_stance_rng.random())
+        if draw < 0.50:
+            low = max(float(distance_range[0]), 0.08)
+            high = min(float(distance_range[1]), 0.14)
+        elif draw < 0.60:
+            low = max(float(distance_range[0]), 0.28)
+            high = min(float(distance_range[1]), 0.32)
+        else:
+            low, high = (float(value) for value in distance_range)
+        if low >= high:
+            low, high = (float(value) for value in distance_range)
+        return float(interactive_stance_rng.uniform(low, high))
+
+    def reset_to_interactive_stance(requested_distance_m: float) -> dict:
+        nonlocal action, last_network_action, last_target_noise_raw, phase_one_canonical_action_history
+        nonlocal hold_policy_action_history, completion_latched_action
+        nonlocal recovery_reference_xy_w, recovery_reference_yaw_w
+        mujoco.mj_resetData(model, data)
+        data.qpos[0:3] = np.asarray(config["root_pos_init"], dtype=np.float32)
+        data.qpos[3:7] = np.asarray(config["root_quat_init"], dtype=np.float32)
+        for joint_name, default_angle in default_by_joint.items():
+            data.qpos[qpos_addresses[joint_name]] = default_angle
+        if armhack_stand is not None:
+            for joint_name, target in zip(ARM_JOINT_NAMES, armhack_stand.csv_targets[0], strict=True):
+                data.qpos[qpos_addresses[joint_name]] = float(target)
+        stance_config = dict(config)
+        stance_config["initial_ankle_distance_m"] = requested_distance_m
+        result = apply_initial_foot_recovery_stance(model, data, qpos_addresses, stance_config)
+        data.qvel[:] = 0.0
+        data.qacc[:] = 0.0
+        data.ctrl[:] = 0.0
+        data.qfrc_applied[:] = 0.0
+        data.xfrc_applied[:] = 0.0
+        action = np.zeros(len(policy_joint_names), dtype=np.float32)
+        last_network_action = np.zeros(len(policy_joint_names), dtype=np.float32)
+        phase_one_canonical_action_history = np.zeros(len(policy_joint_names), dtype=np.float32)
+        hold_policy_action_history = np.zeros(len(policy_joint_names), dtype=np.float32)
+        completion_latched_action = None
+        last_target_noise_raw = np.zeros(len(policy_joint_names), dtype=np.float32)
+        mujoco.mj_forward(model, data)
+        recovery_reference_xy_w = data.qpos[:2].copy()
+        _, _, recovery_reference_yaw_w = quat_to_roll_pitch_yaw(data.qpos[3:7].copy())
+        pelvis_pos_w = data.xpos[pelvis_body_id].copy()
+        _, _, pelvis_yaw = quat_to_roll_pitch_yaw(data.xquat[pelvis_body_id].copy())
+        lateral_axis = np.asarray([-math.sin(pelvis_yaw), math.cos(pelvis_yaw)], dtype=np.float64)
+        ordered_targets_xy = np.stack(
+            [pelvis_pos_w[:2] + 0.15 * lateral_axis, pelvis_pos_w[:2] - 0.15 * lateral_axis]
+        )
+        initial_ankle_z = [float(data.xpos[left_ankle_body_id, 2]), float(data.xpos[right_ankle_body_id, 2])]
+        rollout_metrics["ordered_foot_steps"] = {
+            "pelvis_reference_xy_m": pelvis_pos_w[:2].tolist(),
+            "pelvis_reference_yaw_rad": float(pelvis_yaw),
+            "target_xy_m": ordered_targets_xy.tolist(),
+            "initial_ankle_z_m": initial_ankle_z,
+            "max_clearance_m": [0.0, 0.0],
+            "left_lifted": False,
+            "right_lifted": False,
+            "left_completion_time_s": None,
+            "right_completion_time_s": None,
+            "right_lifted_before_left": False,
+            "final_target_error_m": [0.0, 0.0],
+        }
+        if armhack_stand is not None:
+            armhack_stand.torso_reference = armhack_stand._torso_pose(data, torso_body_id)
+            armhack_stand.reset_interactive_timebase(0.0)
+        return result
 
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
+        nonlocal last_network_action, phase_one_canonical_action_history
+        nonlocal hold_policy_action_history, completion_latched_action
         if counter % int(config["control_decimation"]) != 0:
             return action
+        ordered = rollout_metrics["ordered_foot_steps"]
+        if hold_policy is not None and ordered["right_completion_time_s"] is not None:
+            hold_obs = build_observation(
+                data,
+                policy_joint_names,
+                qpos_addresses,
+                qvel_addresses,
+                default_angles,
+                action,
+                command,
+                config,
+            )
+            hold_action_obs_start = 9 + 2 * len(policy_joint_names)
+            hold_obs[hold_action_obs_start : hold_action_obs_start + len(policy_joint_names)] = (
+                hold_policy_action_history
+            )
+            hold_obs[hold_action_obs_start + 27] = -1.0
+            hold_obs[hold_action_obs_start + 28] = 0.0
+            hold_action = hold_policy.infer(hold_obs)
+            hold_policy_action_history = hold_action.copy()
+            if completion_latched_action is None:
+                completion_latched_action = action.copy()
+            blend_duration_s = max(float(config.get("ordered_step_hold_blend_duration_s", 1.0)), 1.0e-6)
+            blend_alpha = float(
+                np.clip(
+                    (sim_time - float(ordered["right_completion_time_s"])) / blend_duration_s,
+                    0.0,
+                    1.0,
+                )
+            )
+            next_action = (
+                (1.0 - blend_alpha) * completion_latched_action + blend_alpha * hold_action
+            ).astype(np.float32)
+            last_network_action = next_action.copy()
+            if armhack_stand is not None:
+                next_action = armhack_stand.compose_action(next_action, sim_time)
+            return next_action
+        if (
+            bool(config.get("ordered_step_hold_last_action_enable", False))
+            and ordered["right_completion_time_s"] is not None
+        ):
+            # The phase-zero stepping skill has no trained phase-two input.
+            # Latch the successful landing target instead of invoking it again
+            # with an out-of-distribution completion signal.
+            next_action = action.copy()
+            last_network_action = next_action.copy()
+            if armhack_stand is not None:
+                next_action = armhack_stand.compose_action(next_action, sim_time)
+            return next_action
         obs = build_observation(
             data,
             policy_joint_names,
@@ -1774,14 +2886,63 @@ def run_mujoco(config: dict) -> None:
             command,
             config,
         )
-        with torch.inference_mode():
-            next_action = policy(torch.from_numpy(obs).unsqueeze(0)).detach().cpu().numpy().squeeze().astype(np.float32)
+        phase_one_active = (
+            ordered["left_completion_time_s"] is not None
+            and ordered["right_completion_time_s"] is None
+        )
+        mirror_phase_one = bool(config.get("ordered_step_mirror_policy_enable", False)) and phase_one_active
+        if mirror_phase_one:
+            obs = mirror_g1_policy_observation_left_right(obs)
+            # Phase one reuses a phase-zero skill as a fresh mirrored episode.
+            # Do not leak the just-completed left-step action history into the
+            # right-step policy state; maintain its own canonical history.
+            action_obs_start = 9 + 2 * len(policy_joint_names)
+            obs[action_obs_start : action_obs_start + len(policy_joint_names)] = (
+                phase_one_canonical_action_history
+            )
+            if bool(config.get("ordered_step_observation_enable", False)):
+                # The mirrored controller deliberately reuses the learned
+                # phase-zero (active-left-foot) skill for the physical right
+                # foot.  Keep its two phase-conditioning slots in the same
+                # distribution as phase-zero training after mirroring.
+                action_obs_start = 9 + 2 * len(policy_joint_names)
+                obs[action_obs_start + 27] = 0.0
+                obs[action_obs_start + 28] = float(bool(ordered["right_lifted"]))
+        elif bool(config.get("ordered_step_observation_enable", False)):
+            if ordered["right_completion_time_s"] is not None:
+                phase_signal = -1.0
+                lifted_signal = 0.0
+            elif ordered["left_completion_time_s"] is not None:
+                phase_signal = 1.0
+                lifted_signal = float(bool(ordered["right_lifted"]))
+            else:
+                phase_signal = 0.0
+                lifted_signal = float(bool(ordered["left_lifted"]))
+            action_obs_start = 9 + 2 * len(policy_joint_names)
+            obs[action_obs_start + 27] = phase_signal
+            obs[action_obs_start + 28] = lifted_signal
+        next_action = policy.infer(obs)
+        if mirror_phase_one:
+            phase_one_canonical_action_history = next_action.copy()
+            next_action = mirror_g1_joint_vector_left_right(next_action)
+        smoothing_alpha = float(config.get("ordered_step_action_smoothing_alpha", 1.0))
+        if not 0.0 < smoothing_alpha <= 1.0:
+            raise ValueError("ordered_step_action_smoothing_alpha must be in (0, 1].")
+        if smoothing_alpha < 1.0:
+            smoothed_action = next_action.copy()
+            smoothed_action[non_arm_policy_indices] = (
+                action[non_arm_policy_indices]
+                + smoothing_alpha
+                * (next_action[non_arm_policy_indices] - action[non_arm_policy_indices])
+            )
+            next_action = smoothed_action
+        last_network_action = next_action.copy()
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         return next_action
 
     def simulate_loop(viewer=None) -> None:
-        nonlocal action, command, target_command, current_segment_id, next_command_time
+        nonlocal action, command, target_command, current_segment_id, next_command_time, last_target_noise_raw
         counter = 0
         sim_time = 0.0
         wall_start = time.time()
@@ -1789,6 +2950,26 @@ def run_mujoco(config: dict) -> None:
             while sim_time < float(config["simulation_duration"]):
                 if viewer is not None and not viewer.is_running():
                     break
+                if interactive_reset_requested.is_set():
+                    interactive_reset_requested.clear()
+                    requested_distance = sample_interactive_stance_distance()
+                    reset_report = reset_to_interactive_stance(requested_distance)
+                    counter = 0
+                    sim_time = 0.0
+                    print(
+                        "[INTERACTIVE] Reset stance: "
+                        f"requested={reset_report['requested_distance_m']:.3f}m "
+                        f"actual={reset_report['actual_distance_m']:.3f}m"
+                    )
+                if interactive_arm_pose_requested.is_set() and armhack_stand is not None:
+                    interactive_arm_pose_requested.clear()
+                    pose_report = armhack_stand.cycle_interactive_pose(sim_time)
+                    print(
+                        "[INTERACTIVE] Arm pose: "
+                        f"{pose_report['pose_number']}/{pose_report['pose_count']} "
+                        f"source_t={pose_report['csv_time_s']:.2f}s "
+                        f"transition={pose_report['transition_duration_s']:.2f}s"
+                    )
                 step_start = time.time()
                 if joystick is not None:
                     target_command = joystick.read_command()
@@ -1810,9 +2991,20 @@ def run_mujoco(config: dict) -> None:
                         }
                     )
                     next_command_time += max(float(config.get("command_interval", 2.0)), float(model.opt.timestep))
+                if bool(config.get("position_recovery_command_enable", False)):
+                    target_command = reset_pose_recovery_command(
+                        data, recovery_reference_xy_w, recovery_reference_yaw_w, config
+                    )
                 command = smooth_command(command, target_command, float(model.opt.timestep), config)
                 control_step = counter % int(config["control_decimation"]) == 0
                 action = step_policy_if_needed(counter, sim_time)
+                if control_step:
+                    action, last_target_noise_raw = apply_non_arm_target_noise(
+                        action,
+                        non_arm_policy_indices,
+                        target_noise_rng,
+                        config,
+                    )
                 target_policy = default_angles + action * float(config["action_scale"])
                 target_by_joint = dict(zip(policy_joint_names, target_policy))
                 apply_pd_control(
@@ -1825,6 +3017,18 @@ def run_mujoco(config: dict) -> None:
                     kp_by_joint,
                     kd_by_joint,
                 )
+                if control_step:
+                    record_policy_application(
+                        rollout_metrics,
+                        data,
+                        actuator_ids_by_joint,
+                        policy_joint_names,
+                        non_arm_policy_indices,
+                        last_network_action,
+                        action,
+                        last_target_noise_raw,
+                    )
+                push_scheduler.apply(data, sim_time)
                 mujoco.mj_step(model, data)
                 counter += 1
                 sim_time += model.opt.timestep
@@ -1845,6 +3049,8 @@ def run_mujoco(config: dict) -> None:
                     floor_geom_ids,
                     foot_body_ids,
                     torso_body_id,
+                    (left_ankle_body_id, right_ankle_body_id),
+                    ankle_actuator_ids,
                     config,
                     sim_time,
                     current_segment_id,
@@ -1877,6 +3083,13 @@ def run_mujoco(config: dict) -> None:
             print(f"[REPORT] ArmHack Stand MuJoCo report: {armhack_stand.report_path}")
             print(f"[REPORT] ArmHack Stand MuJoCo torso plot: {armhack_stand.plot_path}")
             print(f"[REPORT] ArmHack Stand MuJoCo trace: {armhack_stand.trace_path}")
+        report["initial_joint_randomization"] = joint_randomization_report
+        report["foot_recovery_initialization"] = foot_recovery_initialization
+        report["push_disturbances"] = {
+            "enabled": push_scheduler.enabled,
+            "event_count": len(push_scheduler.events),
+            "events": push_scheduler.events,
+        }
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:
@@ -1888,9 +3101,27 @@ def run_mujoco(config: dict) -> None:
     if bool(config.get("use_glfw", True)):
         from mujoco import viewer as mujoco_viewer
 
-        with mujoco_viewer.launch_passive(model, data) as active_viewer:
+        def on_viewer_key(keycode: int) -> None:
+            if keycode == ord(" ") and bool(config.get("interactive_stance_reset", False)):
+                interactive_reset_requested.set()
+            elif keycode == ord("1") and armhack_stand is not None:
+                interactive_arm_pose_requested.set()
+
+        key_callback = (
+            on_viewer_key
+            if bool(config.get("interactive_stance_reset", False)) or armhack_stand is not None
+            else None
+        )
+        active_viewer = mujoco_viewer.launch_passive(model, data, key_callback=key_callback)
+        try:
+            if bool(config.get("interactive_stance_reset", False)):
+                print("[INTERACTIVE] Press SPACE to reset with a new randomized initial ankle distance.")
+            if armhack_stand is not None:
+                print("[INTERACTIVE] Press 1 to cycle arm poses with a 1.0s minimum-jerk transition.")
             update_follow_camera(active_viewer, data, torso_body_id, config)
             simulate_loop(active_viewer)
+        finally:
+            active_viewer.close()
     else:
         simulate_loop(None)
 

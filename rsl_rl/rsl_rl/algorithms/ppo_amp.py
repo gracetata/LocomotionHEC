@@ -16,6 +16,38 @@ from rsl_rl.algorithms import PPO
 from rsl_rl.modules.amp import LossType
 
 
+def _mirror_g1_joint_tensor(values: torch.Tensor, apply_sign: bool = True) -> torch.Tensor:
+    """Mirror batched G1 29-DoF joint vectors using the deployment convention."""
+    if values.shape[-1] != 29:
+        raise ValueError(f"Expected a 29-D G1 joint vector, got {values.shape[-1]} dimensions.")
+    mirrored = torch.empty_like(values)
+    left = [0, 3, 6, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27]
+    right = [1, 4, 7, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28]
+    center = [2, 5, 8]
+    mirrored[..., left] = values[..., right]
+    mirrored[..., right] = values[..., left]
+    mirrored[..., center] = values[..., center]
+    if apply_sign:
+        mirrored[..., [3, 4, 15, 16, 17, 18, 23, 24]] *= -1.0
+        mirrored[..., [6, 7, 19, 20, 27, 28]] *= -1.0
+        mirrored[..., [2, 5]] *= -1.0
+    return mirrored
+
+
+def _mirror_g1_policy_observation_tensor(observations: torch.Tensor) -> torch.Tensor:
+    """Mirror batched 96-D G1 policy observations left-to-right."""
+    if observations.shape[-1] != 96:
+        raise ValueError(f"Expected a 96-D G1 observation, got {observations.shape[-1]} dimensions.")
+    mirrored = observations.clone()
+    mirrored[..., 0:3] *= observations.new_tensor([-1.0, 1.0, -1.0])
+    mirrored[..., 3:6] *= observations.new_tensor([1.0, -1.0, 1.0])
+    mirrored[..., 6:9] *= observations.new_tensor([1.0, -1.0, -1.0])
+    mirrored[..., 9:38] = _mirror_g1_joint_tensor(observations[..., 9:38])
+    mirrored[..., 38:67] = _mirror_g1_joint_tensor(observations[..., 38:67])
+    mirrored[..., 67:96] = _mirror_g1_joint_tensor(observations[..., 67:96])
+    return mirrored
+
+
 class PPOAMP(PPO):
 
     policy: ActorCritic | ActorCriticRecurrent | ActorCriticCNN
@@ -81,6 +113,12 @@ class PPOAMP(PPO):
         self.baseline_kl_cfg = baseline_kl_cfg or {}
         self.baseline_kl_scale = float(self.baseline_kl_cfg.get("scale", 0.0))
         self.baseline_kl_min_std = float(self.baseline_kl_cfg.get("min_std", 1.0e-4))
+        self.baseline_kl_exempt_obs_index = int(self.baseline_kl_cfg.get("exempt_obs_index", -1))
+        self.baseline_kl_exempt_obs_threshold = float(
+            self.baseline_kl_cfg.get("exempt_obs_threshold", 0.5)
+        )
+        self.baseline_kl_mirror_phase_one = bool(self.baseline_kl_cfg.get("mirror_phase_one", False))
+        self.baseline_kl_lift_obs_index = int(self.baseline_kl_cfg.get("lift_obs_index", 95))
         self.baseline_policy = None
         if bool(self.baseline_kl_cfg.get("enabled", False)) and self.baseline_kl_scale > 0.0:
             if self.policy.is_recurrent:
@@ -315,18 +353,81 @@ class PPOAMP(PPO):
 
             if self.baseline_policy is not None:
                 baseline_obs_batch = obs_batch[:original_batch_size]
+                baseline_policy_obs_batch = baseline_obs_batch["policy"]
+                phase_one_mask = None
+                teacher_obs_batch = baseline_obs_batch
+                if self.baseline_kl_mirror_phase_one:
+                    if self.baseline_kl_exempt_obs_index < 0:
+                        raise ValueError("mirror_phase_one requires a non-negative phase observation index.")
+                    if self.baseline_kl_exempt_obs_index >= baseline_policy_obs_batch.shape[1]:
+                        raise ValueError(
+                            f"baseline KL phase index={self.baseline_kl_exempt_obs_index} exceeds "
+                            f"observation dimension {baseline_policy_obs_batch.shape[1]}."
+                        )
+                    if self.baseline_kl_lift_obs_index >= baseline_policy_obs_batch.shape[1]:
+                        raise ValueError(
+                            f"baseline KL lift index={self.baseline_kl_lift_obs_index} exceeds "
+                            f"observation dimension {baseline_policy_obs_batch.shape[1]}."
+                        )
+                    phase_one_mask = (
+                        baseline_policy_obs_batch[:, self.baseline_kl_exempt_obs_index]
+                        >= self.baseline_kl_exempt_obs_threshold
+                    )
+                    mirrored_obs_batch = _mirror_g1_policy_observation_tensor(baseline_policy_obs_batch)
+                    # The frozen actor is a phase-zero left-foot teacher.  A
+                    # mirrored phase-one sample therefore receives the same
+                    # conditioning values the teacher saw while learning its
+                    # active-left-foot skill.
+                    mirrored_obs_batch[:, self.baseline_kl_exempt_obs_index] = 0.0
+                    mirrored_obs_batch[:, self.baseline_kl_lift_obs_index] = baseline_policy_obs_batch[
+                        :, self.baseline_kl_lift_obs_index
+                    ]
+                    teacher_policy_obs_batch = torch.where(
+                        phase_one_mask.unsqueeze(1), mirrored_obs_batch, baseline_policy_obs_batch
+                    )
+                    teacher_obs_batch = baseline_obs_batch.clone()
+                    teacher_obs_batch["policy"] = teacher_policy_obs_batch
                 with torch.no_grad():
-                    self.baseline_policy.act(baseline_obs_batch)
+                    self.baseline_policy.act(teacher_obs_batch)
                     baseline_mu_batch = self.baseline_policy.action_mean.detach()
                     baseline_sigma_batch = self.baseline_policy.action_std.detach().clamp_min(self.baseline_kl_min_std)
+                    if phase_one_mask is not None:
+                        mirrored_mu_batch = _mirror_g1_joint_tensor(baseline_mu_batch)
+                        mirrored_sigma_batch = _mirror_g1_joint_tensor(
+                            baseline_sigma_batch, apply_sign=False
+                        )
+                        baseline_mu_batch = torch.where(
+                            phase_one_mask.unsqueeze(1), mirrored_mu_batch, baseline_mu_batch
+                        )
+                        baseline_sigma_batch = torch.where(
+                            phase_one_mask.unsqueeze(1), mirrored_sigma_batch, baseline_sigma_batch
+                        )
                 current_sigma_batch = sigma_batch.clamp_min(self.baseline_kl_min_std)
-                baseline_kl_loss = torch.sum(
+                baseline_kl_per_sample = torch.sum(
                     torch.log(baseline_sigma_batch / current_sigma_batch)
                     + (torch.square(current_sigma_batch) + torch.square(mu_batch - baseline_mu_batch))
                     / (2.0 * torch.square(baseline_sigma_batch))
                     - 0.5,
                     dim=-1,
-                ).mean()
+                )
+                if self.baseline_kl_exempt_obs_index >= 0 and not self.baseline_kl_mirror_phase_one:
+                    if self.baseline_kl_exempt_obs_index >= baseline_policy_obs_batch.shape[1]:
+                        raise ValueError(
+                            f"baseline KL exempt_obs_index={self.baseline_kl_exempt_obs_index} exceeds "
+                            f"observation dimension {baseline_policy_obs_batch.shape[1]}."
+                        )
+                    # Phase-one samples use +1 in observation slot 94 and are
+                    # intentionally free to learn the right-foot skill.  Phase
+                    # zero (0) and completed hold (-1) remain anchored.
+                    baseline_mask = (
+                        baseline_policy_obs_batch[:, self.baseline_kl_exempt_obs_index]
+                        < self.baseline_kl_exempt_obs_threshold
+                    ).to(baseline_kl_per_sample.dtype)
+                    baseline_kl_loss = torch.sum(baseline_kl_per_sample * baseline_mask) / torch.clamp_min(
+                        torch.sum(baseline_mask), 1.0
+                    )
+                else:
+                    baseline_kl_loss = baseline_kl_per_sample.mean()
                 loss = loss + self.baseline_kl_scale * baseline_kl_loss
             else:
                 baseline_kl_loss = torch.zeros((), device=self.device)

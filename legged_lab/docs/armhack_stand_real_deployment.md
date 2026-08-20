@@ -377,7 +377,7 @@ ONNX 输入中的 `q/dq/last_action` 和输出 `actions` 都使用下表的 poli
 | 11 | 15 | `left_shoulder_pitch_joint` | 0.30 | 40 | 1 | 外部双臂目标 |
 | 12 | 22 | `right_shoulder_pitch_joint` | 0.30 | 40 | 1 | 外部双臂目标 |
 | 13 | 4 | `left_ankle_pitch_joint` | -0.20 | 40 | 2 | ONNX |
-| 14 | 10 | `right_ankle_pitch_joint` | -0.20 | 40 | 2 | ONNX |
+| 14 | 10 | `right_ankle_pitch_joint` | -0.20 | 40 | 2 | ONNX |同样，设计一组连续实验，只在卡 0 上分析这些改进结果，并且你需要重点考虑是否要再显式地增加摔倒的惩罚，因为人形机器人的部署安全是最重要的，一定要严格地避免摔倒，你还需要考虑是否应该考虑from scratch, 从头开始训，排除 finetune 时策略已经过度收敛的情况<br/><br/>在卡1上开启新的训练，任务定义为输入持续为一个固定目标，而不是实时更新，策略需要开环完成To target，需要考虑网络是否需要asymmetric actor critic，是否可能引入历史观测序列，参考当前9999 baseline所训出来的奖励设置，此外，你需要评估一下这次训练中aMP占比是否很大？如果AMP对于引导和微调都完全没有作用，就把它去掉。这也是一个一万 epoch 的from scratch训练<br/><br/>你需要保证这两张卡上都开启了所需要实验的调度，再结束这次交互
 | 15 | 16 | `left_shoulder_roll_joint` | 0.25 | 40 | 1 | 外部双臂目标 |
 | 16 | 23 | `right_shoulder_roll_joint` | -0.25 | 40 | 1 | 外部双臂目标 |
 | 17 | 5 | `left_ankle_roll_joint` | 0.00 | 40 | 2 | ONNX |

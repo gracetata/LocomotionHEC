@@ -137,6 +137,14 @@ class RelativePose2dCommand(CommandTerm):
         target_vec_b = math_utils.quat_apply_inverse(math_utils.yaw_quat(self.robot.data.root_quat_w), target_vec_w)
         self.pose_command_b[:, :2] = target_vec_b[:, :2]
         self.pose_command_b[:, 2] = math_utils.wrap_to_pi(self.target_heading_w - self.robot.data.heading_w)
+        self.pose_command_b[:, :2].mul_(float(self.cfg.command_gain_xy))
+        self.pose_command_b[:, 2].mul_(float(self.cfg.command_gain_yaw))
+        if self.cfg.command_clip_xy is not None:
+            clip_xy = max(float(self.cfg.command_clip_xy), 0.0)
+            self.pose_command_b[:, :2].clamp_(-clip_xy, clip_xy)
+        if self.cfg.command_clip_yaw is not None:
+            clip_yaw = max(float(self.cfg.command_clip_yaw), 0.0)
+            self.pose_command_b[:, 2].clamp_(-clip_yaw, clip_yaw)
         self._update_stop_latch()
 
     def _update_stop_latch(self):
@@ -244,3 +252,15 @@ class RelativePose2dCommandCfg(CommandTermCfg):
 
     stop_exit_heading_threshold: float = 0.28
     """Heading tolerance for logging stop-mode escape."""
+
+    command_clip_xy: float | None = None
+    """Optional component-wise XY pose-error clip presented to the policy."""
+
+    command_clip_yaw: float | None = None
+    """Optional yaw-error clip presented to the policy."""
+
+    command_gain_xy: float = 1.0
+    """Gain applied to reset-relative XY error before clipping."""
+
+    command_gain_yaw: float = 1.0
+    """Gain applied to reset-relative yaw error before clipping."""

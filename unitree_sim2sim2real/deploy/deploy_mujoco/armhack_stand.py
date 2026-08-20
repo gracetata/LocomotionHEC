@@ -133,6 +133,15 @@ class ArmHackStandReplay:
 
         self.last_target = self.csv_targets[0].copy()
         self.last_target_time = 0.0
+        pose_count = min(8, len(self.csv_targets))
+        self.interactive_pose_indices = np.unique(
+            np.linspace(0, len(self.csv_targets) - 1, pose_count, dtype=np.int64)
+        )
+        self.interactive_pose_cursor = 0
+        self.interactive_transition_duration_s = 1.0
+        self.interactive_transition_start_time_s = 0.0
+        self.interactive_transition_start: np.ndarray | None = None
+        self.interactive_transition_goal: np.ndarray | None = None
         self.torso_reference: np.ndarray | None = None
         self.sample_times: list[float] = []
         self.joint_samples: list[np.ndarray] = []
@@ -274,6 +283,14 @@ class ArmHackStandReplay:
         return np.concatenate((position, rpy))
 
     def sample_target(self, time_s: float) -> np.ndarray:
+        if self.interactive_transition_goal is not None and self.interactive_transition_start is not None:
+            duration = max(float(self.interactive_transition_duration_s), 1.0e-6)
+            alpha = float(np.clip((time_s - self.interactive_transition_start_time_s) / duration, 0.0, 1.0))
+            minimum_jerk = alpha**3 * (10.0 - 15.0 * alpha + 6.0 * alpha**2)
+            return (
+                (1.0 - minimum_jerk) * self.interactive_transition_start
+                + minimum_jerk * self.interactive_transition_goal
+            )
         sample_time = float(np.clip(time_s, 0.0, self.csv_times[-1]))
         upper_index = int(np.searchsorted(self.csv_times, sample_time, side="left"))
         upper_index = min(upper_index, len(self.csv_times) - 1)
@@ -284,6 +301,28 @@ class ArmHackStandReplay:
             return self.csv_targets[upper_index].copy()
         alpha = (sample_time - lower_time) / (upper_time - lower_time)
         return (1.0 - alpha) * self.csv_targets[lower_index] + alpha * self.csv_targets[upper_index]
+
+    def cycle_interactive_pose(self, time_s: float) -> dict[str, float | int]:
+        """Cycle to the next representative arm pose with a smooth transition."""
+        self.interactive_pose_cursor = (self.interactive_pose_cursor + 1) % len(self.interactive_pose_indices)
+        target_index = int(self.interactive_pose_indices[self.interactive_pose_cursor])
+        self.interactive_transition_start = self.last_target.copy()
+        self.interactive_transition_goal = self.csv_targets[target_index].copy()
+        self.interactive_transition_start_time_s = float(time_s)
+        return {
+            "pose_number": int(self.interactive_pose_cursor + 1),
+            "pose_count": int(len(self.interactive_pose_indices)),
+            "csv_index": target_index,
+            "csv_time_s": float(self.csv_times[target_index]),
+            "transition_duration_s": float(self.interactive_transition_duration_s),
+        }
+
+    def reset_interactive_timebase(self, time_s: float = 0.0) -> None:
+        """Keep the selected pose active when an interactive stance reset restarts simulation time."""
+        if self.interactive_transition_goal is None:
+            return
+        self.interactive_transition_start = self.csv_targets[0].copy()
+        self.interactive_transition_start_time_s = float(time_s)
 
     def compose_action(self, policy_action: np.ndarray, time_s: float) -> np.ndarray:
         composed = np.asarray(policy_action, dtype=np.float32).copy()

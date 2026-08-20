@@ -25,7 +25,7 @@ CONFIRM_REAL_ROBOT=I_UNDERSTAND NET=enp11s0 COMMAND_MODE=joystick \
 CONFIRM_REAL_ROBOT=I_UNDERSTAND NET=enp11s0 COMMAND_MODE=joystick \
     bash scripts/deploy_real_g1_amp_onnx.sh checkpoint/model_9996/locomotion.onnx
 
-CONFIRM_REAL_ROBOT=I_UNDERSTAND NET=enp11s0 COMMAND_MODE=nav_mock NAV_MOCK_CMD='[0.4,0.0,0.0]'\
+CONFIRM_REAL_ROBOT=I_UNDERSTAND NET=enp11s0 COMMAND_MODE=nav_mock NAV_MOCK_CMD='[0.0,0.0,0.0]'\
     bash scripts/deploy_real_g1_amp_onnx.sh checkpoint/model_8997/locomotion.onnx
 BLOCK
 set -euo pipefail

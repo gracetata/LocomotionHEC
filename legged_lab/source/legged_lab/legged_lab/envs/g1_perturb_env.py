@@ -149,6 +149,10 @@ class UpperBodyPerturbationCfg:
     pose_set: list[list[float]] = []
     pose_probabilities: list[float] = []
     random_pose_bank_path: str = ""
+    random_extra_pose_names: list[str] = []
+    random_extra_pose_set: list[list[float]] = []
+    random_extra_pose_weights: list[float] = []
+    random_extra_pose_probability: float = 0.0
     random_initialize_joint_state_on_reset: bool = True
     random_curriculum_enabled: bool = False
     random_curriculum_static_steps: int = 0
@@ -176,6 +180,9 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._pose_probabilities: torch.Tensor | None = None
         self._active_pose_targets: torch.Tensor | None = None
         self._random_pose_bank: torch.Tensor | None = None
+        self._random_extra_pose_targets: torch.Tensor | None = None
+        self._random_extra_pose_weights: torch.Tensor | None = None
+        self._random_extra_pose_sample_counts: torch.Tensor | None = None
         self._random_velocity_limits: torch.Tensor | None = None
         self._random_segment_start_targets: torch.Tensor | None = None
         self._random_segment_goal_targets: torch.Tensor | None = None
@@ -197,6 +204,9 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._pose_probabilities = torch.empty(0, dtype=torch.float32, device=self.device)
         self._active_pose_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
         self._random_pose_bank = torch.empty((0, 0), dtype=torch.float32, device=self.device)
+        self._random_extra_pose_targets = torch.empty((0, 0), dtype=torch.float32, device=self.device)
+        self._random_extra_pose_weights = torch.empty(0, dtype=torch.float32, device=self.device)
+        self._random_extra_pose_sample_counts = torch.empty(0, dtype=torch.long, device=self.device)
         self._random_velocity_limits = torch.empty(0, dtype=torch.float32, device=self.device)
         self._random_segment_start_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
         self._random_segment_goal_targets = torch.empty((self.num_envs, 0), dtype=torch.float32, device=self.device)
@@ -237,6 +247,19 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 log_extras["ArmHack/random_pose_bank_size"] = torch.tensor(
                     float(self._random_pose_bank.shape[0]), device=self.device
                 )
+                log_extras["ArmHack/random_extra_pose_count"] = torch.tensor(
+                    float(self._random_extra_pose_targets.shape[0]), device=self.device
+                )
+                log_extras["ArmHack/random_extra_pose_probability"] = torch.tensor(
+                    float(self._perturbation_cfg.random_extra_pose_probability), device=self.device
+                )
+                for pose_index, sample_count in enumerate(self._random_extra_pose_sample_counts):
+                    pose_name = (
+                        self._perturbation_cfg.random_extra_pose_names[pose_index]
+                        if self._perturbation_cfg.random_extra_pose_names
+                        else str(pose_index)
+                    )
+                    log_extras[f"ArmHack/random_extra_pose_{pose_name}_samples"] = sample_count
                 log_extras["ArmHack/random_transition_duration_mean_s"] = torch.mean(
                     self._random_segment_duration_s
                 )
@@ -475,6 +498,11 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             raise ValueError("Random pose curriculum step counts must be non-negative.")
         if cfg.random_curriculum_motion_scale < 0.0:
             raise ValueError("random_curriculum_motion_scale must be non-negative.")
+        extra_probability = float(cfg.random_extra_pose_probability)
+        if not 0.0 <= extra_probability <= 1.0:
+            raise ValueError("random_extra_pose_probability must be in [0, 1].")
+        if extra_probability > 0.0 and not cfg.random_extra_pose_set:
+            raise ValueError("random_extra_pose_set must not be empty when its sampling probability is positive.")
         duration_range = tuple(float(value) for value in cfg.random_transition_duration_range_s)
         if len(duration_range) != 2 or duration_range[0] <= 0.0 or duration_range[1] < duration_range[0]:
             raise ValueError(
@@ -522,6 +550,42 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
 
         self._random_pose_bank = pose_bank
         self._random_velocity_limits = velocity_limits
+
+        extra_pose_values = cfg.random_extra_pose_set
+        if extra_pose_values:
+            extra_pose_targets = torch.tensor(extra_pose_values, dtype=torch.float32, device=self.device)
+            if extra_pose_targets.ndim != 2 or extra_pose_targets.shape[1] != expected_num_joints:
+                raise ValueError(
+                    "Each random_extra_pose_set entry must have exactly "
+                    f"{expected_num_joints} joint values, got shape {tuple(extra_pose_targets.shape)}."
+                )
+            if not torch.all(torch.isfinite(extra_pose_targets)):
+                raise ValueError("random_extra_pose_set contains non-finite joint values.")
+            if cfg.random_extra_pose_names and len(cfg.random_extra_pose_names) != extra_pose_targets.shape[0]:
+                raise ValueError("random_extra_pose_names must match the number of extra poses.")
+            if cfg.random_extra_pose_weights:
+                if len(cfg.random_extra_pose_weights) != extra_pose_targets.shape[0]:
+                    raise ValueError("random_extra_pose_weights must match the number of extra poses.")
+                extra_weights = torch.tensor(
+                    cfg.random_extra_pose_weights, dtype=torch.float32, device=self.device
+                )
+                if not torch.all(torch.isfinite(extra_weights)) or torch.any(extra_weights < 0.0):
+                    raise ValueError("random_extra_pose_weights must be finite and non-negative.")
+                if float(torch.sum(extra_weights).item()) <= 0.0:
+                    raise ValueError("random_extra_pose_weights must sum to a positive value.")
+            else:
+                extra_weights = torch.ones(extra_pose_targets.shape[0], dtype=torch.float32, device=self.device)
+            self._random_extra_pose_targets = extra_pose_targets
+            self._random_extra_pose_weights = extra_weights / torch.sum(extra_weights)
+            self._random_extra_pose_sample_counts = torch.zeros(
+                extra_pose_targets.shape[0], dtype=torch.long, device=self.device
+            )
+        else:
+            self._random_extra_pose_targets = torch.empty(
+                (0, expected_num_joints), dtype=torch.float32, device=self.device
+            )
+            self._random_extra_pose_weights = torch.empty(0, dtype=torch.float32, device=self.device)
+            self._random_extra_pose_sample_counts = torch.empty(0, dtype=torch.long, device=self.device)
         self._random_segment_start_targets = torch.zeros(
             (self.num_envs, expected_num_joints), dtype=torch.float32, device=self.device
         )
@@ -538,7 +602,22 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         if self._random_pose_bank.numel() == 0:
             raise RuntimeError("Random arm-pose bank is not initialized.")
         pose_indices = torch.randint(self._random_pose_bank.shape[0], (count,), device=self.device)
-        return self._random_pose_bank[pose_indices]
+        targets = self._random_pose_bank[pose_indices]
+        extra_probability = float(self._perturbation_cfg.random_extra_pose_probability)
+        if extra_probability <= 0.0 or self._random_extra_pose_targets.numel() == 0:
+            return targets
+
+        use_extra = torch.rand(count, device=self.device) < extra_probability
+        extra_count = int(torch.count_nonzero(use_extra).item())
+        if extra_count > 0:
+            extra_indices = torch.multinomial(
+                self._random_extra_pose_weights, extra_count, replacement=True
+            )
+            targets[use_extra] = self._random_extra_pose_targets[extra_indices]
+            self._random_extra_pose_sample_counts.add_(
+                torch.bincount(extra_indices, minlength=self._random_extra_pose_targets.shape[0])
+            )
+        return targets
 
     def _sample_random_transition_durations(
         self,

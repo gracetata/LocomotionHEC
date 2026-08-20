@@ -50,7 +50,14 @@ class ManagerBasedAmpEnv(ManagerBasedAnimationEnv):
     def __init__(self, cfg: ManagerBasedAmpEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
         self._important_metric_torso_body_id: int | None = None
+        self._armhack_pelvis_body_id: int | None = None
+        self._armhack_foot_body_ids: tuple[int, int] | None = None
+        self._armhack_initial_pelvis_pos_w: torch.Tensor | None = None
+        self._armhack_initial_pelvis_yaw_w: torch.Tensor | None = None
+        self._armhack_initial_foot_pos_w: torch.Tensor | None = None
         self._important_metric_prev_torso_pos_w: torch.Tensor | None = None
+        self._important_metric_initial_torso_pos_w: torch.Tensor | None = None
+        self._important_metric_initial_torso_yaw_w: torch.Tensor | None = None
         self._important_metric_torso_height_target_m: torch.Tensor | None = None
         self._important_metric_torso_lateral_path_m: torch.Tensor | None = None
         self._important_metric_torso_forward_path_m: torch.Tensor | None = None
@@ -172,11 +179,13 @@ class ManagerBasedAmpEnv(ManagerBasedAnimationEnv):
             self._initialize_important_metric_buffers(robot)
 
         assert self._important_metric_prev_torso_pos_w is not None
+        assert self._important_metric_initial_torso_pos_w is not None
+        assert self._important_metric_initial_torso_yaw_w is not None
         assert self._important_metric_torso_height_target_m is not None
         assert self._important_metric_torso_lateral_path_m is not None
         assert self._important_metric_torso_forward_path_m is not None
 
-        roll, pitch, _ = math_utils.euler_xyz_from_quat(torso_quat_w)
+        roll, pitch, yaw = math_utils.euler_xyz_from_quat(torso_quat_w)
         yaw_quat_w = math_utils.yaw_quat(torso_quat_w)
         torso_lin_vel_yaw_b = math_utils.quat_apply_inverse(yaw_quat_w, torso_lin_vel_w)
         torso_ang_vel_b = math_utils.quat_apply_inverse(torso_quat_w, torso_ang_vel_w)
@@ -194,6 +203,12 @@ class ManagerBasedAmpEnv(ManagerBasedAnimationEnv):
         self._important_metric_torso_lateral_path_m += torch.abs(torch.sum(torso_delta_xy * task_lateral_xy, dim=1))
 
         log_extras = self.extras.setdefault("log", {})
+        log_extras["Important Metrics/torso_world_xy_displacement_m"] = torch.linalg.norm(
+            torso_pos_w[:, :2] - self._important_metric_initial_torso_pos_w[:, :2], dim=1
+        ).mean()
+        log_extras["Important Metrics/torso_world_yaw_error_rad"] = torch.abs(
+            math_utils.wrap_to_pi(yaw - self._important_metric_initial_torso_yaw_w)
+        ).mean()
         log_extras["Important Metrics/torso_roll_error_rad"] = torch.abs(math_utils.wrap_to_pi(roll)).mean()
         log_extras["Important Metrics/torso_pitch_error_rad"] = torch.abs(math_utils.wrap_to_pi(pitch)).mean()
         log_extras["Important Metrics/torso_lin_vel_xy_cmd_error_m_per_s"] = torch.linalg.norm(
@@ -229,11 +244,23 @@ class ManagerBasedAmpEnv(ManagerBasedAnimationEnv):
         self._important_metric_prev_torso_pos_w = torso_pos_w.detach().clone()
 
     def _initialize_important_metric_buffers(self, robot) -> None:
-        torso_pos_w = robot.data.body_pos_w[:, self._get_torso_body_id(robot), :]
+        torso_body_id = self._get_torso_body_id(robot)
+        pelvis_body_id = self._get_pelvis_body_id(robot)
+        foot_body_ids = self._get_foot_body_ids(robot)
+        torso_pos_w = robot.data.body_pos_w[:, torso_body_id, :]
+        _, _, torso_yaw_w = math_utils.euler_xyz_from_quat(robot.data.body_quat_w[:, torso_body_id, :])
+        pelvis_pos_w = robot.data.body_pos_w[:, pelvis_body_id, :]
+        _, _, pelvis_yaw_w = math_utils.euler_xyz_from_quat(robot.data.body_quat_w[:, pelvis_body_id, :])
+        foot_pos_w = robot.data.body_pos_w[:, list(foot_body_ids), :]
         self._important_metric_prev_torso_pos_w = torso_pos_w.detach().clone()
+        self._important_metric_initial_torso_pos_w = torso_pos_w.detach().clone()
+        self._important_metric_initial_torso_yaw_w = torso_yaw_w.detach().clone()
         self._important_metric_torso_height_target_m = torso_pos_w[:, 2].detach().clone()
         self._important_metric_torso_lateral_path_m = torch.zeros(self.num_envs, device=self.device)
         self._important_metric_torso_forward_path_m = torch.zeros(self.num_envs, device=self.device)
+        self._armhack_initial_pelvis_pos_w = pelvis_pos_w.detach().clone()
+        self._armhack_initial_pelvis_yaw_w = pelvis_yaw_w.detach().clone()
+        self._armhack_initial_foot_pos_w = foot_pos_w.detach().clone()
 
     def _reset_important_metric_buffers(self, env_ids: Sequence[int] | torch.Tensor) -> None:
         if self._important_metric_prev_torso_pos_w is None:
@@ -244,14 +271,31 @@ class ManagerBasedAmpEnv(ManagerBasedAnimationEnv):
             return
 
         assert self._important_metric_torso_height_target_m is not None
+        assert self._important_metric_initial_torso_pos_w is not None
+        assert self._important_metric_initial_torso_yaw_w is not None
         assert self._important_metric_torso_lateral_path_m is not None
         assert self._important_metric_torso_forward_path_m is not None
+        assert self._armhack_initial_pelvis_pos_w is not None
+        assert self._armhack_initial_pelvis_yaw_w is not None
+        assert self._armhack_initial_foot_pos_w is not None
 
-        torso_pos_w = robot.data.body_pos_w[:, self._get_torso_body_id(robot), :]
+        torso_body_id = self._get_torso_body_id(robot)
+        pelvis_body_id = self._get_pelvis_body_id(robot)
+        foot_body_ids = self._get_foot_body_ids(robot)
+        torso_pos_w = robot.data.body_pos_w[:, torso_body_id, :]
+        _, _, torso_yaw_w = math_utils.euler_xyz_from_quat(robot.data.body_quat_w[:, torso_body_id, :])
+        pelvis_pos_w = robot.data.body_pos_w[:, pelvis_body_id, :]
+        _, _, pelvis_yaw_w = math_utils.euler_xyz_from_quat(robot.data.body_quat_w[:, pelvis_body_id, :])
+        foot_pos_w = robot.data.body_pos_w[:, list(foot_body_ids), :]
         self._important_metric_prev_torso_pos_w[env_ids] = torso_pos_w[env_ids]
+        self._important_metric_initial_torso_pos_w[env_ids] = torso_pos_w[env_ids]
+        self._important_metric_initial_torso_yaw_w[env_ids] = torso_yaw_w[env_ids]
         self._important_metric_torso_height_target_m[env_ids] = torso_pos_w[env_ids, 2]
         self._important_metric_torso_lateral_path_m[env_ids] = 0.0
         self._important_metric_torso_forward_path_m[env_ids] = 0.0
+        self._armhack_initial_pelvis_pos_w[env_ids] = pelvis_pos_w[env_ids]
+        self._armhack_initial_pelvis_yaw_w[env_ids] = pelvis_yaw_w[env_ids]
+        self._armhack_initial_foot_pos_w[env_ids] = foot_pos_w[env_ids]
 
     def _get_base_velocity_command(self) -> torch.Tensor:
         try:
@@ -278,3 +322,23 @@ class ManagerBasedAmpEnv(ManagerBasedAnimationEnv):
                 self._important_metric_torso_body_id = 0
         return self._important_metric_torso_body_id
 
+    def _get_pelvis_body_id(self, robot) -> int:
+        if self._armhack_pelvis_body_id is None:
+            body_names = list(getattr(robot, "body_names", []))
+            try:
+                self._armhack_pelvis_body_id = body_names.index("pelvis")
+            except ValueError:
+                self._armhack_pelvis_body_id = 0
+        return self._armhack_pelvis_body_id
+
+    def _get_foot_body_ids(self, robot) -> tuple[int, int]:
+        if self._armhack_foot_body_ids is None:
+            body_names = list(getattr(robot, "body_names", []))
+            try:
+                self._armhack_foot_body_ids = (
+                    body_names.index("left_ankle_roll_link"),
+                    body_names.index("right_ankle_roll_link"),
+                )
+            except ValueError:
+                self._armhack_foot_body_ids = (0, 0)
+        return self._armhack_foot_body_ids

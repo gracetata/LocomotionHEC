@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import shutil
 import statistics
 import time
@@ -202,6 +203,27 @@ class AMPRunner(OnPolicyRunner):
 
         self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
         if load_policy_only:
+            noise_std_override = self.cfg.get("policy_only_noise_std_override", None)
+            if noise_std_override is not None and float(noise_std_override) > 0.0:
+                noise_std_override = float(noise_std_override)
+
+                def set_policy_noise_std(policy) -> None:
+                    if bool(getattr(policy, "state_dependent_std", False)):
+                        raise NotImplementedError(
+                            "policy_only_noise_std_override does not support state-dependent standard deviation."
+                        )
+                    with torch.no_grad():
+                        if getattr(policy, "noise_std_type", "scalar") == "scalar":
+                            policy.std.fill_(noise_std_override)
+                        elif policy.noise_std_type == "log":
+                            policy.log_std.fill_(math.log(noise_std_override))
+                        else:
+                            raise ValueError(f"Unsupported policy noise_std_type: {policy.noise_std_type}")
+
+                set_policy_noise_std(self.alg.policy)
+                if getattr(self.alg, "baseline_policy", None) is not None:
+                    set_policy_noise_std(self.alg.baseline_policy)
+                print(f"Reset policy-only action noise std to: {noise_std_override:.4f}")
             if not bool(self.cfg.get("reset_iteration_on_policy_only_load", True)):
                 self.current_learning_iteration = int(loaded_dict.get("iter", 0))
             print(f"Loaded policy-only AMP checkpoint from: {path}")
