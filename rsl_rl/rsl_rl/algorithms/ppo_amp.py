@@ -268,6 +268,15 @@ class PPOAMP(PPO):
         )
         self.baseline_kl_mirror_phase_one = bool(self.baseline_kl_cfg.get("mirror_phase_one", False))
         self.baseline_kl_lift_obs_index = int(self.baseline_kl_cfg.get("lift_obs_index", 95))
+        self.baseline_kl_zero_command_only = bool(
+            self.baseline_kl_cfg.get("zero_command_only", False)
+        )
+        self.baseline_kl_zero_command_threshold = float(
+            self.baseline_kl_cfg.get("zero_command_threshold", 0.02)
+        )
+        self.baseline_kl_zero_command_obs_start_index = int(
+            self.baseline_kl_cfg.get("zero_command_obs_start_index", 6)
+        )
         self.baseline_kl_mean_only = bool(self.baseline_kl_cfg.get("mean_only", False))
         self.baseline_kl_target = float(self.baseline_kl_cfg.get("target", 0.0))
         self.baseline_kl_min_scale = float(self.baseline_kl_cfg.get("min_scale", 0.0))
@@ -762,6 +771,7 @@ class PPOAMP(PPO):
                         - 0.5,
                         dim=-1,
                     )
+                baseline_mask = None
                 if self.baseline_kl_exempt_obs_index >= 0 and not self.baseline_kl_mirror_phase_one:
                     if self.baseline_kl_exempt_obs_index >= actor_obs_batch.shape[1]:
                         raise ValueError(
@@ -772,6 +782,16 @@ class PPOAMP(PPO):
                         actor_obs_batch[:, self.baseline_kl_exempt_obs_index]
                         < self.baseline_kl_exempt_obs_threshold
                     ).to(baseline_kl_per_sample.dtype)
+                if self.baseline_kl_zero_command_only:
+                    start = self.baseline_kl_zero_command_obs_start_index
+                    if start < 0 or start + 3 > actor_obs_batch.shape[1]:
+                        raise ValueError("baseline KL zero-command slice is outside the policy observation")
+                    zero_mask = (
+                        torch.linalg.vector_norm(actor_obs_batch[:, start : start + 3], dim=1)
+                        <= self.baseline_kl_zero_command_threshold
+                    ).to(baseline_kl_per_sample.dtype)
+                    baseline_mask = zero_mask if baseline_mask is None else baseline_mask * zero_mask
+                if baseline_mask is not None:
                     baseline_kl_loss = torch.sum(
                         baseline_kl_per_sample * baseline_mask
                     ) / torch.clamp_min(torch.sum(baseline_mask), 1.0)

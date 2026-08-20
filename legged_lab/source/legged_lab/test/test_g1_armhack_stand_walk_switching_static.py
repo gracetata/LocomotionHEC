@@ -76,3 +76,6 @@ def test_training_sources_are_identity_locked_and_tasks_registered():
     assert "62ee29b8c4fbbf8a4b96424d3cdffd698f89eeacab860dd6f3081edd6e1413d4" in walk
     assert "LeggedLab-Isaac-AMP-G1-StandAdaptiveSwitch-v0" in registry
     assert "LeggedLab-Isaac-AMP-G1-ArmHackWalkPrecisionSwitch-v0" in registry
+    assert "ZERO_COMMAND_TEACHER_ONLY" in walk
+    algorithm = text(ROOT / "rsl_rl/rsl_rl/algorithms/ppo_amp.py")
+    assert "baseline_kl_zero_command_only" in algorithm

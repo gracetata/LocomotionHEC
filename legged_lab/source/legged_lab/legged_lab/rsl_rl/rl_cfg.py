@@ -125,6 +125,15 @@ class RslRlPpoAmpAlgorithmCfg:
         lift_obs_index: int = 95
         """Observation slot containing the active-foot lifted flag used by the mirrored teacher."""
 
+        zero_command_only: bool = False
+        """Apply the baseline teacher only when the observed velocity command is near zero."""
+
+        zero_command_threshold: float = 0.02
+        """Maximum command-vector norm for zero-command transition distillation."""
+
+        zero_command_obs_start_index: int = 6
+        """Start of the three-dimensional command slice in the flattened policy observation."""
+
         mean_only: bool = False
         """Constrain actor means while allowing a fresh exploration standard deviation."""
 

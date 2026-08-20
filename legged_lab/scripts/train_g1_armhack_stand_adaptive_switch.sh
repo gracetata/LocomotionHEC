@@ -15,12 +15,15 @@ RUN_NAME=${RUN_NAME:-armhack_stand_adaptive_contact_first_se2_30cm_20260820}
 ISAACLAB_PYTHON=${ISAACLAB_PYTHON:-${HOME}/anaconda3/envs/env_isaaclab/bin/python}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-"${PROJECT_DIR}/logs/monitoring/${RUN_NAME}.log"}
 POSE_BANK=${POSE_BANK:-"${PROJECT_DIR}/Reference Data/ArmHack/StandPerturb/RandomizedTraining/random_arm_pose_bank_seed20260715.json"}
+TEACHER_CHECKPOINT=${TEACHER_CHECKPOINT:-${SOURCE_CHECKPOINT}}
+TEACHER_KL_SCALE=${TEACHER_KL_SCALE:-0.0003}
 
 die() { echo "Error: $*" >&2; exit 1; }
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "Isaac Python missing: ${ISAACLAB_PYTHON}"
 [[ -f "${SOURCE_CHECKPOINT}" ]] || die "Stand source missing: ${SOURCE_CHECKPOINT}"
 [[ "$(sha256sum "${SOURCE_CHECKPOINT}" | awk '{print $1}')" == "${SOURCE_SHA256}" ]] || die "Stand source SHA mismatch"
 [[ -f "${POSE_BANK}" ]] || die "pose bank missing: ${POSE_BANK}"
+[[ -f "${TEACHER_CHECKPOINT}" ]] || die "Stand transition teacher missing: ${TEACHER_CHECKPOINT}"
 
 STAGING_RUN=_source_stand_adaptive_${SOURCE_SHA256:0:12}
 STAGING_DIR="${PROJECT_DIR}/logs/rsl_rl/g1_stand_perturb/${STAGING_RUN}"
@@ -34,7 +37,7 @@ DEVICE=cuda:0 AGENT_DEVICE=cuda:0 ISAACLAB_PYTHON="${ISAACLAB_PYTHON}" \
 RUN_NAME="${RUN_NAME}" RESUME=True LOAD_RUN="^${STAGING_RUN}$" CHECKPOINT='^model_source.pt$' \
 HEADLESS=True QUIET_TERMINAL=True TRAIN_LOG_FILE="${TRAIN_LOG_FILE}" ROBOT_ASSET=s3_g1_29dof \
 RSI_ENABLE=False RANDOMIZATION_STRENGTH=1 STYLE_REWARD_SCALE=0.0 TASK_STYLE_LERP=1.0 \
-BASELINE_KL_ENABLE=True BASELINE_KL_CHECKPOINT="${SOURCE_CHECKPOINT}" BASELINE_KL_SCALE=0.0003 \
+BASELINE_KL_ENABLE=True BASELINE_KL_CHECKPOINT="${TEACHER_CHECKPOINT}" BASELINE_KL_SCALE="${TEACHER_KL_SCALE}" \
 bash "${PROJECT_DIR}/scripts/train_g1_amp.sh" \
   "env.upper_body_perturbation.random_pose_bank_path='$(realpath "${POSE_BANK}")'" \
   env.events.reset_robot_joints.params.phase_one_probability=0.0 \
@@ -44,8 +47,8 @@ bash "${PROJECT_DIR}/scripts/train_g1_amp.sh" \
   agent.algorithm.learning_rate=8.0e-6 agent.algorithm.schedule=fixed \
   agent.algorithm.entropy_coef=0.0005 agent.algorithm.desired_kl=0.01 \
   agent.algorithm.baseline_kl_cfg.enabled=True \
-  agent.algorithm.baseline_kl_cfg.checkpoint_path="$(realpath "${SOURCE_CHECKPOINT}")" \
-  agent.algorithm.baseline_kl_cfg.scale=0.0003 \
+  agent.algorithm.baseline_kl_cfg.checkpoint_path="$(realpath "${TEACHER_CHECKPOINT}")" \
+  agent.algorithm.baseline_kl_cfg.scale="${TEACHER_KL_SCALE}" \
   agent.algorithm.baseline_kl_cfg.exempt_obs_index=94 \
   agent.algorithm.baseline_kl_cfg.exempt_obs_threshold=0.5 \
   agent.algorithm.baseline_kl_cfg.mirror_phase_one=True \
