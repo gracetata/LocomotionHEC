@@ -38,8 +38,8 @@ def main() -> None:
     actual_sha = sha256(source)
     if actual_sha != args.expected_sha256:
         raise RuntimeError(f"source SHA-256 mismatch: {actual_sha}")
-    if not 0.0 < args.action_bias <= 0.60:
-        raise ValueError("action-bias must be in (0, 0.60]")
+    if args.action_bias == 0.0 or abs(args.action_bias) > 0.60:
+        raise ValueError("action-bias magnitude must be in (0, 0.60]")
     checkpoint = torch.load(source, map_location="cpu", weights_only=False)
     state = checkpoint["model_state_dict"]
     state = dict(state)

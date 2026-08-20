@@ -272,6 +272,10 @@ def load_config(config_path: str) -> dict:
     config["armhack_stand_enable"] = _env_bool(
         "G1_AMP_ARMHACK_STAND_ENABLE", bool(config.get("armhack_stand_enable", False))
     )
+    config["adaptive_stand_phase_obs"] = _env_bool(
+        "G1_AMP_ADAPTIVE_STAND_PHASE_OBS",
+        bool(config.get("adaptive_stand_phase_obs", False)),
+    )
     config["armhack_stand_csv_path"] = _resolve_path(
         os.environ.get("G1_AMP_ARMHACK_STAND_CSV_PATH", config.get("armhack_stand_csv_path", ""))
     )
@@ -1122,6 +1126,34 @@ def contact_force_with_floor(model: mujoco.MjModel, data: mujoco.MjData, floor_g
         total_force += float(np.linalg.norm(contact_force[:3]))
         foot_contact_count += 1
     return total_force, foot_contact_count
+
+
+def foot_contact_forces_with_floor(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    floor_geom_ids: set[int],
+    foot_body_ids: list[int] | set[int],
+) -> np.ndarray:
+    """Return summed contact-force magnitude for each ordered foot body."""
+    ordered_ids = list(foot_body_ids)
+    index_by_body = {body_id: index for index, body_id in enumerate(ordered_ids)}
+    forces = np.zeros(len(ordered_ids), dtype=np.float64)
+    contact_force = np.zeros(6, dtype=np.float64)
+    for contact_id in range(data.ncon):
+        contact = data.contact[contact_id]
+        geom1, geom2 = int(contact.geom1), int(contact.geom2)
+        if geom1 in floor_geom_ids:
+            other_geom = geom2
+        elif geom2 in floor_geom_ids:
+            other_geom = geom1
+        else:
+            continue
+        body_id = int(model.geom_bodyid[other_geom])
+        if body_id not in index_by_body:
+            continue
+        mujoco.mj_contactForce(model, data, contact_id, contact_force)
+        forces[index_by_body[body_id]] += float(np.linalg.norm(contact_force[:3]))
+    return forces
 
 
 def foot_contact_states_with_floor(
@@ -2603,6 +2635,18 @@ def run_mujoco(config: dict) -> None:
         initial_segment.update(nav2_segment_info)
     rollout_metrics["command_segments"].append(initial_segment)
 
+    adaptive_stand_phase = {
+        "phase": 0,
+        "first": 0,
+        "second": 1,
+        "lifted": False,
+        "phase_start_s": 0.0,
+        "initial_z": np.asarray(data.xpos[foot_body_ids, 2], dtype=np.float64).copy(),
+        "previous_contact": foot_contact_states_with_floor(
+            model, data, floor_geom_ids, foot_body_ids
+        ),
+    }
+
     policy_path = Path(config["policy_path"])
     if policy_path.suffix.lower() == ".onnx":
         try:
@@ -2665,6 +2709,49 @@ def run_mujoco(config: dict) -> None:
             command,
             config,
         )
+        if bool(config.get("adaptive_stand_phase_obs", False)):
+            contacts = foot_contact_states_with_floor(model, data, floor_geom_ids, foot_body_ids)
+            forces = foot_contact_forces_with_floor(model, data, floor_geom_ids, foot_body_ids)
+            if adaptive_stand_phase["phase"] == 0 and not adaptive_stand_phase["lifted"] and sim_time <= 0.25:
+                first = int(np.argmin(forces))
+                adaptive_stand_phase["first"] = first
+                adaptive_stand_phase["second"] = 1 - first
+            phase = int(adaptive_stand_phase["phase"])
+            active = (
+                int(adaptive_stand_phase["first"])
+                if phase == 0
+                else int(adaptive_stand_phase["second"])
+            )
+            clearance = float(data.xpos[foot_body_ids[active], 2]) - float(
+                adaptive_stand_phase["initial_z"][active]
+            )
+            if phase < 2 and (clearance >= 0.035 or not bool(contacts[active])):
+                adaptive_stand_phase["lifted"] = True
+            touchdown = bool(contacts[active]) and not bool(
+                adaptive_stand_phase["previous_contact"][active]
+            )
+            if (
+                phase < 2
+                and bool(adaptive_stand_phase["lifted"])
+                and touchdown
+                and sim_time - float(adaptive_stand_phase["phase_start_s"]) >= 0.35
+            ):
+                adaptive_stand_phase["phase"] = phase + 1
+                adaptive_stand_phase["phase_start_s"] = sim_time
+                adaptive_stand_phase["lifted"] = False
+                phase += 1
+            adaptive_stand_phase["previous_contact"] = contacts.copy()
+            if phase >= 2:
+                obs[94] = 0.0
+                obs[95] = 0.0
+            else:
+                active = (
+                    int(adaptive_stand_phase["first"])
+                    if phase == 0
+                    else int(adaptive_stand_phase["second"])
+                )
+                obs[94] = 2.0 * float(active) - 1.0
+                obs[95] = float(bool(adaptive_stand_phase["lifted"]))
         next_action = infer_policy(obs)
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)

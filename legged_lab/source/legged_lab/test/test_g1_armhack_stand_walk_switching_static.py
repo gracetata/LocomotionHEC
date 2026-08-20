@@ -12,6 +12,7 @@ WALK_CFG = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/
 WALK_SAMPLING = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/walk_precision_task_sampling.json"
 STAND_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_stand_adaptive_switch.sh"
 WALK_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_walk_precision_switch.sh"
+MUJOCO_RUNNER = ROOT / "unitree_sim2sim2real/deploy/deploy_mujoco/deploy_mujoco_g1_amp.py"
 
 
 def text(path: Path) -> str:
@@ -79,3 +80,7 @@ def test_training_sources_are_identity_locked_and_tasks_registered():
     assert "ZERO_COMMAND_TEACHER_ONLY" in walk
     algorithm = text(ROOT / "rsl_rl/rsl_rl/algorithms/ppo_amp.py")
     assert "baseline_kl_zero_command_only" in algorithm
+    mujoco_runner = text(MUJOCO_RUNNER)
+    assert "G1_AMP_ADAPTIVE_STAND_PHASE_OBS" in mujoco_runner
+    assert "foot_contact_forces_with_floor" in mujoco_runner
+    assert 'obs[94] = 2.0 * float(active) - 1.0' in mujoco_runner
