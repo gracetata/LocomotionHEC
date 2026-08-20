@@ -9,6 +9,7 @@ MDP_OBSERVATIONS = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomot
 REGISTRY = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/__init__.py"
 STAND_CFG = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_stand_adaptive_switch_env_cfg.py"
 WALK_CFG = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_walk_precision_switch_env_cfg.py"
+WALK_SAMPLING = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/walk_precision_task_sampling.json"
 STAND_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_stand_adaptive_switch.sh"
 WALK_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_walk_precision_switch.sh"
 
@@ -61,6 +62,10 @@ def test_walk_precision_has_deadband_bounded_cube_spacing_and_clearance():
     assert "ankle_distance_30cm_kernel.weight = 80.0" in cfg
     assert "precision_torso_velocity_tracking" in cfg
     assert "G1WalkAnkleSpacingBaseEnvCfg" in cfg
+    sampling = text(WALK_SAMPLING)
+    assert '"stand": 0.10' in sampling
+    assert '"lin_vel_x": [0.08, 0.40]' in sampling
+    assert '"ang_vel_z": [-0.40, -0.08]' in sampling
 
 
 def test_training_sources_are_identity_locked_and_tasks_registered():

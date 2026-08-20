@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
@@ -12,6 +14,11 @@ from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import G1_FOOT_BOD
 from .g1_walk_ankle_spacing_env_cfg import G1WalkAnkleSpacingBaseEnvCfg
 
 
+WALK_PRECISION_MODE_CONFIG_PATH = str(
+    Path(__file__).with_name("walk_precision_task_sampling.json")
+)
+
+
 @configclass
 class G1WalkPrecisionSwitchEnvCfg(G1WalkAnkleSpacingBaseEnvCfg):
     """Refine useful commands in [-0.4, 0.4] after an explicit zero start."""
@@ -20,6 +27,8 @@ class G1WalkPrecisionSwitchEnvCfg(G1WalkAnkleSpacingBaseEnvCfg):
         super().__post_init__()
         command = self.commands.base_velocity
         command.reset_command_to_zero = True
+        command.mode_sampling_config_path = WALK_PRECISION_MODE_CONFIG_PATH
+        command.mode_probability = 1.0
         command.command_clip_min = (-0.40, -0.40, -0.40)
         command.command_clip_max = (0.40, 0.40, 0.40)
         command.mode_command_clip_min = (-0.40, -0.40, -0.40)

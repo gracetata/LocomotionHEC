@@ -1,0 +1,64 @@
+{
+  "command_frame": "robot_base_local",
+  "fps": 50,
+  "mode_weights": {
+    "stand": 0.10,
+    "forward": 0.15,
+    "backward": 0.10,
+    "lateral_left": 0.12,
+    "lateral_right": 0.12,
+    "diagonal_left": 0.10,
+    "diagonal_right": 0.10,
+    "yaw_left": 0.105,
+    "yaw_right": 0.105
+  },
+  "modes": {
+    "stand": {
+      "lin_vel_x": [0.0, 0.0],
+      "lin_vel_y": [0.0, 0.0],
+      "ang_vel_z": [0.0, 0.0]
+    },
+    "forward": {
+      "lin_vel_x": [0.08, 0.40],
+      "lin_vel_y": [-0.04, 0.04],
+      "ang_vel_z": [-0.08, 0.08]
+    },
+    "backward": {
+      "lin_vel_x": [-0.40, -0.08],
+      "lin_vel_y": [-0.04, 0.04],
+      "ang_vel_z": [-0.08, 0.08]
+    },
+    "lateral_left": {
+      "lin_vel_x": [-0.04, 0.04],
+      "lin_vel_y": [0.08, 0.40],
+      "ang_vel_z": [-0.08, 0.08]
+    },
+    "lateral_right": {
+      "lin_vel_x": [-0.04, 0.04],
+      "lin_vel_y": [-0.40, -0.08],
+      "ang_vel_z": [-0.08, 0.08]
+    },
+    "diagonal_left": {
+      "lin_vel_x": [0.08, 0.40],
+      "lin_vel_y": [0.08, 0.40],
+      "ang_vel_z": [-0.08, 0.08]
+    },
+    "diagonal_right": {
+      "lin_vel_x": [0.08, 0.40],
+      "lin_vel_y": [-0.40, -0.08],
+      "ang_vel_z": [-0.08, 0.08]
+    },
+    "yaw_left": {
+      "lin_vel_x": [0.0, 0.0],
+      "lin_vel_y": [0.0, 0.0],
+      "ang_vel_z": [0.08, 0.40]
+    },
+    "yaw_right": {
+      "lin_vel_x": [0.0, 0.0],
+      "lin_vel_y": [0.0, 0.0],
+      "ang_vel_z": [-0.40, -0.08]
+    }
+  },
+  "source_dataset": "armhack_walk_precision_useful_band_v1",
+  "notes": "Ten percent exact-zero reset/transition coverage; all nonzero commands are in the useful 0.08-0.40 band."
+}
