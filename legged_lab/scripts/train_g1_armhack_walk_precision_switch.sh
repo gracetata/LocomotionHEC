@@ -14,6 +14,7 @@ SEED=${SEED:-20260821}
 RUN_NAME=${RUN_NAME:-armhack_walk_precision_switch_30cm_20260820}
 ISAACLAB_PYTHON=${ISAACLAB_PYTHON:-${HOME}/anaconda3/envs/env_isaaclab/bin/python}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-"${PROJECT_DIR}/logs/monitoring/${RUN_NAME}.log"}
+KL_SCALE=${KL_SCALE:-0.20}
 
 die() { echo "Error: $*" >&2; exit 1; }
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "Isaac Python missing: ${ISAACLAB_PYTHON}"
@@ -33,7 +34,7 @@ RUN_NAME="${RUN_NAME}" RESUME=True LOAD_RUN="^${STAGING_RUN}$" CHECKPOINT='^mode
 HEADLESS=True QUIET_TERMINAL=True TRAIN_LOG_FILE="${TRAIN_LOG_FILE}" ROBOT_ASSET=s3_g1_29dof \
 RSI_ENABLE=False RANDOMIZATION_STRENGTH=1 STYLE_REWARD_SCALE=5.0 TASK_STYLE_LERP=1.0 \
 AMP_GRAD_PENALTY_SCALE=20.0 BASELINE_KL_ENABLE=True \
-BASELINE_KL_CHECKPOINT="${SOURCE_CHECKPOINT}" BASELINE_KL_SCALE=0.75 \
+BASELINE_KL_CHECKPOINT="${SOURCE_CHECKPOINT}" BASELINE_KL_SCALE="${KL_SCALE}" \
 bash "${PROJECT_DIR}/scripts/train_g1_amp.sh" \
   agent.experiment_name="${EXPERIMENT}" \
   agent.checkpoint_output_dir="ArmHack Checkpoints/WalkPrecisionSwitch" \
@@ -44,7 +45,7 @@ bash "${PROJECT_DIR}/scripts/train_g1_amp.sh" \
   agent.algorithm.entropy_coef=0.0003 agent.algorithm.desired_kl=0.01 \
   agent.algorithm.baseline_kl_cfg.enabled=True \
   agent.algorithm.baseline_kl_cfg.checkpoint_path="$(realpath "${SOURCE_CHECKPOINT}")" \
-  agent.algorithm.baseline_kl_cfg.scale=0.75 \
-  agent.algorithm.baseline_kl_cfg.hard_limit=0.20 \
+  agent.algorithm.baseline_kl_cfg.scale="${KL_SCALE}" \
+  agent.algorithm.baseline_kl_cfg.hard_limit=0.25 \
   agent.algorithm.amp_cfg.freeze_discriminator=True \
   "$@"

@@ -58,6 +58,8 @@ def test_walk_precision_has_deadband_bounded_cube_spacing_and_clearance():
     assert "command.reset_command_to_zero = True" in cfg
     assert "command.command_clip_min = (-0.40, -0.40, -0.40)" in cfg
     assert '"target_height": 0.065' in cfg
+    assert "ankle_distance_30cm_kernel.weight = 80.0" in cfg
+    assert "precision_torso_velocity_tracking" in cfg
     assert "G1WalkAnkleSpacingBaseEnvCfg" in cfg
 
 

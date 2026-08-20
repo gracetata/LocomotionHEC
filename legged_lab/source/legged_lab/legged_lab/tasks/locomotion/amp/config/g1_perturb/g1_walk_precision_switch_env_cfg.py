@@ -31,9 +31,14 @@ class G1WalkPrecisionSwitchEnvCfg(G1WalkAnkleSpacingBaseEnvCfg):
         torso_cfg = SceneEntityCfg("robot", body_names="torso_link")
         foot_cfg = SceneEntityCfg("robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True)
         sensor_cfg = SceneEntityCfg("contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True)
+        # The inherited value 500 is suitable for discovering a 30-cm gait,
+        # but overwhelms the much smaller velocity signal during precision
+        # continuation.  Keep a strong nonzero spacing anchor without letting
+        # it dominate every useful-command sample.
+        self.rewards.ankle_distance_30cm_kernel.weight = 80.0
         self.rewards.precision_torso_velocity_tracking = RewTerm(
             func=mdp.precision_torso_velocity_tracking_exp,
-            weight=8.0,
+            weight=24.0,
             params={
                 "command_name": "base_velocity",
                 "min_command": 0.04,
@@ -45,7 +50,7 @@ class G1WalkPrecisionSwitchEnvCfg(G1WalkAnkleSpacingBaseEnvCfg):
         )
         self.rewards.precision_torso_velocity_error = RewTerm(
             func=mdp.precision_torso_velocity_error_l2,
-            weight=-5.0,
+            weight=-16.0,
             params={
                 "command_name": "base_velocity",
                 "min_command": 0.04,
@@ -56,7 +61,7 @@ class G1WalkPrecisionSwitchEnvCfg(G1WalkAnkleSpacingBaseEnvCfg):
         )
         self.rewards.feet_swing_clearance_band_l2 = RewTerm(
             func=mdp.feet_swing_clearance_band_l2,
-            weight=-0.65,
+            weight=-1.50,
             params={
                 "command_name": "base_velocity",
                 "sensor_cfg": sensor_cfg,
@@ -68,7 +73,7 @@ class G1WalkPrecisionSwitchEnvCfg(G1WalkAnkleSpacingBaseEnvCfg):
                 "max_height": 0.13,
             },
         )
-        self.rewards.feet_slide.weight = -0.25
+        self.rewards.feet_slide.weight = -0.40
 
 
 @configclass
