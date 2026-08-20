@@ -998,6 +998,32 @@ def feet_planar_separation_l2(
     return torch.square(distance - target_distance)
 
 
+def ankle_distance_target_kernel(
+    env: ManagerBasedRLEnv,
+    target_distance: float = 0.30,
+    std: float = 0.06,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward a three-dimensional left/right ankle distance near a target.
+
+    The two configured body origins are the ankle joint/link frames.  Using the
+    full Euclidean norm makes the definition independent of robot yaw and keeps
+    it valid while one foot is in swing.  The returned Gaussian kernel is in
+    ``(0, 1]`` and reaches one only at ``target_distance``.
+    """
+    if target_distance <= 0.0:
+        raise ValueError(f"target_distance must be positive, got {target_distance}")
+    if std <= 0.0:
+        raise ValueError(f"std must be positive, got {std}")
+    if len(asset_cfg.body_ids) != 2:
+        raise ValueError("ankle_distance_target_kernel expects exactly two ankle bodies.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    ankle_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids, :]
+    distance = torch.linalg.vector_norm(ankle_pos_w[:, 0] - ankle_pos_w[:, 1], dim=1)
+    normalized_error = (distance - target_distance) / std
+    return torch.exp(-0.5 * torch.square(normalized_error))
+
+
 def feet_stumble(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]

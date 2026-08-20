@@ -1,0 +1,56 @@
+{
+  "pos1_back_lateral_left": {
+    "signed_vy": 0.24166966518157768,
+    "clearance": 0.07295158125721589
+  },
+  "pos1_back_lateral_right": {
+    "signed_vy": 0.24119278759302742,
+    "clearance": 0.07231928720377646
+  },
+  "pos1_back_yaw_left": {
+    "signed_yaw": 0.4595051771213511,
+    "drift": 0.02635172944081844,
+    "clearance": 0.07527067466518933
+  },
+  "pos1_back_yaw_right": {
+    "signed_yaw": 0.4669505173318386,
+    "drift": 0.02650317314552784,
+    "clearance": 0.0754945758724985
+  },
+  "pos2_down_lateral_left": {
+    "signed_vy": 0.21734996094536652,
+    "clearance": 0.0422148734024152
+  },
+  "pos2_down_lateral_right": {
+    "signed_vy": 0.21938418469901672,
+    "clearance": 0.037517841295321416
+  },
+  "pos2_down_yaw_left": {
+    "signed_yaw": 0.47534118557890154,
+    "drift": 0.02307202910999657,
+    "clearance": 0.06199593307668486
+  },
+  "pos2_down_yaw_right": {
+    "signed_yaw": 0.4757354243336486,
+    "drift": 0.025836287522276676,
+    "clearance": 0.06108161129848033
+  },
+  "pos3_front_lateral_left": {
+    "signed_vy": 0.2257338448840587,
+    "clearance": 0.06133298619075822
+  },
+  "pos3_front_lateral_right": {
+    "signed_vy": 0.2318041509381585,
+    "clearance": 0.05653805078423532
+  },
+  "pos3_front_yaw_left": {
+    "signed_yaw": 0.45587834385395437,
+    "drift": 0.018770402098225555,
+    "clearance": 0.06293181920201797
+  },
+  "pos3_front_yaw_right": {
+    "signed_yaw": 0.45807667351952125,
+    "drift": 0.022264555631991107,
+    "clearance": 0.0610520581150163
+  }
+}

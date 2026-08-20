@@ -1,0 +1,1 @@
+/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/yaw/2026-08-14_17-06-52_ankle30_yaw_full_20260814/model_199.pt

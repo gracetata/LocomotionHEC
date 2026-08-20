@@ -1,0 +1,20 @@
+{
+  "pos2_down_lateral_left": {
+    "signed_vy": 0.22727572669200674,
+    "clearance": 0.04624188291646813
+  },
+  "pos2_down_lateral_right": {
+    "signed_vy": 0.2270803157465646,
+    "clearance": 0.04259616975406026
+  },
+  "pos2_down_yaw_left": {
+    "signed_yaw": 0.4818701468292236,
+    "drift": 0.024747212594772937,
+    "clearance": 0.06377924640051119
+  },
+  "pos2_down_yaw_right": {
+    "signed_yaw": 0.47865996414037143,
+    "drift": 0.02352490446609148,
+    "clearance": 0.06405029530020401
+  }
+}

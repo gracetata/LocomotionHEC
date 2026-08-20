@@ -150,3 +150,79 @@ gym.register(
         ),
     },
 )
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkTwoGoalLateral-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_walk_two_goal_env_cfg:G1WalkTwoGoalLateralExpertEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkTwoGoalExpertRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkTwoGoalLateralRobust-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_walk_two_goal_env_cfg:G1WalkTwoGoalLateralRobustEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkTwoGoalRobustRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkTwoGoalYaw-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_walk_two_goal_env_cfg:G1WalkTwoGoalYawExpertEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkTwoGoalExpertRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkTwoGoalYawRobust-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_walk_two_goal_env_cfg:G1WalkTwoGoalYawRobustEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkTwoGoalRobustRslRlOnPolicyRunnerAmpCfg"
+        ),
+    },
+)
+
+for branch, env_cfg_name in (
+    ("Base", "G1WalkAnkleSpacingBaseEnvCfg"),
+    ("Lateral", "G1WalkAnkleSpacingLateralEnvCfg"),
+    ("Yaw", "G1WalkAnkleSpacingYawEnvCfg"),
+):
+    gym.register(
+        id=f"LeggedLab-Isaac-AMP-G1-ArmHackWalkAnkleSpacing{branch}-v0",
+        entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.g1_walk_ankle_spacing_env_cfg:{env_cfg_name}"
+            ),
+            "rsl_rl_cfg_entry_point": (
+                f"{agents.__name__}.rsl_rl_ppo_cfg:"
+                "G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg"
+            ),
+        },
+    )

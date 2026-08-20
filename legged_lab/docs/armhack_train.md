@@ -3570,3 +3570,116 @@ lower_body_torque_rms_nm                5.1106 Nm
 它不能单独证明策略已经学会最优重心。正式结论必须用相同 seed、负载、外力和双臂轨迹分别评估输入
 `model_1999` 与续训最终模型。只有踝力矩均值/RMS/峰值显著下降，且 20 s 存活、终止率、躯干稳定、脚滑、脚距和
 任务成功率不退化，并且没有把力矩明显转移到髋、膝或腰，才判定达到了“最少必要踝力矩下保持站立和完成任务”的目标。
+
+## 21. Walk 双目标专家：侧移防踩脚与零线速度原地转身（2026-08-11）
+
+本轮只修改 Walk 路径，不引用或修改任何 Stand task、checkpoint 和训练进程。输入主策略固定为
+`checkpoint/walk/model_10990.pt`，SHA-256 为
+`1af3b722e1d07f8d7a40e32265cf67e46cfd2c74c50f6556cb369d2ea1e22c00`。三个双臂姿态在 episode reset
+时等概率选择，episode 内保持固定；因此腿、腰和躯干专家是在双臂截持真实生效的条件下训练的。
+
+### 21.1 训练结构与奖励
+
+两个相互独立的全容量专家分别学习严格命令子空间：
+
+- 侧移专家只采样 `[vx=0, vy=±0.20~0.35, wz=0]`。奖励包含真实横向根速度响应、响应不足、前向/偏航泄漏、
+  左右脚顺序，以及完整旋转脚掌矩形的扫掠间距。脚掌不是质点：半长 `0.090 m`、半宽 `0.035 m`、前向中心偏移
+  `0.035 m`，每帧间使用 12 个插值姿态做 SAT 距离/重叠检查。学习阶段硬间距为 25 mm；稳健阶段提升到
+  30 mm，hard barrier 为 `-300`，脚掌重叠额外放大 16 倍。
+- 转身专家只采样 `[vx=0, vy=0, wz=±0.30~0.45]`。策略观测不伪造线速度，奖励直接使用根节点实际偏航角速度，
+  同时惩罚平面漂移、偏航误差和脚掌危险间距，要求通过交替落脚完成转身，而不是只扭上半身。
+- 稳健抛光加入摩擦/恢复系数、躯干质量和 COM、全身 link 质量、执行器刚度/阻尼、关节摩擦/armature 和随机推力。
+- 部署模型保留逐张量完全相同的 `model_10990` 主 actor。只有严格侧移或严格纯转身命令触发对应专家；普通前向、
+  斜向、静止等命令继续使用原始 actor，避免专项训练破坏已有 Nav2/ArmHack 能力。
+
+实现位置：
+
+```text
+环境与奖励装配：source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_walk_two_goal_env_cfg.py
+任务注册：      source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/__init__.py
+PPO 配置：      source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/agents/rsl_rl_ppo_cfg.py
+Future 训练入口：scripts/train_g1_armhack_walk_two_goal_expert.sh
+专家合并：      scripts/merge_g1_armhack_walk_two_goal_experts.py
+ONNX/JIT 门控： scripts/rsl_rl/export_amp_actor_to_onnx.py
+严格 MuJoCo：   scripts/test_g1_armhack_walk_two_goal_mujoco.sh
+```
+
+### 21.2 Future 5090 训练命令
+
+训练脚本会检查主机名 `tata-futurelab`、RTX 5090、输入 checkpoint 大小和 SHA，并拒绝在 Stand 训练运行时启动。
+因此以下命令必须在 Future 5090 执行：
+
+```bash
+ssh future5090
+cd /home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab
+
+# 真实训练链 smoke
+NUM_ENVS=8 MAX_ITERATIONS=1 RUN_NAME=smoke EXPERT=lateral STAGE=learn \
+  bash scripts/train_g1_armhack_walk_two_goal_expert.sh
+NUM_ENVS=8 MAX_ITERATIONS=1 RUN_NAME=smoke EXPERT=yaw STAGE=learn \
+  bash scripts/train_g1_armhack_walk_two_goal_expert.sh
+
+# 第一阶段正式训练
+NUM_ENVS=4096 MAX_ITERATIONS=60 RUN_NAME=formal EXPERT=lateral STAGE=learn \
+  bash scripts/train_g1_armhack_walk_two_goal_expert.sh
+NUM_ENVS=4096 MAX_ITERATIONS=80 RUN_NAME=formal EXPERT=yaw STAGE=learn \
+  bash scripts/train_g1_armhack_walk_two_goal_expert.sh
+```
+
+稳健阶段从已选中的专家 checkpoint 继续，必须同时给出真实大小和 SHA：
+
+```bash
+SOURCE_CHECKPOINT='/absolute/path/to/lateral/model_59.pt' \
+SOURCE_SIZE=8834713 SOURCE_SHA256='<sha256>' \
+NUM_ENVS=4096 MAX_ITERATIONS=16 RUN_NAME=formal EXPERT=lateral STAGE=robust \
+  bash scripts/train_g1_armhack_walk_two_goal_expert.sh
+
+SOURCE_CHECKPOINT='/absolute/path/to/yaw/model_79.pt' \
+SOURCE_SIZE=8834713 SOURCE_SHA256='<sha256>' \
+NUM_ENVS=4096 MAX_ITERATIONS=16 RUN_NAME=formal EXPERT=yaw STAGE=robust \
+  bash scripts/train_g1_armhack_walk_two_goal_expert.sh
+```
+
+### 21.3 合并、测试与验收标准
+
+合并后只把两个专家写到新的命名空间，不覆盖主 actor：
+
+```bash
+python scripts/merge_g1_armhack_walk_two_goal_experts.py \
+  --base ../checkpoint/walk/model_10990.pt \
+  --lateral-expert '/absolute/path/to/lateral/model_15.pt' \
+  --yaw-expert '/absolute/path/to/yaw/model_15.pt' \
+  --output 'ArmHack Checkpoints/WalkTwoGoalFinetune/candidates/model_two_goal.pt'
+```
+
+三种双臂姿态的正式无窗口 MuJoCo 验收：
+
+```bash
+ALL_POSES=True DURATION=6 \
+CHECKPOINT='ArmHack Checkpoints/WalkTwoGoalFinetune/candidates/model_two_goal.pt' \
+EXPORT_ROOT='evaluations/armhack_two_goal_formal' \
+bash scripts/test_g1_armhack_walk_two_goal_mujoco.sh
+```
+
+验收不是“没有摔倒”即可：侧移 `vy=±0.25` 要求同向实际速度至少 `0.18 m/s`、`|vx|≤0.04 m/s`、
+`|wz|≤0.08 rad/s`、旋转脚掌最小间距至少 30 mm、硬违规率为 0、至少 4 次 touchdown；原地转身
+`wz=±0.35` 要求同向实际角速度至少 `0.25 rad/s`、平面漂移不超过 `0.035 m/s`、最小间距至少 25 mm、
+硬违规率为 0、至少 4 次 touchdown。脚本还检查零速静止和前向能力相对主策略不退化超过 15%。
+
+### 21.4 本轮最终模型和结果
+
+最终稳健模型保存在本机：
+
+```text
+checkpoint/walk/armhack_two_goal_20260811/model_armhack_walk_two_goal_robust.pt
+checkpoint/walk/armhack_two_goal_20260811/policy.onnx
+checkpoint/walk/armhack_two_goal_20260811/policy.pt
+checkpoint/walk/armhack_two_goal_20260811/policy.deploy.json
+checkpoint/walk/armhack_two_goal_20260811/evaluation/
+```
+
+checkpoint SHA-256 为 `00a36bd58ce63c39e7c441d507e4111df92281ea1f5b59fe6869fb28830a00ce`。
+三姿态 12 个专项场景全部通过：侧移实际速度 `0.227~0.246 m/s`，最低脚掌间距 42.6 mm；转身实际角速度
+`0.456~0.482 rad/s`，最大平面漂移 31.5 mm/s，最低脚掌间距 60.9 mm；所有场景硬间距违规率为 0。
+另外在低、高两组 joint damping/armature/frictionloss 下重复 `pos2_down` 专项测试，也全部通过。Future 与本机的
+checkpoint、ONNX 和 TorchScript SHA-256 已逐一核对一致。

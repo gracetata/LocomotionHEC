@@ -1,0 +1,194 @@
+{
+  "sim_time": 3.001999999999891,
+  "task_tracking": {
+    "command_lin_vel_x": 0.0,
+    "command_lin_vel_y": -0.25,
+    "command_yaw_rate": 0.0,
+    "mean_lin_vel_x": 0.017394902408607298,
+    "mean_lin_vel_y": -0.28996117166974095,
+    "mean_yaw_rate": 0.04072833504101342,
+    "lin_vel_xy_mae": 0.09924427956388612,
+    "lin_vel_xy_max_error": 0.2893000543117523,
+    "yaw_rate_mae": 0.08725452376902583,
+    "yaw_rate_max_error": 0.31490957736968994,
+    "forward_distance": 0.8673447424225742,
+    "lateral_distance": 0.14679152192547917,
+    "command_mode": "fixed",
+    "command_ramp": false,
+    "command_interval": 2.0,
+    "mean_command_lin_vel_x": 0.0,
+    "mean_command_lin_vel_y": -0.25,
+    "mean_command_yaw_rate": 0.0,
+    "min_command_lin_vel_x": 0.0,
+    "max_command_lin_vel_x": 0.0,
+    "min_command_lin_vel_y": -0.25,
+    "max_command_lin_vel_y": -0.25,
+    "min_command_yaw_rate": 0.0,
+    "max_command_yaw_rate": 0.0
+  },
+  "command_segments": [
+    {
+      "id": 0,
+      "name": "segment_0",
+      "start_time": 0.0,
+      "command": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "mean_command": [
+        0.0,
+        -0.25,
+        0.0
+      ],
+      "samples": 1501,
+      "duration_s": 3.0020000000000002,
+      "steady_settle_time_s": 0.75,
+      "steady_samples": 1127,
+      "mean_lin_vel_x": 0.0173949021846056,
+      "mean_lin_vel_y": -0.28996118903160095,
+      "mean_yaw_rate": 0.040728334337472916,
+      "steady_mean_lin_vel_x": 0.02876247838139534,
+      "steady_mean_lin_vel_y": -0.3070315718650818,
+      "steady_mean_yaw_rate": 0.06996755301952362,
+      "lin_vel_xy_mae": 0.09924428164958954,
+      "yaw_rate_mae": 0.08725452423095703,
+      "steady_lin_vel_xy_mae": 0.10629332810640335,
+      "steady_yaw_rate_mae": 0.08852001279592514,
+      "steady_planar_displacement_m": 0.6939440369606018,
+      "steady_mean_foot_planar_speed_m_per_s": 0.4948173761367798,
+      "steady_touchdown_count": 24,
+      "steady_step_frequency_hz": 10.64773735581189,
+      "steady_min_signed_sole_clearance_m": 0.06108459457755089,
+      "steady_sole_clearance_violation_fraction": 0.0,
+      "steady_max_abs_roll_rad": 0.06798112392425537,
+      "steady_max_abs_pitch_rad": 0.08731567859649658,
+      "tracking_score": 77.91319190154607
+    }
+  ],
+  "early_motion": {
+    "enabled": true,
+    "window_s": 1.0,
+    "samples": 499,
+    "initial_command": [
+      0.0,
+      -0.25,
+      0.0
+    ],
+    "mean_command": [
+      0.0,
+      -0.25,
+      0.0
+    ],
+    "min_root_height": 0.762862150273085,
+    "min_torso_height": 0.8165380358695984,
+    "root_height_drop_m": 0.03713786164784394,
+    "torso_height_drop_m": 0.03746199607849121,
+    "max_abs_roll_rad": 0.05056539177894592,
+    "max_abs_pitch_rad": 0.06476421654224396,
+    "max_vertical_vel_abs_m_per_s": 0.37044283747673035,
+    "max_yaw_rate_abs_rad_per_s": 0.31490957736968994,
+    "lin_vel_xy_mae_m_per_s": 0.09231927643953738,
+    "yaw_rate_mae_rad_per_s": 0.0989757054014339,
+    "foot_contact_duty": 0.9619238476953907,
+    "first_any_foot_contact_time_s": 0.03999999910593033,
+    "first_no_foot_contact_time_s": 0.0020000000949949026
+  },
+  "important_metrics": {
+    "torso_roll_error_rad": 0.03200519035785713,
+    "torso_pitch_error_rad": 0.05744470802187652,
+    "torso_lin_vel_xy_cmd_error_m_per_s": 0.09924427956388612,
+    "torso_lateral_vel_cmd_error_m_per_s": 0.08462653211321058,
+    "torso_yaw_rate_cmd_error_rad_per_s": 0.08725452376902583,
+    "torso_vertical_vel_error_m_per_s": 0.06373785241857229,
+    "torso_height_error_m": 0.021083905806468378,
+    "torso_ang_vel_xy_error_rad_per_s": 0.28155245252330846,
+    "torso_ang_acc_xy_error_rad_per_s2": 8.047203649428589,
+    "torso_specific_force_xy_error_m_per_s2": 2.181542133958359,
+    "torso_specific_force_z_error_m_per_s2": 2.130155311467175,
+    "torso_lateral_path_ratio": 0.169242418551448
+  },
+  "health": {
+    "healthy": true,
+    "fallen": false,
+    "fall_time": null,
+    "min_root_height": 0.762862150273085,
+    "mean_root_height": 0.7789296657745134,
+    "min_torso_height": 0.8165380358695984,
+    "mean_torso_height": 0.8329161261416212,
+    "max_abs_roll": 0.06798112392425537,
+    "max_abs_pitch": 0.08731567859649658,
+    "foot_contact_duty": 0.9873417721518988,
+    "foot_touchdown_count": 29,
+    "step_frequency_hz": 9.66022651565658,
+    "min_signed_sole_clearance_m": 0.026141506097631148,
+    "sole_clearance_violation_fraction": 0.0,
+    "healthy_min_root_height": 0.45,
+    "healthy_max_roll_pitch": 1.0
+  },
+  "score": {
+    "total_score": 86.6491523657293,
+    "health_score": 100.0,
+    "tracking_score": 77.9131922389731,
+    "torso_score": 77.5181403283548,
+    "contact_score": 100.0,
+    "lin_vel_score": 75.31016367942779,
+    "yaw_rate_score": 83.98692554457882
+  },
+  "torso_trace": {
+    "body_name": "torso_link",
+    "local_point_m": [
+      0.0,
+      0.0,
+      0.18000000715255737
+    ],
+    "sample_count": 1,
+    "path_length_m": 0.91900335493483,
+    "csv_path": "/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/evaluations/nav2_lateral_robust_calibration_20260809/f0.12_y0.08/mujoco_torso_trace.csv"
+  },
+  "task_trace": {
+    "enabled": false,
+    "sample_count": 1,
+    "path_length_m": 0.7505070567131042,
+    "height_m": 0.05,
+    "csv_path": "/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/evaluations/nav2_lateral_robust_calibration_20260809/f0.12_y0.08/mujoco_task_trace.csv"
+  },
+  "joystick": {
+    "enabled": false,
+    "device": "/dev/input/js0",
+    "axis_lin_x": 1,
+    "axis_lin_y": 0,
+    "axis_yaw": 3,
+    "ranges": {
+      "lin_vel_x": [
+        -0.2,
+        1.5
+      ],
+      "lin_vel_y": [
+        -0.25,
+        0.25
+      ],
+      "yaw_rate": [
+        -0.6,
+        0.6
+      ]
+    },
+    "deadzone": 0.05
+  },
+  "keyboard": {
+    "enabled": false,
+    "linear_step": 0.01,
+    "yaw_step": 0.05
+  },
+  "scene": {
+    "source_xml": "/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/source/legged_lab/legged_lab/data/Robots/Unitree/s3_g1_29dof/g1_29dof.xml",
+    "generated_xml": "/tmp/g1_29dof_sim2sim_scene.xml",
+    "mesh_file_remaps": [],
+    "dropped_missing_mesh_assets": [],
+    "dropped_missing_mesh_geom_count": 0,
+    "added_floor": true,
+    "added_headlight": true,
+    "added_world_light": true,
+    "joint_passive_params_updated": 35
+  }
+}
