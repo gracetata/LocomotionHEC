@@ -1,0 +1,95 @@
+seed: 20260819
+device: cuda:0
+num_steps_per_env: 24
+max_iterations: 2000
+empirical_normalization: {}
+obs_groups:
+  policy:
+  - policy
+  critic:
+  - critic
+  discriminator:
+  - disc
+  discriminator_demonstration:
+  - disc_demo
+clip_actions: null
+check_for_nan: true
+save_interval: 25
+experiment_name: g1_stand_perturb
+run_name: armhack_stand_step_stabilize_from_twostep25_gpu0_20260815
+logger: tensorboard
+neptune_project: isaaclab
+wandb_project: isaaclab
+resume: true
+load_run: ^_armhack_stand_foot_recovery_base_robust2999_146aca1f547c$
+load_checkpoint: ^model_2999.pt$
+class_name: AMPRunner
+actor: {}
+critic: {}
+algorithm:
+  class_name: PPOAMP
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.0001
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 1.0e-06
+  schedule: fixed
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+  normalize_advantage_per_mini_batch: false
+  rnd_cfg: null
+  symmetry_cfg:
+    use_data_augmentation: true
+    use_mirror_loss: true
+    data_augmentation_func: legged_lab.tasks.locomotion.amp.mdp.symmetry.g1:compute_symmetric_states
+    mirror_loss_coeff: 0.1
+  baseline_kl_cfg:
+    enabled: true
+    checkpoint_path: /home/hecggdz/ARM-HACK/LocomotionHEC/legged_lab/logs/rsl_rl/g1_stand_perturb/2026-08-15_04-33-05_armhack_stand_step_gatedlift_safe_mirror_v2_gpu0_20260815/model_25.pt
+    scale: 1.0
+    min_std: 0.0001
+    exempt_obs_index: 94
+    exempt_obs_threshold: 0.5
+    mirror_phase_one: true
+    lift_obs_index: 95
+  amp_cfg:
+    disc_obs_buffer_size: 100
+    grad_penalty_scale: 10.0
+    disc_trunk_weight_decay: 0.0001
+    disc_linear_weight_decay: 0.01
+    disc_learning_rate: 0.0001
+    disc_max_grad_norm: 1.0
+    normalizer_mode: policy
+    demo_normalizer_init_batches: 8
+    amp_discriminator:
+      hidden_dims:
+      - 1024
+      - 512
+      activation: elu
+      style_reward_scale: 0.0
+      task_style_lerp: 1.0
+    loss_type: LSGAN
+policy:
+  class_name: ActorCritic
+  init_noise_std: 1.0
+  noise_std_type: scalar
+  state_dependent_std: false
+  actor_obs_normalization: false
+  critic_obs_normalization: false
+  actor_hidden_dims:
+  - 512
+  - 256
+  - 128
+  critic_hidden_dims:
+  - 512
+  - 256
+  - 128
+  activation: elu
+policy_only_noise_std_override: 0.15
+load_policy_only: true
+reset_iteration_on_policy_only_load: true
+checkpoint_output_dir: ArmHack Checkpoints/StandPerturb
