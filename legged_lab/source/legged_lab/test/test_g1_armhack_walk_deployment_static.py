@@ -131,8 +131,8 @@ def test_real_pose_set_and_joystick_contract_validation_execute():
 def test_fixed_arm_action_is_used_for_first_and_following_observations():
     runner_text = _text(MUJOCO_RUNNER)
     real_text = _text(REAL_RUNNER)
-    assert "action = armhack_walk.compose_action(action)" in runner_text
-    assert "next_action = armhack_walk.compose_action(next_action)" in runner_text
+    assert "action = armhack_walk.compose_action(action, 0.0)" in runner_text
+    assert "next_action = armhack_walk.compose_action(next_action, sim_time)" in runner_text
     assert "controller.action_policy = (startup_policy - config.default_angles) / config.action_scale" in real_text
     assert "self.obs[67:96] = self.action_policy" in real_text
     assert "self.action_policy = (target_policy - config.default_angles) / config.action_scale" in real_text

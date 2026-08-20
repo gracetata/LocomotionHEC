@@ -34,6 +34,22 @@ class single_body_force_curriculum(ManagerTermBase):
         self._active_body_slot = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self._active_direction = torch.zeros((env.num_envs, 2), device=env.device)
         self._all_env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+        enabled_fraction = float(cfg.params.get("enabled_env_fraction", 1.0))
+        if not 0.0 <= enabled_fraction <= 1.0:
+            raise ValueError(
+                "enabled_env_fraction must be within [0, 1], "
+                f"got {enabled_fraction}."
+            )
+        enabled_count = int(round(enabled_fraction * env.num_envs))
+        self.disturbance_enabled = torch.zeros(
+            env.num_envs, dtype=torch.bool, device=env.device
+        )
+        if enabled_count > 0:
+            # The cohort is sampled once and remains fixed across resets.  The
+            # complementary environments become a clean anchor distribution:
+            # they recover only from reset noise and then practise long holds.
+            enabled_ids = torch.randperm(env.num_envs, device=env.device)[:enabled_count]
+            self.disturbance_enabled[enabled_ids] = True
         self._sample_initial_quiet(self._all_env_ids, cfg.params.get("initial_quiet_range_s", (1.0, 2.0)))
 
     @property
@@ -86,15 +102,27 @@ class single_body_force_curriculum(ManagerTermBase):
         initial_quiet_range_s: tuple[float, float] = (1.0, 2.0),
         force_magnitudes_n: tuple[float, float, float, float] = (10.0, 20.0, 36.0, 45.0),
         stage_step_thresholds: tuple[int, int, int] = (7200, 14400, 24000),
+        body_force_scales: tuple[float, ...] | None = None,
+        enabled_env_fraction: float = 1.0,
         direction_probabilities: tuple[float, float, float, float] = (0.15, 0.30, 0.20, 0.35),
     ) -> None:
-        del asset_cfg, initial_quiet_range_s
+        del asset_cfg, initial_quiet_range_s, enabled_env_fraction
         if tick_s <= 0.0:
             raise ValueError("tick_s must be positive.")
         if len(force_magnitudes_n) != 4 or len(stage_step_thresholds) != 3:
             raise ValueError("V5 curriculum requires four force levels and three thresholds.")
         if any(force <= 0.0 for force in force_magnitudes_n):
             raise ValueError("All curriculum forces must be positive.")
+        if body_force_scales is None:
+            body_scales = torch.ones(len(self._body_ids), device=env.device)
+        else:
+            if len(body_force_scales) != len(self._body_ids) or any(
+                scale <= 0.0 or scale > 1.0 for scale in body_force_scales
+            ):
+                raise ValueError(
+                    "body_force_scales must match selected bodies and stay within (0, 1]."
+                )
+            body_scales = torch.tensor(body_force_scales, device=env.device)
         probabilities = torch.tensor(direction_probabilities, device=env.device)
         if probabilities.shape != (4,) or torch.any(probabilities < 0.0) or probabilities.sum() <= 0.0:
             raise ValueError("direction_probabilities must contain four non-negative values.")
@@ -103,6 +131,12 @@ class single_body_force_curriculum(ManagerTermBase):
         # Every callback first clears the selected environments, so a force can
         # never survive a reset or overlap with the next sampled disturbance.
         self._clear_wrench(env_ids)
+        env_ids = env_ids[self.disturbance_enabled[env_ids]]
+        if len(env_ids) == 0:
+            env.extras.setdefault("log", {})[
+                "ExtremeStand/disturbance_enabled_fraction"
+            ] = self.disturbance_enabled.float().mean()
+            return
         self.active_time_left[env_ids] = torch.clamp_min(self.active_time_left[env_ids] - tick_s, 0.0)
         active = self.active_time_left[env_ids] > 0.0
         finished = (~active) & (self._force_magnitude[env_ids] > 0.0)
@@ -148,8 +182,11 @@ class single_body_force_curriculum(ManagerTermBase):
                 dtype=self._asset.data.joint_pos.dtype,
             )
             rows = torch.arange(len(active_ids), device=env.device)
+            applied_magnitude = self._force_magnitude[active_ids] * body_scales[
+                self._active_body_slot[active_ids]
+            ]
             forces[rows, self._active_body_slot[active_ids], :2] = (
-                self._active_direction[active_ids] * self._force_magnitude[active_ids, None]
+                self._active_direction[active_ids] * applied_magnitude[:, None]
             )
             self._asset.set_external_force_and_torque(
                 forces,
@@ -161,7 +198,15 @@ class single_body_force_curriculum(ManagerTermBase):
 
         # These scalar diagnostics are written to TensorBoard by the standard runner.
         env.extras.setdefault("log", {})["ExtremeStand/disturbance_stage"] = float(stage)
+        env.extras["log"]["ExtremeStand/disturbance_enabled_fraction"] = (
+            self.disturbance_enabled.float().mean()
+        )
         env.extras["log"]["ExtremeStand/disturbance_force_n"] = self._force_magnitude.mean()
         env.extras["log"]["ExtremeStand/disturbance_active_fraction"] = (
             self.active_time_left > 0.0
         ).float().mean()
+        env.extras["log"]["ExtremeStand/disturbance_applied_force_n"] = torch.where(
+            self.active_time_left > 0.0,
+            self._force_magnitude * body_scales[self._active_body_slot],
+            torch.zeros_like(self._force_magnitude),
+        ).mean()

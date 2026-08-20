@@ -111,6 +111,8 @@ XML_PATH=${XML_PATH:-}
 USE_GLFW=${USE_GLFW:-True}
 SIMULATION_DURATION=${SIMULATION_DURATION:-20.0}
 REAL_TIME=${REAL_TIME:-True}
+RENDER_FPS=${RENDER_FPS:-60.0}
+REALTIME_STATUS_INTERVAL_S=${REALTIME_STATUS_INTERVAL_S:-5.0}
 ADD_FLOOR=${ADD_FLOOR:-True}
 ENSURE_LIGHTING=${ENSURE_LIGHTING:-True}
 REPAIR_MISSING_MESHES=${REPAIR_MISSING_MESHES:-True}
@@ -279,6 +281,8 @@ export G1_AMP_XML_PATH="${XML_PATH}"
 export G1_AMP_USE_GLFW="${USE_GLFW}"
 export G1_AMP_SIMULATION_DURATION="${SIMULATION_DURATION}"
 export G1_AMP_REAL_TIME="${REAL_TIME}"
+export G1_AMP_RENDER_FPS="${RENDER_FPS}"
+export G1_AMP_REALTIME_STATUS_INTERVAL_S="${REALTIME_STATUS_INTERVAL_S}"
 export G1_AMP_ADD_FLOOR="${ADD_FLOOR}"
 export G1_AMP_ENSURE_LIGHTING="${ENSURE_LIGHTING}"
 export G1_AMP_REPAIR_MISSING_MESHES="${REPAIR_MISSING_MESHES}"
@@ -364,6 +368,7 @@ echo "XML Path    : ${XML_PATH}"
 echo "Use GLFW    : ${USE_GLFW}"
 echo "Duration    : ${SIMULATION_DURATION}"
 echo "Real Time   : ${REAL_TIME}"
+echo "Render/RTF  : ${RENDER_FPS} FPS / status every ${REALTIME_STATUS_INTERVAL_S}s"
 echo "Add Floor   : ${ADD_FLOOR}"
 echo "Lighting    : ${ENSURE_LIGHTING}"
 echo "Mesh Repair : ${REPAIR_MISSING_MESHES}"
@@ -382,7 +387,11 @@ echo "Cmd Ranges  : x=${CMD_LIN_X_RANGE} y=${CMD_LIN_Y_RANGE} yaw=${CMD_YAW_RANG
 echo "Curvature   : kappa=${CMD_CURVATURE_RANGE} max=${CMD_MAX_CURVATURE} low_frac=${CMD_REL_LOW_SPEED} high_y=${CMD_HIGH_SPEED_LATERAL_VEL}"
 echo "Nav2 Replay : data=${NAV2_DATA_PATH} aug=${NAV2_AUGMENTATION_FILTER} scale=${NAV2_COMMAND_SCALE} window=${NAV2_WINDOW_DURATION_S}s"
 echo "Joystick    : device=${JOYSTICK_DEVICE} axes=(${JOYSTICK_AXIS_LIN_X},${JOYSTICK_AXIS_LIN_Y},${JOYSTICK_AXIS_YAW}) ranges=x${JOYSTICK_LIN_X_RANGE} y${JOYSTICK_LIN_Y_RANGE} yaw${JOYSTICK_YAW_RANGE} deadzone=${JOYSTICK_DEADZONE}"
-echo "Keyboard    : W/S=vx A/D=vy Q/E=yaw SPACE/0=zero steps=(${KEYBOARD_LINEAR_STEP} m/s, ${KEYBOARD_YAW_STEP} rad/s) presets=1/2/3/4"
+if [[ "${G1_AMP_ARMHACK_WALK_ENABLE:-False}" =~ ^([Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss])$ ]] && [[ "${COMMAND_MODE}" == "keyboard" ]]; then
+    echo "Keyboard    : W/S=vx A/D=vy Q/E=yaw 0=zero; SPACE/P=cycle arms Z/X/C=select arms; presets=1..7"
+else
+    echo "Keyboard    : W/S=vx A/D=vy Q/E=yaw SPACE/0=zero steps=(${KEYBOARD_LINEAR_STEP} m/s, ${KEYBOARD_YAW_STEP} rad/s) presets=1..7"
+fi
 echo "Early Motion: ${EARLY_MOTION_ENABLE} window=${EARLY_MOTION_WINDOW_S}s"
 echo "====================================="
 

@@ -141,3 +141,27 @@ class G1WalkTwoGoalRobustRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.clip_param = 0.05
         self.algorithm.num_learning_epochs = 2
         self.algorithm.entropy_coef = 5.0e-5
+
+
+@configclass
+class G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg(
+    G1WalkTwoGoalRobustRslRlOnPolicyRunnerAmpCfg
+):
+    """Conservative policy-only fine-tune for the three gated Walk actors."""
+
+    experiment_name = "g1_armhack_walk_ankle_spacing"
+    checkpoint_output_dir = "ArmHack Checkpoints/WalkAnkleSpacingFinetune"
+    save_interval = 5
+    freeze_actor_hidden_layers = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 2.0e-5
+        self.algorithm.clip_param = 0.05
+        self.algorithm.num_learning_epochs = 2
+        self.algorithm.num_mini_batches = 4
+        self.algorithm.entropy_coef = 5.0e-5
+        self.algorithm.max_grad_norm = 0.5
+        self.algorithm.baseline_kl_cfg.enabled = True
+        self.algorithm.baseline_kl_cfg.scale = 1.00
+        self.algorithm.baseline_kl_cfg.hard_limit = 0.25

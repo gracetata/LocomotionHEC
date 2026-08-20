@@ -27,3 +27,51 @@ class G1ExtremeStandRecoveryRslRlOnPolicyRunnerAmpCfg(G1RslRlOnPolicyRunnerAmpCf
         self.algorithm.amp_cfg.grad_penalty_scale = 20.0
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 0.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 1.0
+
+
+@configclass
+class G1ExtremeStandRecoveryV4JerkLimitedRslRlOnPolicyRunnerAmpCfg(
+    G1ExtremeStandRecoveryRslRlOnPolicyRunnerAmpCfg
+):
+    """Minimal-output-layer adaptation after stable damping changes the plant."""
+
+    freeze_actor_hidden_layers = 3
+    actor_warmup_iterations = 25
+    restore_configured_learning_rate_on_load = True
+    save_interval = 5
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.schedule = "fixed"
+        self.algorithm.num_learning_epochs = 1
+        self.algorithm.num_mini_batches = 4
+        self.algorithm.clip_param = 0.03
+        self.algorithm.entropy_coef = 0.0
+        self.algorithm.max_grad_norm = 0.05
+        self.algorithm.desired_kl = 0.001
+
+
+@configclass
+class G1ExtremeStandRecoveryConservativeV10RslRlOnPolicyRunnerAmpCfg(
+    G1ExtremeStandRecoveryRslRlOnPolicyRunnerAmpCfg
+):
+    """Critic-first, output-layer-only refinement of the stable V4 actor."""
+
+    freeze_actor_hidden_layers = 3
+    actor_warmup_iterations = 20
+    restore_configured_learning_rate_on_load = True
+    save_interval = 1
+
+    def __post_init__(self):
+        super().__post_init__()
+        # V9 changed all actor layers during its first five-epoch PPO update and
+        # immediately created a closed-loop limit cycle.  V10 first adapts the
+        # critic, then permits only the final actor projection to move in one
+        # conservative epoch per rollout.
+        self.algorithm.schedule = "fixed"
+        self.algorithm.num_learning_epochs = 1
+        self.algorithm.num_mini_batches = 4
+        self.algorithm.clip_param = 0.05
+        self.algorithm.entropy_coef = 0.0
+        self.algorithm.max_grad_norm = 0.10
+        self.algorithm.desired_kl = 0.002

@@ -3683,3 +3683,35 @@ checkpoint SHA-256 为 `00a36bd58ce63c39e7c441d507e4111df92281ea1f5b59fe6869fb28
 `0.456~0.482 rad/s`，最大平面漂移 31.5 mm/s，最低脚掌间距 60.9 mm；所有场景硬间距违规率为 0。
 另外在低、高两组 joint damping/armature/frictionloss 下重复 `pos2_down` 专项测试，也全部通过。Future 与本机的
 checkpoint、ONNX 和 TorchScript SHA-256 已逐一核对一致。
+
+### 21.5 键盘实时 MuJoCo 可视化
+
+以下入口加载最终 ONNX 模型，并强制使用 MuJoCo GLFW 和真实 `1.0x` 墙钟时间。它不允许
+`REAL_TIME=False`，终端每 2 秒输出 `sim/wall/RTF`，因此不能通过慢放掩盖不稳定行为：
+
+```bash
+cd /home/user/Workspace/Humanoid/Locomotion/G1-Locomotion
+bash scripts/vis_g1_armhack_walk_two_goal_keyboard.sh
+```
+
+键盘定义：
+
+```text
+W/S       增减前向速度 vx
+A/D       增减侧向速度 vy
+Q/E       增减偏航角速度 wz
+0         立即给出严格 [0,0,0]
+1         慢速前进 [0.05,0,0]
+2 / 5     左/右侧移 [0,±0.25,0]
+3 / 6     左/右原地转身 [0,0,±0.35]
+4         斜向移动 [0.20,0.15,0]
+7         正常前进 [0.50,0,0]
+SPACE/P   pos1_back -> pos2_down -> pos3_front 循环
+Z/X/C     直接选择靠后/下垂/靠前三种双臂姿态
+```
+
+速度按键和双臂按键使用同一个 GLFW 回调但彼此独立：SPACE 只切换双臂，不会偷偷把速度清零；零速必须明确按
+`0`。双臂姿态在 `2.0 s` 内使用 minimum-jerk 五次曲线平滑切换，仿真步长、50 Hz policy 频率和墙钟速度均不变。
+该入口固定加载最终 `policy.onnx`，默认使用 `env_isaaclab` 虚拟环境中的 MuJoCo 和 ONNX Runtime，避免把
+TorchScript/PyTorch 初始化开销或用户目录包混入实时回放。脚本同时固定 `PYTHONNOUSERSITE=1`，不会加载
+`~/.local` 中可能不兼容的 Python 包。

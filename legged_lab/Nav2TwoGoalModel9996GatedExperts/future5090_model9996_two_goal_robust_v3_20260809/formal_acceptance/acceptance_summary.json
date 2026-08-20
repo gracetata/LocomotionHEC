@@ -1,0 +1,32 @@
+{
+  "lateral_left": {
+    "signed_vy": 0.3129004823284144,
+    "vx_leak": 0.0054527927668486876,
+    "yaw_leak": 0.03216902233095741,
+    "min_clearance": 0.035447659681862316
+  },
+  "lateral_right": {
+    "signed_vy": 0.31430876652189704,
+    "vx_leak": 0.003431826919371705,
+    "yaw_leak": -0.03364163011862524,
+    "min_clearance": 0.03360435136127502
+  },
+  "yaw_left": {
+    "signed_yaw": 0.29388871624961377,
+    "planar_drift": 0.01002028859933109,
+    "min_clearance": 0.038919207496236743
+  },
+  "yaw_right": {
+    "signed_yaw": 0.30003666281774616,
+    "planar_drift": 0.005197046290291908,
+    "min_clearance": 0.05915220003625125
+  },
+  "stand": {
+    "planar_drift": 0.002916515031132593,
+    "yaw_rate": 0.0010462835813463724
+  },
+  "forward_retention": {
+    "candidate_vx": 0.4856317359053655,
+    "baseline_vx": 0.4856317359053655
+  }
+}

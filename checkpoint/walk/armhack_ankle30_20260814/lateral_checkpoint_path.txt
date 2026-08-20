@@ -1,0 +1,1 @@
+/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/lateral/2026-08-14_17-01-52_ankle30_lateral_full_20260814/model_199.pt

@@ -205,6 +205,79 @@ class ExtremeStandRecoveryPerturbation:
         self.target_limiter_enabled = bool(
             config.get("extreme_stand_recovery_target_limiter_enable", False)
         )
+        self.target_position_limiter_enabled = bool(
+            config.get("extreme_stand_recovery_target_position_limiter_enable", False)
+        )
+        self.target_limiter_upright_gravity_xy_max = float(
+            config.get("extreme_stand_recovery_target_limiter_upright_gravity_xy_max", 0.20)
+        )
+        self.target_limiter_root_linear_speed_max = float(
+            config.get("extreme_stand_recovery_target_limiter_root_linear_speed_max", 0.60)
+        )
+        self.target_limiter_root_angular_speed_max = float(
+            config.get("extreme_stand_recovery_target_limiter_root_angular_speed_max", 1.20)
+        )
+        self.target_limiter_stable_steps_required = int(
+            config.get("extreme_stand_recovery_target_limiter_stable_steps", 10)
+        )
+        self.target_limiter_recovery_limit_scale = float(
+            config.get("extreme_stand_recovery_target_limiter_recovery_limit_scale", 4.0)
+        )
+        self.target_limiter_smoothing_alpha = float(
+            config.get("extreme_stand_recovery_target_limiter_smoothing_alpha", 1.0)
+        )
+        self.fall_safety_enabled = bool(
+            config.get("extreme_stand_recovery_fall_safety_enable", True)
+        )
+        self.fall_safety_root_height = float(
+            config.get("extreme_stand_recovery_fall_safety_root_height_m", 0.45)
+        )
+        self.stable_damping_initial_gain = float(
+            config.get("extreme_stand_recovery_stable_damping_initial_gain", 1.1)
+        )
+        self.stable_damping_initial_duration = float(
+            config.get("extreme_stand_recovery_stable_damping_initial_duration_s", 3.0)
+        )
+        self.stable_damping_gain = float(
+            config.get("extreme_stand_recovery_stable_damping_gain", 1.05)
+        )
+        self.stable_damping_blend_in_time = float(
+            config.get("extreme_stand_recovery_stable_damping_blend_in_time_s", 0.50)
+        )
+        self.stable_damping_blend_out_time = float(
+            config.get("extreme_stand_recovery_stable_damping_blend_out_time_s", 0.05)
+        )
+        self.recovery_damping_blend = float(
+            config.get("extreme_stand_recovery_recovery_damping_blend", 0.25)
+        )
+        self.severe_disturbance_gravity_xy = float(
+            config.get("extreme_stand_recovery_severe_disturbance_gravity_xy", 0.20)
+        )
+        self.fall_safety_damping_gain = float(
+            config.get("extreme_stand_recovery_fall_safety_damping_gain", 1.0)
+        )
+        if self.target_limiter_stable_steps_required <= 0:
+            raise ValueError("Extreme Stand target limiter stable steps must be positive.")
+        if self.target_limiter_recovery_limit_scale < 1.0:
+            raise ValueError("Extreme Stand target limiter recovery scale must be >= 1.")
+        if not 0.0 < self.target_limiter_smoothing_alpha <= 1.0:
+            raise ValueError("Extreme Stand target limiter smoothing alpha must be in (0, 1].")
+        if self.fall_safety_root_height <= 0.0:
+            raise ValueError("Extreme Stand fall-safety root height must be positive.")
+        if min(
+            self.stable_damping_initial_gain,
+            self.stable_damping_initial_duration,
+            self.stable_damping_gain,
+            self.stable_damping_blend_in_time,
+            self.stable_damping_blend_out_time,
+        ) < 0.0:
+            raise ValueError("Extreme Stand stable-damping gains and times must be non-negative.")
+        if not 0.0 <= self.recovery_damping_blend <= 1.0:
+            raise ValueError("Extreme Stand recovery damping blend must be in [0, 1].")
+        if not 0.0 < self.severe_disturbance_gravity_xy <= 1.0:
+            raise ValueError("Severe-disturbance gravity threshold must be in (0, 1].")
+        if self.fall_safety_damping_gain < 0.0:
+            raise ValueError("Fall-safety damping gain must be non-negative.")
         target_velocity_limits_by_group = {
             "leg": float(
                 config.get(
@@ -239,11 +312,25 @@ class ExtremeStandRecoveryPerturbation:
                 )
             ),
         }
+        target_jerk_limits_by_group = {
+            "leg": float(
+                config.get("extreme_stand_recovery_target_leg_jerk_limit_rad_s3", 7500.0)
+            ),
+            "waist": float(
+                config.get("extreme_stand_recovery_target_waist_jerk_limit_rad_s3", 3125.0)
+            ),
+            "arm": float(
+                config.get("extreme_stand_recovery_target_arm_jerk_limit_rad_s3", 5000.0)
+            ),
+        }
         if min(
             *target_velocity_limits_by_group.values(),
             *target_acceleration_limits_by_group.values(),
+            *target_jerk_limits_by_group.values(),
         ) <= 0.0:
-            raise ValueError("Extreme Stand target velocity/acceleration limits must be positive.")
+            raise ValueError(
+                "Extreme Stand target velocity/acceleration/jerk limits must be positive."
+            )
 
         def target_group(joint_name: str) -> str:
             if joint_name.startswith("waist_"):
@@ -263,8 +350,36 @@ class ExtremeStandRecoveryPerturbation:
             ],
             dtype=np.float64,
         )
+        self.target_jerk_limits = np.asarray(
+            [target_jerk_limits_by_group[target_group(name)] for name in policy_joint_names],
+            dtype=np.float64,
+        )
+        torque_rate_by_group = {
+            "leg": float(config.get("extreme_stand_recovery_leg_torque_rate_limit_nm_s", 2500.0)),
+            "waist": float(config.get("extreme_stand_recovery_waist_torque_rate_limit_nm_s", 1000.0)),
+            "arm": float(config.get("extreme_stand_recovery_arm_torque_rate_limit_nm_s", 800.0)),
+        }
+        self.target_torque_rate_limits = np.asarray(
+            [torque_rate_by_group[target_group(name)] for name in policy_joint_names],
+            dtype=np.float64,
+        )
+        if np.min(self.target_torque_rate_limits) <= 0.0:
+            raise ValueError("Extreme Stand torque-rate limits must be positive.")
         self._target_limiter_position: np.ndarray | None = None
         self._target_limiter_velocity: np.ndarray | None = None
+        self._target_limiter_acceleration: np.ndarray | None = None
+        self._target_filter_stage_1: np.ndarray | None = None
+        self._target_filter_stage_2: np.ndarray | None = None
+        self._target_filter_stage_3: np.ndarray | None = None
+        self._previous_pd_torque: np.ndarray | None = None
+        self._stable_damping_blend = 0.0
+        self._stable_damping_elapsed = 0.0
+        self._fall_safety_active = False
+        self._last_safe_action: np.ndarray | None = None
+        self._fall_hold_position: np.ndarray | None = None
+        self._severe_disturbance_latched = False
+        self._target_limiter_stable_steps = 0
+        self._target_limiter_stable_now = False
         self.latest_raw_target_position = np.full(
             len(policy_joint_names), math.nan, dtype=np.float64
         )
@@ -433,13 +548,65 @@ class ExtremeStandRecoveryPerturbation:
             [data.qpos[self.qpos_addresses[name]] for name in self.policy_joint_names],
             dtype=np.float64,
         )
-        self._target_limiter_position = positions.copy()
-        self._target_limiter_velocity = np.zeros_like(positions)
+        # The V4 actor expects its first target to be applied immediately even
+        # after a randomized reset.  Seed the limiter from that first target in
+        # limit_target_position(), not from the perturbed physical joint pose.
+        self._target_limiter_position = None
+        self._target_limiter_velocity = None
+        self._target_limiter_acceleration = None
+        self._target_filter_stage_1 = None
+        self._target_filter_stage_2 = None
+        self._target_filter_stage_3 = None
+        self._previous_pd_torque = None
+        self._stable_damping_blend = 0.0
+        self._stable_damping_elapsed = 0.0
+        self._fall_safety_active = False
+        self._last_safe_action = None
+        self._fall_hold_position = None
+        self._severe_disturbance_latched = False
+        self._target_limiter_stable_steps = 0
+        self._target_limiter_latched = False
+        self._target_limiter_stable_now = False
         self.latest_raw_target_position = positions.copy()
         self.latest_target_velocity = np.zeros_like(positions)
         self.latest_target_acceleration = np.zeros_like(positions)
         self.latest_target_velocity_clipped_count = 0
         self.latest_target_acceleration_clipped_count = 0
+
+    @property
+    def fall_safety_active(self) -> bool:
+        """Whether the post-fall actuator shutdown has latched for this rollout."""
+
+        return self._fall_safety_active
+
+    def apply_fall_safety(
+        self,
+        policy_action: np.ndarray,
+        data: mujoco.MjData,
+    ) -> np.ndarray:
+        """Hold the final safe actor output after an unambiguous fall.
+
+        This is deliberately inactive while the robot can still recover.  A low
+        floating-base height is used instead of attitude so a large recoverable
+        lean never suppresses the V4 policy.
+        """
+
+        action = np.asarray(policy_action, dtype=np.float32)
+        if not self.target_limiter_enabled or not self.fall_safety_enabled:
+            self._last_safe_action = action.copy()
+            return action
+        if not self._fall_safety_active and float(data.qpos[2]) < self.fall_safety_root_height:
+            self._fall_safety_active = True
+            self._fall_hold_position = np.asarray(
+                [data.qpos[self.qpos_addresses[name]] for name in self.policy_joint_names],
+                dtype=np.float64,
+            )
+        if not self._fall_safety_active:
+            self._last_safe_action = action.copy()
+            return action
+        if self._last_safe_action is None:
+            self._last_safe_action = action.copy()
+        return self._last_safe_action.copy()
 
     def limit_target_position(
         self,
@@ -447,6 +614,7 @@ class ExtremeStandRecoveryPerturbation:
         *,
         update: bool,
         control_dt: float,
+        data: mujoco.MjData | None = None,
     ) -> np.ndarray:
         """Limit policy joint-position target velocity and acceleration at control rate."""
 
@@ -459,9 +627,22 @@ class ExtremeStandRecoveryPerturbation:
             )
         if control_dt <= 0.0:
             raise ValueError("Extreme Stand target limiter control_dt must be positive.")
-        if self._target_limiter_position is None or self._target_limiter_velocity is None:
+        if self._fall_safety_active and self._fall_hold_position is not None:
+            return self._fall_hold_position.copy()
+        if (
+            self._target_limiter_position is None
+            or self._target_limiter_velocity is None
+            or self._target_limiter_acceleration is None
+        ):
             self._target_limiter_position = raw_target.copy()
             self._target_limiter_velocity = np.zeros_like(raw_target)
+            self._target_limiter_acceleration = np.zeros_like(raw_target)
+            self._target_filter_stage_1 = raw_target.copy()
+            self._target_filter_stage_2 = raw_target.copy()
+            self._target_filter_stage_3 = raw_target.copy()
+            self.latest_target_velocity = np.zeros_like(raw_target)
+            self.latest_target_acceleration = np.zeros_like(raw_target)
+            return raw_target.copy()
 
         self.latest_raw_target_position = raw_target.copy()
         if not update:
@@ -473,41 +654,133 @@ class ExtremeStandRecoveryPerturbation:
 
         previous_position = self._target_limiter_position
         previous_velocity = self._target_limiter_velocity
+        previous_acceleration = self._target_limiter_acceleration
         requested_velocity = (raw_target - previous_position) / control_dt
         if not self.target_limiter_enabled:
             target_velocity = requested_velocity
             target_acceleration = (target_velocity - previous_velocity) / control_dt
             self._target_limiter_position = raw_target.copy()
             self._target_limiter_velocity = target_velocity.copy()
+            self._target_limiter_acceleration = target_acceleration.copy()
             self.latest_target_velocity = target_velocity.copy()
             self.latest_target_acceleration = target_acceleration.copy()
             self.latest_target_velocity_clipped_count = 0
             self.latest_target_acceleration_clipped_count = 0
             return raw_target.copy()
 
-        velocity_clipped = np.abs(requested_velocity) > self.target_velocity_limits
+        if data is None:
+            raise ValueError("Enabled Extreme Stand target limiter requires MuJoCo state data.")
+        root_rotation = np.empty(9, dtype=np.float64)
+        mujoco.mju_quat2Mat(root_rotation, np.asarray(data.qpos[3:7], dtype=np.float64))
+        root_rotation = root_rotation.reshape(3, 3)
+        projected_gravity_b = root_rotation.T @ np.asarray([0.0, 0.0, -1.0])
+        gravity_xy_norm = float(np.linalg.norm(projected_gravity_b[:2]))
+        if self._target_limiter_latched and gravity_xy_norm >= self.severe_disturbance_gravity_xy:
+            self._severe_disturbance_latched = True
+        stable_now = (
+            gravity_xy_norm <= self.target_limiter_upright_gravity_xy_max
+            and np.linalg.norm(np.asarray(data.qvel[:3], dtype=np.float64))
+            <= self.target_limiter_root_linear_speed_max
+            and np.linalg.norm(np.asarray(data.qvel[3:6], dtype=np.float64))
+            <= self.target_limiter_root_angular_speed_max
+        )
+        self._target_limiter_stable_now = stable_now
+        self._target_limiter_stable_steps = (
+            self._target_limiter_stable_steps + 1 if stable_now else 0
+        )
+        if self._target_limiter_stable_steps >= self.target_limiter_stable_steps_required:
+            self._target_limiter_latched = True
+        if not self._target_limiter_latched:
+            target_velocity = requested_velocity
+            target_acceleration = (target_velocity - previous_velocity) / control_dt
+            self._target_limiter_position = raw_target.copy()
+            self._target_limiter_velocity = target_velocity.copy()
+            self._target_limiter_acceleration = target_acceleration.copy()
+            self._target_filter_stage_1 = raw_target.copy()
+            self._target_filter_stage_2 = raw_target.copy()
+            self._target_filter_stage_3 = raw_target.copy()
+            self.latest_target_velocity = target_velocity.copy()
+            self.latest_target_acceleration = target_acceleration.copy()
+            self.latest_target_velocity_clipped_count = 0
+            self.latest_target_acceleration_clipped_count = 0
+            return raw_target.copy()
+
+        if not self.target_position_limiter_enabled:
+            target_velocity = requested_velocity
+            target_acceleration = (target_velocity - previous_velocity) / control_dt
+            self._target_limiter_position = raw_target.copy()
+            self._target_limiter_velocity = target_velocity.copy()
+            self._target_limiter_acceleration = target_acceleration.copy()
+            self.latest_target_velocity = target_velocity.copy()
+            self.latest_target_acceleration = target_acceleration.copy()
+            self.latest_target_velocity_clipped_count = 0
+            self.latest_target_acceleration_clipped_count = 0
+            return raw_target.copy()
+
+        alpha = self.target_limiter_smoothing_alpha
+        assert self._target_filter_stage_1 is not None
+        assert self._target_filter_stage_2 is not None
+        assert self._target_filter_stage_3 is not None
+        self._target_filter_stage_1 = (
+            alpha * raw_target + (1.0 - alpha) * self._target_filter_stage_1
+        )
+        self._target_filter_stage_2 = (
+            alpha * self._target_filter_stage_1
+            + (1.0 - alpha) * self._target_filter_stage_2
+        )
+        self._target_filter_stage_3 = (
+            alpha * self._target_filter_stage_2
+            + (1.0 - alpha) * self._target_filter_stage_3
+        )
+        tracking_target = self._target_filter_stage_3
+        requested_velocity = (tracking_target - previous_position) / control_dt
+
+        limit_scale = 1.0 if stable_now else self.target_limiter_recovery_limit_scale
+        velocity_limits = self.target_velocity_limits * limit_scale
+        acceleration_limits = self.target_acceleration_limits * limit_scale
+        jerk_limits = self.target_jerk_limits * limit_scale
+        velocity_clipped = np.abs(requested_velocity) > velocity_limits
         velocity_limited = np.clip(
             requested_velocity,
-            -self.target_velocity_limits,
-            self.target_velocity_limits,
+            -velocity_limits,
+            velocity_limits,
         )
         requested_acceleration = (velocity_limited - previous_velocity) / control_dt
         acceleration_clipped = (
-            np.abs(requested_acceleration) > self.target_acceleration_limits
+            np.abs(requested_acceleration) > acceleration_limits
+        )
+        acceleration_limited = np.clip(
+            requested_acceleration,
+            -acceleration_limits,
+            acceleration_limits,
+        )
+        requested_jerk = (acceleration_limited - previous_acceleration) / control_dt
+        target_jerk = np.clip(
+            requested_jerk,
+            -jerk_limits,
+            jerk_limits,
         )
         target_acceleration = np.clip(
-            requested_acceleration,
-            -self.target_acceleration_limits,
-            self.target_acceleration_limits,
+            previous_acceleration + target_jerk * control_dt,
+            -acceleration_limits,
+            acceleration_limits,
         )
         target_velocity = np.clip(
             previous_velocity + target_acceleration * control_dt,
-            -self.target_velocity_limits,
-            self.target_velocity_limits,
+            -velocity_limits,
+            velocity_limits,
         )
         target_position = previous_position + target_velocity * control_dt
+        target_position = np.clip(
+            target_position,
+            np.minimum(previous_position, tracking_target),
+            np.maximum(previous_position, tracking_target),
+        )
+        target_velocity = (target_position - previous_position) / control_dt
+        target_acceleration = (target_velocity - previous_velocity) / control_dt
         self._target_limiter_position = target_position.copy()
         self._target_limiter_velocity = target_velocity.copy()
+        self._target_limiter_acceleration = target_acceleration.copy()
         self.latest_target_velocity = target_velocity.copy()
         self.latest_target_acceleration = target_acceleration.copy()
         self.latest_target_velocity_clipped_count = int(np.count_nonzero(velocity_clipped))
@@ -519,6 +792,76 @@ class ExtremeStandRecoveryPerturbation:
             self.latest_target_acceleration_clipped_count
         )
         return target_position.copy()
+
+    def limit_pd_torque(
+        self,
+        raw_pd_torque: np.ndarray,
+        physics_dt: float,
+        joint_velocity: np.ndarray | None = None,
+        joint_damping: np.ndarray | None = None,
+        joint_torque_limits: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Add dissipative velocity feedback only after the robot is stable."""
+
+        raw = np.asarray(raw_pd_torque, dtype=np.float64)
+        if self._fall_safety_active:
+            if joint_velocity is None or joint_damping is None or joint_torque_limits is None:
+                raise ValueError("Fall safety requires velocity, damping, and torque-limit arrays.")
+            limited = raw - (
+                self.fall_safety_damping_gain
+                * np.asarray(joint_damping)
+                * np.asarray(joint_velocity)
+            )
+            limited = np.clip(
+                limited,
+                -np.asarray(joint_torque_limits),
+                np.asarray(joint_torque_limits),
+            )
+            self._previous_pd_torque = limited.copy()
+            return limited
+        if self._previous_pd_torque is None:
+            self._previous_pd_torque = raw.copy()
+            return raw.copy()
+        if not self.target_limiter_enabled or not self._target_limiter_latched:
+            self._previous_pd_torque = raw.copy()
+            self._stable_damping_blend = 0.0
+            return raw.copy()
+        if joint_velocity is None or joint_damping is None:
+            raise ValueError("Stable damping requires joint velocity and damping arrays.")
+        blend_target = 1.0 if self._target_limiter_stable_now else (
+            self.recovery_damping_blend if self._severe_disturbance_latched else 0.0
+        )
+        self._stable_damping_elapsed = (
+            self._stable_damping_elapsed + float(physics_dt)
+            if self._target_limiter_stable_now
+            else 0.0
+        )
+        blend_time = (
+            self.stable_damping_blend_in_time
+            if blend_target > self._stable_damping_blend
+            else self.stable_damping_blend_out_time
+        )
+        max_blend_step = float(physics_dt) / max(blend_time, float(physics_dt))
+        self._stable_damping_blend += float(
+            np.clip(
+                blend_target - self._stable_damping_blend,
+                -max_blend_step,
+                max_blend_step,
+            )
+        )
+        damping_gain = (
+            self.stable_damping_initial_gain
+            if self._stable_damping_elapsed < self.stable_damping_initial_duration
+            else self.stable_damping_gain
+        )
+        limited = raw - (
+            damping_gain
+            * self._stable_damping_blend
+            * np.asarray(joint_damping)
+            * np.asarray(joint_velocity)
+        )
+        self._previous_pd_torque = limited.copy()
+        return limited
 
     def initialize_model_and_state(
         self,
@@ -1637,6 +1980,7 @@ class ExtremeStandRecoveryPerturbation:
         accelerations = np.stack(self.joint_acceleration_samples, axis=0)
         jerks = np.stack(self.joint_jerk_samples, axis=0)
         actor_actions = np.stack(self.actor_action_samples, axis=0)
+        raw_targets = np.stack(self.raw_target_position_samples, axis=0)
         targets = np.stack(self.target_position_samples, axis=0)
         pd_torques = np.stack(self.pd_torque_command_samples, axis=0)
         actuator_forces = np.stack(self.actuator_force_samples, axis=0)
@@ -1654,6 +1998,7 @@ class ExtremeStandRecoveryPerturbation:
         steady_accelerations = accelerations[steady_mask]
         steady_jerks = jerks[steady_mask]
         steady_actions = actor_actions[steady_mask]
+        steady_raw_targets = raw_targets[steady_mask]
         steady_targets = targets[steady_mask]
         steady_pd_torques = pd_torques[steady_mask]
         steady_actuator_forces = actuator_forces[steady_mask]
@@ -1706,6 +2051,41 @@ class ExtremeStandRecoveryPerturbation:
             if steady_actions.shape[0] >= 2 and sample_dt > 0.0
             else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
         )
+        action_second_differences = (
+            np.diff(steady_actions, n=2, axis=0)
+            if steady_actions.shape[0] >= 3
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        target_rates = (
+            np.diff(steady_targets, axis=0) / sample_dt
+            if steady_targets.shape[0] >= 2 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        target_accelerations = (
+            np.diff(steady_targets, n=2, axis=0) / (sample_dt * sample_dt)
+            if steady_targets.shape[0] >= 3 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        raw_target_rates = (
+            np.diff(steady_raw_targets, axis=0) / sample_dt
+            if steady_raw_targets.shape[0] >= 2 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        raw_target_accelerations = (
+            np.diff(steady_raw_targets, n=2, axis=0) / (sample_dt * sample_dt)
+            if steady_raw_targets.shape[0] >= 3 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        torque_rates = (
+            np.diff(steady_pd_torques, axis=0) / sample_dt
+            if steady_pd_torques.shape[0] >= 2 and sample_dt > 0.0
+            else np.empty((0, len(self.policy_joint_names)), dtype=np.float64)
+        )
+        target_default_errors = steady_targets - self.default_joint_positions[None, :]
+        raw_target_default_errors = (
+            steady_raw_targets - self.default_joint_positions[None, :]
+        )
+        mechanical_power = steady_actuator_forces * steady_velocities
         finite_accelerations = steady_accelerations[
             np.all(np.isfinite(steady_accelerations), axis=1)
         ]
@@ -1723,6 +2103,12 @@ class ExtremeStandRecoveryPerturbation:
             if np.any(finite_limits)
             else math.nan
         )
+        relative_pd_torque = np.full_like(steady_pd_torques, math.nan)
+        relative_pd_torque[finite_limits] = (
+            np.abs(steady_pd_torques[finite_limits])
+            / steady_torque_limits[finite_limits]
+        )
+        soft_peak_relative_pd_torque = np.maximum(relative_pd_torque - 0.60, 0.0)
         foot_errors = steady_foot_distances - self.default_foot_planar_distance_m
         foot_error_stats = _finite_stats(foot_errors)
         foot_distance_stats = _finite_stats(steady_foot_distances)
@@ -1800,6 +2186,9 @@ class ExtremeStandRecoveryPerturbation:
             "actor_action": {
                 "value": _finite_stats(steady_actions),
                 "delta_rate_per_s": _finite_stats(action_rates),
+                "second_difference_per_step": _finite_stats(
+                    action_second_differences
+                ),
                 "high_frequency_8_25hz_rms": {
                     "mean_across_joints": (
                         float(np.nanmean(action_high_frequency_rms))
@@ -1821,6 +2210,10 @@ class ExtremeStandRecoveryPerturbation:
                 },
             },
             "target_joint_position_rad": {
+                "value": _finite_stats(steady_targets),
+                "default_error": _finite_stats(target_default_errors),
+                "velocity_rad_s": _finite_stats(target_rates),
+                "acceleration_rad_s2": _finite_stats(target_accelerations),
                 "high_frequency_8_25hz_rms": {
                     "mean_across_joints": (
                         float(np.nanmean(target_high_frequency_rms))
@@ -1834,11 +2227,30 @@ class ExtremeStandRecoveryPerturbation:
                     ),
                 },
             },
+            "raw_target_joint_position_rad": {
+                "value": _finite_stats(steady_raw_targets),
+                "default_error": _finite_stats(raw_target_default_errors),
+                "velocity_rad_s": _finite_stats(raw_target_rates),
+                "acceleration_rad_s2": _finite_stats(raw_target_accelerations),
+            },
             "joint_velocity_rad_s": _finite_stats(steady_velocities),
             "joint_acceleration_rad_s2": _finite_stats(finite_accelerations),
+            "mechanical_power_w": {
+                **_finite_stats(mechanical_power),
+                "mean_square": (
+                    float(np.nanmean(np.square(mechanical_power)))
+                    if np.any(np.isfinite(mechanical_power))
+                    else math.nan
+                ),
+            },
             "actuator_effort_nm": {
                 "pd_command": _finite_stats(steady_pd_torques),
                 "actual": _finite_stats(steady_actuator_forces),
+                "pd_command_rate_nm_s": _finite_stats(torque_rates),
+                "relative_pd_command": _finite_stats(relative_pd_torque),
+                "soft_peak_above_60pct": _finite_stats(
+                    soft_peak_relative_pd_torque
+                ),
                 "pd_command_high_frequency_8_25hz_rms": {
                     "mean_across_joints": (
                         float(np.nanmean(torque_high_frequency_rms))

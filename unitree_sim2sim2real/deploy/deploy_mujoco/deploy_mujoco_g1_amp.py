@@ -37,7 +37,6 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-import torch
 import yaml  # type: ignore[reportMissingImports]
 
 from armhack_stand import ArmHackStandReplay
@@ -338,6 +337,10 @@ def load_config(config_path: str) -> dict:
     config["armhack_walk_pose_name"] = os.environ.get(
         "G1_AMP_ARMHACK_WALK_POSE_NAME", config.get("armhack_walk_pose_name", "pos2_down")
     )
+    config["armhack_walk_pose_transition_s"] = _env_float(
+        "G1_AMP_ARMHACK_WALK_POSE_TRANSITION_S",
+        float(config.get("armhack_walk_pose_transition_s", 2.0)),
+    )
     config["armhack_walk_fixed_command"] = _env_yaml_vector(
         "G1_AMP_ARMHACK_WALK_FIXED_COMMAND",
         list(config.get("armhack_walk_fixed_command", [0.35, 0.0, 0.0])),
@@ -423,6 +426,61 @@ def load_config(config_path: str) -> dict:
         "G1_AMP_EXTREME_STAND_TARGET_LIMITER_ENABLE",
         bool(config.get("extreme_stand_recovery_target_limiter_enable", False)),
     )
+    config["extreme_stand_recovery_target_position_limiter_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_TARGET_POSITION_LIMITER_ENABLE",
+        bool(config.get("extreme_stand_recovery_target_position_limiter_enable", False)),
+    )
+    config["extreme_stand_recovery_fall_safety_enable"] = _env_bool(
+        "G1_AMP_EXTREME_STAND_FALL_SAFETY_ENABLE",
+        bool(config.get("extreme_stand_recovery_fall_safety_enable", True)),
+    )
+    config["extreme_stand_recovery_fall_safety_root_height_m"] = _env_float(
+        "G1_AMP_EXTREME_STAND_FALL_SAFETY_ROOT_HEIGHT_M",
+        float(config.get("extreme_stand_recovery_fall_safety_root_height_m", 0.45)),
+    )
+    for key, env_name, default in (
+        (
+            "extreme_stand_recovery_stable_damping_initial_gain",
+            "G1_AMP_EXTREME_STAND_STABLE_DAMPING_INITIAL_GAIN",
+            1.1,
+        ),
+        (
+            "extreme_stand_recovery_stable_damping_initial_duration_s",
+            "G1_AMP_EXTREME_STAND_STABLE_DAMPING_INITIAL_DURATION_S",
+            3.0,
+        ),
+        (
+            "extreme_stand_recovery_stable_damping_gain",
+            "G1_AMP_EXTREME_STAND_STABLE_DAMPING_GAIN",
+            1.05,
+        ),
+        (
+            "extreme_stand_recovery_stable_damping_blend_in_time_s",
+            "G1_AMP_EXTREME_STAND_STABLE_DAMPING_BLEND_IN_S",
+            0.50,
+        ),
+        (
+            "extreme_stand_recovery_stable_damping_blend_out_time_s",
+            "G1_AMP_EXTREME_STAND_STABLE_DAMPING_BLEND_OUT_S",
+            0.05,
+        ),
+        (
+            "extreme_stand_recovery_recovery_damping_blend",
+            "G1_AMP_EXTREME_STAND_RECOVERY_DAMPING_BLEND",
+            0.25,
+        ),
+        (
+            "extreme_stand_recovery_severe_disturbance_gravity_xy",
+            "G1_AMP_EXTREME_STAND_SEVERE_DISTURBANCE_GRAVITY_XY",
+            0.20,
+        ),
+        (
+            "extreme_stand_recovery_fall_safety_damping_gain",
+            "G1_AMP_EXTREME_STAND_FALL_SAFETY_DAMPING_GAIN",
+            1.0,
+        ),
+    ):
+        config[key] = _env_float(env_name, float(config.get(key, default)))
     for key, env_name, default in (
         ("extreme_stand_recovery_leg_noise_rad", "G1_AMP_EXTREME_STAND_LEG_NOISE_RAD", 0.20),
         ("extreme_stand_recovery_waist_noise_rad", "G1_AMP_EXTREME_STAND_WAIST_NOISE_RAD", 0.25),
@@ -545,6 +603,16 @@ def load_config(config_path: str) -> dict:
             2.0,
         ),
         (
+            "extreme_stand_recovery_target_limiter_recovery_limit_scale",
+            "G1_AMP_EXTREME_STAND_TARGET_RECOVERY_LIMIT_SCALE",
+            4.0,
+        ),
+        (
+            "extreme_stand_recovery_target_limiter_smoothing_alpha",
+            "G1_AMP_EXTREME_STAND_TARGET_SMOOTHING_ALPHA",
+            1.0,
+        ),
+        (
             "extreme_stand_recovery_target_leg_velocity_limit_rad_s",
             "G1_AMP_EXTREME_STAND_TARGET_LEG_VELOCITY_LIMIT_RAD_S",
             25.0,
@@ -573,6 +641,21 @@ def load_config(config_path: str) -> dict:
             "extreme_stand_recovery_target_arm_acceleration_limit_rad_s2",
             "G1_AMP_EXTREME_STAND_TARGET_ARM_ACCELERATION_LIMIT_RAD_S2",
             400.0,
+        ),
+        (
+            "extreme_stand_recovery_target_leg_jerk_limit_rad_s3",
+            "G1_AMP_EXTREME_STAND_TARGET_LEG_JERK_LIMIT_RAD_S3",
+            7500.0,
+        ),
+        (
+            "extreme_stand_recovery_target_waist_jerk_limit_rad_s3",
+            "G1_AMP_EXTREME_STAND_TARGET_WAIST_JERK_LIMIT_RAD_S3",
+            3125.0,
+        ),
+        (
+            "extreme_stand_recovery_target_arm_jerk_limit_rad_s3",
+            "G1_AMP_EXTREME_STAND_TARGET_ARM_JERK_LIMIT_RAD_S3",
+            5000.0,
         ),
     ):
         config[key] = _env_float(env_name, float(config.get(key, default)))
@@ -1149,6 +1232,7 @@ def init_rollout_metrics(
         "command_segments": [],
         "sample_times": [],
         "torso_pos_xy": [],
+        "ankle_distances_m": [],
         "foot_signed_clearances_m": [],
         "foot_planar_speeds_m_per_s": [],
         "foot_touchdown_events": [],
@@ -1306,6 +1390,7 @@ def update_rollout_metrics(
         metrics["foot_contact_steps"] += 1
     ordered_foot_ids = list(foot_body_ids)
     current_foot_pos_w = data.xpos[ordered_foot_ids].copy().astype(np.float32)
+    ankle_distance = float(np.linalg.norm(current_foot_pos_w[0] - current_foot_pos_w[1]))
     foot_planar_speed = np.linalg.norm(
         (current_foot_pos_w[:, :2] - metrics["prev_foot_pos_w"][:, :2]) / dt,
         axis=1,
@@ -1317,6 +1402,7 @@ def update_rollout_metrics(
     touchdown_count = int(np.count_nonzero(touchdown_events))
     signed_clearance = oriented_sole_signed_clearance(data, ordered_foot_ids)
     metrics["foot_planar_speeds_m_per_s"].append(float(np.mean(foot_planar_speed)))
+    metrics["ankle_distances_m"].append(ankle_distance)
     metrics["foot_touchdown_events"].append(touchdown_count)
     metrics["foot_signed_clearances_m"].append(float(signed_clearance))
     metrics["foot_touchdown_count"] += touchdown_count
@@ -1439,6 +1525,7 @@ def summarize_command_segments(metrics: dict, config: dict) -> list[dict]:
     roll_abs = np.asarray(metrics["roll_abs"], dtype=np.float32)
     pitch_abs = np.asarray(metrics["pitch_abs"], dtype=np.float32)
     sole_clearance = np.asarray(metrics["foot_signed_clearances_m"], dtype=np.float32)
+    ankle_distance = np.asarray(metrics["ankle_distances_m"], dtype=np.float32)
     foot_speed = np.asarray(metrics["foot_planar_speeds_m_per_s"], dtype=np.float32)
     touchdown_events = np.asarray(metrics["foot_touchdown_events"], dtype=np.int32)
     settle_time = max(float(config.get("behavior_settle_time_s", 0.75)), 0.0)
@@ -1487,6 +1574,14 @@ def summarize_command_segments(metrics: dict, config: dict) -> list[dict]:
                 "steady_touchdown_count": steady_touchdowns,
                 "steady_step_frequency_hz": float(steady_touchdowns / steady_duration),
                 "steady_min_signed_sole_clearance_m": float(np.min(sole_clearance[steady_mask])),
+                "steady_mean_ankle_distance_m": float(np.mean(ankle_distance[steady_mask])),
+                "steady_ankle_distance_rmse_to_0p30_m": float(
+                    np.sqrt(np.mean(np.square(ankle_distance[steady_mask] - 0.30)))
+                ),
+                "steady_ankle_distance_within_0p05_fraction": float(
+                    np.count_nonzero(np.abs(ankle_distance[steady_mask] - 0.30) <= 0.05)
+                    / max(np.count_nonzero(steady_mask), 1)
+                ),
                 "steady_sole_clearance_violation_fraction": float(
                     np.count_nonzero(sole_clearance[steady_mask] < minimum_clearance)
                     / max(np.count_nonzero(steady_mask), 1)
@@ -1536,6 +1631,28 @@ def score_rollout(health: dict, tracking: dict, important_metrics: dict, sim_tim
 
 
 def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarray, config: dict) -> dict:
+    ankle_distance = np.asarray(metrics["ankle_distances_m"], dtype=np.float32)
+    ankle_error = ankle_distance - 0.30
+    ankle_spacing = {
+        "target_m": 0.30,
+        "sample_count": int(ankle_distance.size),
+        "mean_m": float(np.mean(ankle_distance)) if ankle_distance.size else 0.0,
+        "min_m": float(np.min(ankle_distance)) if ankle_distance.size else 0.0,
+        "max_m": float(np.max(ankle_distance)) if ankle_distance.size else 0.0,
+        "p05_m": float(np.percentile(ankle_distance, 5.0)) if ankle_distance.size else 0.0,
+        "p50_m": float(np.percentile(ankle_distance, 50.0)) if ankle_distance.size else 0.0,
+        "p95_m": float(np.percentile(ankle_distance, 95.0)) if ankle_distance.size else 0.0,
+        "mae_to_target_m": float(np.mean(np.abs(ankle_error))) if ankle_distance.size else 0.0,
+        "rmse_to_target_m": (
+            float(np.sqrt(np.mean(np.square(ankle_error)))) if ankle_distance.size else 0.0
+        ),
+        "within_0p03_fraction": (
+            float(np.mean(np.abs(ankle_error) <= 0.03)) if ankle_distance.size else 0.0
+        ),
+        "within_0p05_fraction": (
+            float(np.mean(np.abs(ankle_error) <= 0.05)) if ankle_distance.size else 0.0
+        ),
+    }
     important_metrics = {
         "torso_roll_error_rad": _safe_mean(metrics["roll_abs"]),
         "torso_pitch_error_rad": _safe_mean(metrics["pitch_abs"]),
@@ -1621,6 +1738,7 @@ def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarra
         "command_segments": summarize_command_segments(metrics, config),
         "early_motion": summarize_early_motion(metrics, config),
         "important_metrics": important_metrics,
+        "ankle_spacing": ankle_spacing,
         "health": health,
         "score": score,
         "torso_trace": {
@@ -1672,6 +1790,14 @@ def print_rollout_report(report: dict) -> None:
         "mean=({mean_lin_vel_x:.3f}, {mean_lin_vel_y:.3f}, {mean_yaw_rate:.3f}) "
         "lin_vel_xy_mae={lin_vel_xy_mae:.3f} yaw_rate_mae={yaw_rate_mae:.3f}".format(**tracking)
     )
+    ankle = report.get("ankle_spacing", {})
+    if ankle.get("sample_count", 0):
+        print("[METRIC] MuJoCo 30-cm ankle spacing:")
+        print(
+            "  mean={mean_m:.3f}m p05/p50/p95=({p05_m:.3f},{p50_m:.3f},{p95_m:.3f})m "
+            "RMSE={rmse_to_target_m:.3f}m within3cm={within_0p03_fraction:.3f} "
+            "within5cm={within_0p05_fraction:.3f}".format(**ankle)
+        )
     early = report.get("early_motion", {})
     if early.get("samples", 0):
         print("[METRIC] MuJoCo early motion:")
@@ -2010,9 +2136,14 @@ class KeyboardCommandReader:
             self.command_min,
             self.command_max,
         )
+        if config.get("armhack_walk_enable", False):
+            zero_hint = "0=zero; SPACE/P=cycle arms, Z/X/C=select arms"
+        else:
+            zero_hint = "SPACE/0=zero"
         print(
-            "[INFO] Keyboard command mode: W/S=vx, A/D=vy, Q/E=yaw, SPACE/0=zero; "
-            "presets 1=slow forward, 2=left, 3=pure yaw, 4=diagonal."
+            f"[INFO] Keyboard command mode: W/S=vx, A/D=vy, Q/E=yaw, {zero_hint}; "
+            "presets 1=slow forward, 2=left, 3=pure yaw, 4=diagonal, "
+            "5=right, 6=negative yaw, 7=normal forward."
         )
         self._print_command("initial")
 
@@ -2051,13 +2182,22 @@ class KeyboardCommandReader:
             self._set([0.05, 0.0, 0.0], "slow-forward preset")
             return
         elif key == "2":
-            self._set([0.0, 0.12, 0.0], "left-strafe preset")
+            self._set([0.0, 0.25, 0.0], "left-strafe preset")
             return
         elif key == "3":
-            self._set([0.0, 0.0, 0.20], "pure-yaw preset")
+            self._set([0.0, 0.0, 0.35], "pure-yaw preset")
             return
         elif key == "4":
-            self._set([0.10, 0.10, 0.0], "diagonal preset")
+            self._set([0.20, 0.15, 0.0], "diagonal preset")
+            return
+        elif key == "5":
+            self._set([0.0, -0.25, 0.0], "right-strafe preset")
+            return
+        elif key == "6":
+            self._set([0.0, 0.0, -0.35], "negative pure-yaw preset")
+            return
+        elif key == "7":
+            self._set([0.50, 0.0, 0.0], "normal-forward preset")
             return
         else:
             return
@@ -2333,10 +2473,25 @@ def run_mujoco(config: dict) -> None:
         if not np.allclose(np.asarray(config["cmd_init"], dtype=np.float32), 0.0, atol=1.0e-8):
             raise ValueError("ArmHack Stand MuJoCo replay requires cmd_init=[0, 0, 0].")
     if armhack_walk is not None:
-        if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
-            raise ValueError("ArmHack Walk MuJoCo requires fixed independent commands.")
+        walk_command_mode = str(config.get("command_mode", "independent")).lower()
+        if bool(config.get("random_commands", False)) or walk_command_mode not in {
+            "independent",
+            "keyboard",
+        }:
+            raise ValueError(
+                "ArmHack Walk MuJoCo requires independent or keyboard commands."
+            )
         if not bool(config.get("command_ramp", False)):
             raise ValueError("ArmHack Walk MuJoCo requires command_ramp=True for zero/fixed transitions.")
+        if walk_command_mode == "keyboard":
+            if not bool(config.get("use_glfw", False)):
+                raise ValueError("ArmHack Walk keyboard mode requires USE_GLFW=True.")
+            if not bool(config.get("real_time", False)):
+                raise ValueError(
+                    "ArmHack Walk keyboard mode requires REAL_TIME=True; slow-motion playback is forbidden."
+                )
+            if armhack_walk.has_schedule:
+                raise ValueError("ArmHack Walk keyboard mode cannot use a command schedule.")
     if extreme_stand_recovery is not None:
         if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
             raise ValueError("Extreme Stand recovery MuJoCo test requires fixed independent zero commands.")
@@ -2347,11 +2502,9 @@ def run_mujoco(config: dict) -> None:
     joystick = JoystickCommandReader(config) if command_mode == "joystick" else None
     keyboard = KeyboardCommandReader(config) if command_mode == "keyboard" else None
     nav2_replay = Nav2CommandReplay(config, rng) if command_mode == "nav2" else None
-    target_command = (
-        armhack_walk.current_target_command(0.0)
-        if armhack_walk is not None
-        else np.asarray(config["cmd_init"], dtype=np.float32)
-    )
+    target_command = np.asarray(config["cmd_init"], dtype=np.float32)
+    if armhack_walk is not None and keyboard is None:
+        target_command = armhack_walk.current_target_command(0.0)
     nav2_segment_info = None
     if joystick is not None:
         target_command = joystick.read_command()
@@ -2427,7 +2580,7 @@ def run_mujoco(config: dict) -> None:
             # before the first policy observation.  Match that reset contract so
             # obs[67:96] never claims zero arms while MuJoCo already holds the
             # fixed pose.
-            action = armhack_walk.compose_action(action)
+            action = armhack_walk.compose_action(action, 0.0)
         mujoco.mj_forward(model, data)
     rollout_metrics = init_rollout_metrics(data, torso_body_id, config, foot_body_ids)
     current_segment_id = 0
@@ -2474,6 +2627,12 @@ def run_mujoco(config: dict) -> None:
 
         print(f"[INFO] Loaded ONNX policy with ONNX Runtime: {policy_path}")
     else:
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError(
+                "TorchScript MuJoCo policy requires torch in UNITREE_PYTHON."
+            ) from exc
         torchscript_policy = torch.jit.load(str(policy_path), map_location="cpu")
         torchscript_policy.eval()
 
@@ -2510,7 +2669,7 @@ def run_mujoco(config: dict) -> None:
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
-            next_action = armhack_walk.compose_action(next_action)
+            next_action = armhack_walk.compose_action(next_action, sim_time)
         return next_action
 
     def simulate_loop(viewer=None) -> None:
@@ -2537,7 +2696,7 @@ def run_mujoco(config: dict) -> None:
                         action = np.zeros(len(policy_joint_names), dtype=np.float32)
                         target_command = np.zeros(3, dtype=np.float32)
                         command = np.zeros(3, dtype=np.float32)
-                if armhack_walk is not None:
+                if armhack_walk is not None and keyboard is None:
                     previous_target_command = target_command.copy()
                     target_command = armhack_walk.current_target_command(sim_time)
                     adapter_segment = armhack_walk.current_schedule_segment(sim_time)
@@ -2617,6 +2776,8 @@ def run_mujoco(config: dict) -> None:
                 )
                 control_step = counter % int(config["control_decimation"]) == 0
                 action = step_policy_if_needed(counter, sim_time)
+                if extreme_stand_recovery is not None:
+                    action = extreme_stand_recovery.apply_fall_safety(action, data)
                 raw_target_policy = default_angles + action * float(config["action_scale"])
                 target_policy = (
                     extreme_stand_recovery.limit_target_position(
@@ -2626,6 +2787,7 @@ def run_mujoco(config: dict) -> None:
                             float(model.opt.timestep)
                             * int(config["control_decimation"])
                         ),
+                        data=data,
                     )
                     if extreme_stand_recovery is not None
                     else raw_target_policy
@@ -2641,6 +2803,17 @@ def run_mujoco(config: dict) -> None:
                     kp_by_joint,
                     kd_by_joint,
                 )
+                if extreme_stand_recovery is not None:
+                    data.ctrl[policy_actuator_ids] = extreme_stand_recovery.limit_pd_torque(
+                        np.asarray(data.ctrl[policy_actuator_ids], dtype=np.float64),
+                        float(model.opt.timestep),
+                        np.asarray(
+                            [data.qvel[qvel_addresses[name]] for name in policy_joint_names],
+                            dtype=np.float64,
+                        ),
+                        np.asarray([kd_by_joint[name] for name in policy_joint_names], dtype=np.float64),
+                        policy_actuator_torque_limits,
+                    )
                 if extreme_stand_recovery is not None:
                     extreme_stand_recovery.update_external_wrench(data, sim_time)
                 mujoco.mj_step(model, data)
@@ -2765,16 +2938,29 @@ def run_mujoco(config: dict) -> None:
     if bool(config.get("use_glfw", True)):
         from mujoco import viewer as mujoco_viewer
 
+        def armhack_walk_keyboard_callback(keycode: int) -> None:
+            """Give SPACE/arm keys to the arm adapter and all other keys to velocity."""
+            if armhack_walk is None or keyboard is None:
+                return
+            armhack_walk.key_callback(keycode)
+            key = chr(keycode).upper() if 0 <= int(keycode) < 128 else ""
+            if int(keycode) != 32 and key not in {"P", "Z", "X", "C"}:
+                keyboard.key_callback(keycode)
+
         key_callback = (
             armhack_stand.key_callback
             if armhack_stand is not None and armhack_stand.interactive
             else (
-                armhack_walk.key_callback
-                if armhack_walk is not None
+                armhack_walk_keyboard_callback
+                if armhack_walk is not None and keyboard is not None
                 else (
-                    extreme_stand_recovery.key_callback
-                    if extreme_stand_recovery is not None
-                    else keyboard.key_callback if keyboard is not None else None
+                    armhack_walk.key_callback
+                    if armhack_walk is not None
+                    else (
+                        extreme_stand_recovery.key_callback
+                        if extreme_stand_recovery is not None
+                        else keyboard.key_callback if keyboard is not None else None
+                    )
                 )
             )
         )

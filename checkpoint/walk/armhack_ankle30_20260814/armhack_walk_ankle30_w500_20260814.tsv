@@ -1,0 +1,9 @@
+time	branch	state	detail
+2026-08-14T16:56:55+08:00	base	started	200 iterations, 4096 envs
+2026-08-14T17:01:49+08:00	base	completed	/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/base/2026-08-14_16-56-58_ankle30_base_full_20260814/model_199.pt|9d4583a535ea67086f429b20793a4f75dd00afbacab7c2aee5bc868be5a6e355
+2026-08-14T17:01:49+08:00	lateral	started	200 iterations, 4096 envs
+2026-08-14T17:06:49+08:00	lateral	completed	/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/lateral/2026-08-14_17-01-52_ankle30_lateral_full_20260814/model_199.pt|ca9fa5642d9d06c0d75fc9a3803774f245f7110af6573e6272666537458d3b20
+2026-08-14T17:06:49+08:00	yaw	started	200 iterations, 4096 envs
+2026-08-14T17:11:37+08:00	yaw	completed	/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/yaw/2026-08-14_17-06-52_ankle30_yaw_full_20260814/model_199.pt|be3a37f5b4b4315e6f7d6f3edd9fa20545b807f77562362379e522dd9709df5b
+2026-08-14T17:11:38+08:00	merged	completed	/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/final_w500_20260814/model_armhack_walk_ankle30.pt|743b31440b7215ad6d7cb78f923f35d53d87961f6d312cc1d34df5b26feaef63
+2026-08-14T17:11:39+08:00	exported	completed	onnx=/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/final_w500_20260814/policy_armhack_walk_ankle30.onnx|92c51b2a2a4556ea993a7f9675cbe2ff06675c7681ca254df83c2ee27acc569e|jit=/home/tata/Workspace/Locomotion/G1-Locomotion/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/final_w500_20260814/policy_armhack_walk_ankle30.pt|9dd6e3394cf1b7958e85f7cd46bbc2e79baf5e49362bebf10974686d36daad42

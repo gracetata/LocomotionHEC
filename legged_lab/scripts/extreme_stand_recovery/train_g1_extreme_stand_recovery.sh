@@ -20,6 +20,7 @@ DEVICE=${DEVICE:-cuda:0}
 HEADLESS=${HEADLESS:-True}
 QUIET_TERMINAL=${QUIET_TERMINAL:-False}
 ISAACLAB_PYTHON=${ISAACLAB_PYTHON:-"${HOME}/anaconda3/envs/env_isaaclab/bin/python"}
+CPU_AFFINITY=${CPU_AFFINITY:-0-7,10-31}
 
 LEG_NOISE_RAD=${LEG_NOISE_RAD:-0.25}
 WAIST_NOISE_RAD=${WAIST_NOISE_RAD:-0.35}
@@ -40,6 +41,7 @@ die() {
 
 [[ -f "${BASE_CHECKPOINT}" ]] || die "base Stand checkpoint not found: ${BASE_CHECKPOINT}"
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "IsaacLab Python is not executable: ${ISAACLAB_PYTHON}"
+taskset -c "${CPU_AFFINITY}" true >/dev/null || die "invalid CPU_AFFINITY: ${CPU_AFFINITY}"
 [[ "${NUM_ENVS}" =~ ^[1-9][0-9]*$ ]] || die "NUM_ENVS must be a positive integer."
 [[ "${MAX_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || die "MAX_ITERATIONS must be a positive integer."
 [[ "${DISTURBANCE_MODE}" == "legacy" || "${DISTURBANCE_MODE}" == "single" ]] || \
@@ -118,6 +120,7 @@ echo "Fall penalty    : -${TERMINATION_PENALTY_MAG}"
 echo "Training        : ${NUM_ENVS} envs x ${MAX_ITERATIONS} iterations on ${DEVICE}"
 echo "Run name        : ${RUN_NAME}"
 echo "Disturbance mode: ${DISTURBANCE_MODE}"
+echo "CPU affinity    : ${CPU_AFFINITY}"
 echo "============================================================"
 
 DISTURBANCE_ARGS=()
@@ -152,8 +155,10 @@ RANDOMIZATION_STRENGTH=1 \
 STYLE_REWARD_SCALE=0.0 \
 TASK_STYLE_LERP=1.0 \
 ENTROPY_COEF=0.003 \
-BASELINE_KL_ENABLE=False \
-bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
+BASELINE_KL_ENABLE="${BASELINE_KL_ENABLE:-False}" \
+BASELINE_KL_CHECKPOINT="${BASELINE_KL_CHECKPOINT:-}" \
+BASELINE_KL_SCALE="${BASELINE_KL_SCALE:-0.0}" \
+taskset -c "${CPU_AFFINITY}" bash "${LEGGED_LAB_DIR}/scripts/train_g1_amp.sh" \
   "env.events.reset_leg_joints_with_noise.params.position_range=[-${LEG_NOISE_RAD},${LEG_NOISE_RAD}]" \
   "env.events.reset_waist_joints_with_noise.params.position_range=[-${WAIST_NOISE_RAD},${WAIST_NOISE_RAD}]" \
   "env.events.reset_arm_joints_with_noise.params.position_range=[-${ARM_NOISE_RAD},${ARM_NOISE_RAD}]" \

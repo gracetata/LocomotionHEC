@@ -1,6 +1,8 @@
 """Static contracts for the isolated ArmHack Walk two-goal specialization."""
 
+import os
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -9,6 +11,11 @@ REGISTRY = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/
 EXPORTER = ROOT / "legged_lab/scripts/rsl_rl/export_amp_actor_to_onnx.py"
 TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_walk_two_goal_expert.sh"
 ACCEPTANCE = ROOT / "legged_lab/scripts/test_g1_armhack_walk_two_goal_mujoco.sh"
+INTERACTIVE = ROOT / "scripts/vis_g1_armhack_walk_two_goal_keyboard.sh"
+MUJOCO_ADAPTER = ROOT / "unitree_sim2sim2real/deploy/deploy_mujoco/armhack_walk.py"
+MUJOCO_RUNNER = ROOT / "unitree_sim2sim2real/deploy/deploy_mujoco/deploy_mujoco_g1_amp.py"
+POSES = ROOT / "legged_lab/Reference Data/ArmHack/WalkPerturbFinetune/g1_arm_pose_set.json"
+CONTRACT = ROOT / "legged_lab/Reference Data/ArmHack/WalkPerturbFinetune/real_deployment_contract.json"
 
 
 def text(path: Path) -> str:
@@ -65,3 +72,61 @@ def test_mujoco_acceptance_is_goal_specific_and_checks_retention():
         'stand retention',
     ):
         assert contract in acceptance
+
+
+def test_keyboard_visualization_is_realtime_and_has_disjoint_speed_arm_keys():
+    launcher = text(INTERACTIVE)
+    runner = text(MUJOCO_RUNNER)
+    assert "policy.onnx" in launcher
+    assert "env_isaaclab/bin/python" in launcher
+    assert "USE_GLFW=True REAL_TIME=True" in launcher
+    assert "COMMAND_MODE=keyboard" in launcher
+    assert "PYTHONNOUSERSITE=1" in launcher
+    assert "SPACE/P 循环" in launcher
+    assert 'key not in {"P", "Z", "X", "C"}' in runner
+    assert "slow-motion playback is forbidden" in runner
+    assert 'walk_command_mode not in {' in runner
+    assert '"independent",' in runner and '"keyboard",' in runner
+
+
+def test_arm_pose_keyboard_cycle_uses_minimum_jerk_without_action_jump():
+    python = Path.home() / "anaconda3/envs/gmr/bin/python"
+    program = r'''
+import importlib.util, sys
+import numpy as np
+adapter_path, pose_path, contract_path = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("armhack_walk_interactive_test", adapter_path)
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+names, catalog = module.load_walk_pose_catalog(module.Path(pose_path))
+assert names == ("pos1_back", "pos2_down", "pos3_front")
+assert [module.minimum_jerk(x) for x in (0.0, 0.5, 1.0)] == [0.0, 0.5, 1.0]
+policy_names = list(module.ARM_JOINT_NAMES) + [f"dummy_{index}" for index in range(15)]
+adapter = module.ArmHackWalkAdapter({
+    "armhack_walk_pose_path": pose_path,
+    "armhack_walk_contract_path": contract_path,
+    "armhack_walk_pose_name": "pos2_down",
+    "armhack_walk_fixed_command": [0.0, 0.0, 0.0],
+    "armhack_walk_start_active": False,
+    "armhack_walk_pose_transition_s": 2.0,
+    "command_mode": "keyboard",
+}, policy_names, np.zeros(29, dtype=np.float32))
+zero_action = np.zeros(29, dtype=np.float32)
+adapter.key_callback(32)
+start = adapter.compose_action(zero_action, 0.0)[adapter.arm_policy_indices] * 0.25
+middle = adapter.compose_action(zero_action, 1.0)[adapter.arm_policy_indices] * 0.25
+finish = adapter.compose_action(zero_action, 2.0)[adapter.arm_policy_indices] * 0.25
+assert np.allclose(start, catalog["pos2_down"])
+assert np.allclose(middle, 0.5 * (catalog["pos2_down"] + catalog["pos3_front"]))
+assert np.allclose(finish, catalog["pos3_front"])
+assert adapter.summary()["pose_switch_count"] == 1
+'''
+    env = dict(os.environ)
+    env["PYTHONNOUSERSITE"] = "1"
+    result = subprocess.run(
+        [str(python), "-c", program, str(MUJOCO_ADAPTER), str(POSES), str(CONTRACT)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

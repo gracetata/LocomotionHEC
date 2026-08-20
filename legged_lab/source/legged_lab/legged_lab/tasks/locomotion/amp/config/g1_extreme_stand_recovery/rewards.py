@@ -67,6 +67,28 @@ def _near_default_gate(
     return torch.exp(-torch.mean(torch.square(error), dim=1) / variance)
 
 
+def _near_default_rational_score(
+    asset: Articulation,
+    asset_cfg: SceneEntityCfg,
+    pose_scale: float,
+) -> torch.Tensor:
+    """Return a non-vanishing default-pose score for corrective rewards.
+
+    A narrow Gaussian is useful as a final accuracy bonus, but it can
+    underflow to an effectively zero signal after a large reset or push.  This
+    rational score stays differentiable away from the target while remaining
+    bounded in ``(0, 1]``.
+    """
+    if pose_scale <= 0.0:
+        raise ValueError(f"near-default pose_scale must be positive, got {pose_scale}")
+    error = (
+        asset.data.joint_pos[:, asset_cfg.joint_ids]
+        - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    )
+    mean_square_error = torch.mean(torch.square(error), dim=1)
+    return torch.reciprocal(1.0 + mean_square_error / pose_scale)
+
+
 def _joint_effort_limits(asset: Articulation, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     return asset.data.joint_effort_limits[:, asset_cfg.joint_ids].clamp_min(1.0e-6)
 
@@ -609,6 +631,20 @@ def post_disturbance_pose_recovery(
     return quiet.to(asset.data.joint_pos.dtype) * _near_default_gate(asset, asset_cfg, variance)
 
 
+def post_disturbance_pose_recovery_rational(
+    env,
+    event_name: str = "single_disturbance",
+    pose_scale: float = 0.0225,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward recovery throughout the quiet window without Gaussian underflow."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    event = _single_disturbance_term(env, event_name)
+    quiet = event.has_disturbed & (event.active_time_left <= 0.0)
+    score = _near_default_rational_score(asset, asset_cfg, pose_scale)
+    return quiet.to(score.dtype) * score
+
+
 def post_disturbance_stillness(
     env,
     event_name: str = "single_disturbance",
@@ -625,3 +661,399 @@ def post_disturbance_stillness(
     speed_error = torch.mean(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
     stillness = torch.exp(-speed_error / velocity_variance)
     return quiet.to(stillness.dtype) * _near_default_gate(asset, asset_cfg, pose_variance) * stillness
+
+
+def post_disturbance_stillness_rational(
+    env,
+    event_name: str = "single_disturbance",
+    pose_scale: float = 0.0225,
+    velocity_scale: float = 0.25,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward quiet-window settling with usable gradients after large pushes.
+
+    V5 multiplied two narrow exponentials.  In practice that term was exactly
+    zero in TensorBoard for the entire run.  Mean-square velocity and pose are
+    instead mapped through rational kernels, so a moving or displaced robot
+    still receives a directionally useful signal and the maximum remains one.
+    """
+    if velocity_scale <= 0.0:
+        raise ValueError(f"velocity_scale must be positive, got {velocity_scale}")
+    asset: Articulation = env.scene[asset_cfg.name]
+    event = _single_disturbance_term(env, event_name)
+    quiet = event.has_disturbed & (event.active_time_left <= 0.0)
+    velocity_mse = torch.mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1
+    )
+    stillness_score = torch.reciprocal(1.0 + velocity_mse / velocity_scale)
+    pose_score = _near_default_rational_score(asset, asset_cfg, pose_scale)
+    return quiet.to(stillness_score.dtype) * pose_score * stillness_score
+
+
+def near_default_target_lock_penalty(
+    env,
+    pose_scale: float = 0.0225,
+    target_weight: float = 30.0,
+    action_weight: float = 5.0,
+    joint_velocity_weight: float = 5.0,
+    action_term_name: str = "joint_pos",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Lock the physical PD target to default only after recovery is close.
+
+    Far from the default posture the policy remains free to make decisive
+    recovery motions.  As physical joint error shrinks, the bounded rational
+    gate strongly suppresses target drift, non-zero policy action and residual
+    joint speed.  This directly closes the V5 failure mode where the body was
+    nearly upright but the PD target stayed about 0.19 rad from default.
+    """
+    if min(target_weight, action_weight, joint_velocity_weight) < 0.0:
+        raise ValueError("near-default target-lock weights must be non-negative.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    target_q = env.action_manager.get_term(action_term_name).processed_actions
+    default_q = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    target_error = torch.mean(torch.square(target_q - default_q), dim=1)
+    action_error = torch.mean(torch.square(env.action_manager.action), dim=1)
+    velocity_error = torch.mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1
+    )
+    pose_score = _near_default_rational_score(asset, asset_cfg, pose_scale)
+    # Squaring the score concentrates the lock near the recovered basin while
+    # preserving a small corrective gradient at moderate pose error.
+    gate = torch.square(pose_score)
+    return gate * (
+        target_weight * target_error
+        + action_weight * action_error
+        + joint_velocity_weight * velocity_error
+    )
+
+
+def near_default_topk_target_lock_penalty(
+    env,
+    pose_scale: float = 0.04,
+    gate_power: float = 2.0,
+    topk: int = 4,
+    target_weight: float = 20.0,
+    action_weight: float = 4.0,
+    joint_velocity_weight: float = 4.0,
+    action_term_name: str = "joint_pos",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Brake the worst drifting joints only inside the recovered basin.
+
+    V6 averaged target, action and velocity errors across all 29 joints.  A
+    persistent error in one hip, knee or arm could therefore be diluted by the
+    other 28 joints.  This version uses the worst ``topk`` joints for both the
+    physical-pose gate and the settling costs.  The rational gate remains weak
+    for large pose errors, allowing decisive recovery, and rises smoothly as
+    the worst joints approach their defaults.
+    """
+    if pose_scale <= 0.0:
+        raise ValueError(f"pose_scale must be positive, got {pose_scale}")
+    if gate_power <= 0.0:
+        raise ValueError(f"gate_power must be positive, got {gate_power}")
+    if min(target_weight, action_weight, joint_velocity_weight) < 0.0:
+        raise ValueError("near-default Top-K target-lock weights must be non-negative.")
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    current_q = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    default_q = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    target_q = env.action_manager.get_term(action_term_name).processed_actions
+
+    pose_error = _topk_mean(torch.square(current_q - default_q), topk)
+    target_error = _topk_mean(torch.square(target_q - default_q), topk)
+    action_error = _topk_mean(torch.square(env.action_manager.action), topk)
+    velocity_error = _topk_mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), topk
+    )
+    gate = torch.pow(torch.reciprocal(1.0 + pose_error / pose_scale), gate_power)
+    return gate * (
+        target_weight * target_error
+        + action_weight * action_error
+        + joint_velocity_weight * velocity_error
+    )
+
+
+def target_q_default_topk_l2(
+    env,
+    topk: int = 4,
+    action_term_name: str = "joint_pos",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize the worst physical PD-target offsets from default.
+
+    This is intentionally a small always-on prior.  A state-dependent term
+    below supplies the strong lock once the support joints are stable.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    target_q = env.action_manager.get_term(action_term_name).processed_actions
+    default_q = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    if target_q.shape[1] != default_q.shape[1]:
+        raise RuntimeError(
+            "target_q_default_topk_l2 requires the selected joints to match "
+            f"the action term: target={target_q.shape[1]}, selected={default_q.shape[1]}"
+        )
+    return _topk_mean(torch.square(target_q - default_q), topk)
+
+
+def support_stable_topk_target_lock_penalty(
+    env,
+    support_pose_scale: float = 0.0225,
+    gate_power: float = 2.0,
+    topk: int = 4,
+    target_weight: float = 40.0,
+    action_weight: float = 6.0,
+    joint_velocity_weight: float = 4.0,
+    action_term_name: str = "joint_pos",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    support_asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Lock all joints after legs and waist have recovered.
+
+    V7 used the worst full-body joint errors to construct its gate.  When a
+    wrist drifted far from default, that same error switched the lock off and
+    created a self-sustaining dead zone.  Here the gate depends only on support
+    joints (legs and waist), while the cost still selects the worst full-body
+    targets/actions/velocities.  A displaced wrist can therefore never disable
+    its own corrective signal once the robot is otherwise standing.
+    """
+    if support_pose_scale <= 0.0:
+        raise ValueError(
+            f"support_pose_scale must be positive, got {support_pose_scale}"
+        )
+    if gate_power <= 0.0:
+        raise ValueError(f"gate_power must be positive, got {gate_power}")
+    if min(target_weight, action_weight, joint_velocity_weight) < 0.0:
+        raise ValueError("support-stable Top-K lock weights must be non-negative.")
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    support_asset: Articulation = env.scene[support_asset_cfg.name]
+    support_error = (
+        support_asset.data.joint_pos[:, support_asset_cfg.joint_ids]
+        - support_asset.data.default_joint_pos[:, support_asset_cfg.joint_ids]
+    )
+    support_mse = torch.mean(torch.square(support_error), dim=1)
+    gate = torch.pow(
+        torch.reciprocal(1.0 + support_mse / support_pose_scale), gate_power
+    )
+
+    target_q = env.action_manager.get_term(action_term_name).processed_actions
+    default_q = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    if target_q.shape[1] != default_q.shape[1]:
+        raise RuntimeError(
+            "support_stable_topk_target_lock_penalty requires a full action/joint match."
+        )
+    target_error = _topk_mean(torch.square(target_q - default_q), topk)
+    action_error = _topk_mean(torch.square(env.action_manager.action), topk)
+    velocity_error = _topk_mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), topk
+    )
+    return gate * (
+        target_weight * target_error
+        + action_weight * action_error
+        + joint_velocity_weight * velocity_error
+    )
+
+
+def _root_dynamic_stability_gate(
+    asset: Articulation,
+    upright_scale: float,
+    linear_velocity_scale: float,
+    angular_velocity_scale: float,
+    gate_power: float,
+) -> torch.Tensor:
+    """Return a joint-independent gate for upright, low-motion states."""
+    upright_error = torch.sum(
+        torch.square(asset.data.projected_gravity_b[:, :2]), dim=1
+    )
+    linear_speed_sq = torch.sum(torch.square(asset.data.root_lin_vel_b), dim=1)
+    angular_speed_sq = torch.sum(torch.square(asset.data.root_ang_vel_b), dim=1)
+    normalized_motion = (
+        linear_speed_sq / linear_velocity_scale
+        + angular_speed_sq / angular_velocity_scale
+    )
+    upright_gate = torch.pow(
+        torch.reciprocal(1.0 + upright_error / upright_scale), gate_power
+    )
+    motion_gate = torch.pow(
+        torch.reciprocal(1.0 + normalized_motion), gate_power
+    )
+    return upright_gate * motion_gate
+
+
+def dynamically_stable_topk_target_lock_penalty(
+    env,
+    upright_scale: float = 0.01,
+    linear_velocity_scale: float = 0.09,
+    angular_velocity_scale: float = 0.25,
+    gate_power: float = 1.0,
+    topk: int = 4,
+    target_weight: float = 30.0,
+    action_weight: float = 6.0,
+    joint_velocity_weight: float = 6.0,
+    action_term_name: str = "joint_pos",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Lock all targets when the floating base is upright and nearly still.
+
+    No joint position participates in this gate.  Consequently a displaced
+    wrist, waist or leg can never suppress its own correction.  Uprightness
+    and floating-base motion are independent indicators of whether the robot
+    is actively recovering: large roll/pitch or velocity weakens the lock,
+    while any stable-but-wrong joint configuration receives the full Top-K
+    target/action/velocity cost.
+    """
+    for name, value in (
+        ("upright_scale", upright_scale),
+        ("linear_velocity_scale", linear_velocity_scale),
+        ("angular_velocity_scale", angular_velocity_scale),
+        ("gate_power", gate_power),
+    ):
+        if value <= 0.0:
+            raise ValueError(f"{name} must be positive, got {value}")
+    if min(target_weight, action_weight, joint_velocity_weight) < 0.0:
+        raise ValueError("dynamic-stability Top-K lock weights must be non-negative.")
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    gate = _root_dynamic_stability_gate(
+        asset,
+        upright_scale,
+        linear_velocity_scale,
+        angular_velocity_scale,
+        gate_power,
+    )
+
+    target_q = env.action_manager.get_term(action_term_name).processed_actions
+    default_q = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    if target_q.shape[1] != default_q.shape[1]:
+        raise RuntimeError(
+            "dynamically_stable_topk_target_lock_penalty requires a full action/joint match."
+        )
+    target_error = _topk_mean(torch.square(target_q - default_q), topk)
+    action_error = _topk_mean(torch.square(env.action_manager.action), topk)
+    velocity_error = _topk_mean(
+        torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), topk
+    )
+    return gate * (
+        target_weight * target_error
+        + action_weight * action_error
+        + joint_velocity_weight * velocity_error
+    )
+
+
+class dynamically_stable_target_smoothness_topk_penalty(ManagerTermBase):
+    """Suppress target/action curvature only after floating-base motion settles.
+
+    V9 could keep the physical pose close to default while its target formed a
+    low-frequency limit cycle.  Position and magnitude costs do not directly
+    see that failure.  This term measures physical-target velocity and
+    acceleration together with the action's first and second differences, then
+    applies a normalized Top-K cost.  Its gate contains no joint position, so a
+    drifting wrist or waist cannot disable its own smoothing signal.  Large
+    floating-base motion weakens the cost and preserves decisive recovery.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        action_term_name = cfg.params.get("action_term_name", "joint_pos")
+        current_target = env.action_manager.get_term(action_term_name).processed_actions
+        self._previous_target = torch.zeros_like(current_target)
+        self._previous_target_velocity = torch.zeros_like(current_target)
+        self._previous_action_delta = torch.zeros_like(env.action_manager.action)
+        self._history_count = torch.zeros(
+            env.num_envs, dtype=torch.int8, device=env.device
+        )
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        env_ids = slice(None) if env_ids is None else env_ids
+        self._previous_target[env_ids] = 0.0
+        self._previous_target_velocity[env_ids] = 0.0
+        self._previous_action_delta[env_ids] = 0.0
+        self._history_count[env_ids] = 0
+
+    def __call__(
+        self,
+        env,
+        upright_scale: float = 0.01,
+        linear_velocity_scale: float = 0.09,
+        angular_velocity_scale: float = 0.25,
+        gate_power: float = 1.0,
+        target_velocity_scale: float = 0.50,
+        target_acceleration_scale: float = 10.0,
+        action_delta_scale: float = 0.025,
+        action_second_difference_scale: float = 0.025,
+        target_velocity_weight: float = 0.25,
+        target_acceleration_weight: float = 1.0,
+        action_delta_weight: float = 0.25,
+        action_second_difference_weight: float = 1.0,
+        topk: int = 4,
+        action_term_name: str = "joint_pos",
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        for name, value in (
+            ("upright_scale", upright_scale),
+            ("linear_velocity_scale", linear_velocity_scale),
+            ("angular_velocity_scale", angular_velocity_scale),
+            ("gate_power", gate_power),
+            ("target_velocity_scale", target_velocity_scale),
+            ("target_acceleration_scale", target_acceleration_scale),
+            ("action_delta_scale", action_delta_scale),
+            ("action_second_difference_scale", action_second_difference_scale),
+        ):
+            if value <= 0.0:
+                raise ValueError(f"{name} must be positive, got {value}")
+        if min(
+            target_velocity_weight,
+            target_acceleration_weight,
+            action_delta_weight,
+            action_second_difference_weight,
+        ) < 0.0:
+            raise ValueError("dynamic target-smoothness weights must be non-negative.")
+        if env.step_dt <= 0.0:
+            raise ValueError("dynamic target smoothness requires a positive control step.")
+
+        asset: Articulation = env.scene[asset_cfg.name]
+        target = env.action_manager.get_term(action_term_name).processed_actions
+        action = env.action_manager.action
+        selected_joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+        if target.shape != selected_joint_pos.shape or action.shape != target.shape:
+            raise RuntimeError(
+                "dynamically_stable_target_smoothness_topk_penalty requires "
+                "matching full-body action, target and joint dimensions."
+            )
+
+        target_velocity = (target - self._previous_target) / env.step_dt
+        target_acceleration = (
+            target_velocity - self._previous_target_velocity
+        ) / env.step_dt
+        action_delta = action - env.action_manager.prev_action
+        action_second_difference = action_delta - self._previous_action_delta
+
+        per_joint_cost = (
+            target_velocity_weight
+            * torch.square(target_velocity / target_velocity_scale)
+            + target_acceleration_weight
+            * torch.square(target_acceleration / target_acceleration_scale)
+            + action_delta_weight * torch.square(action_delta / action_delta_scale)
+            + action_second_difference_weight
+            * torch.square(
+                action_second_difference / action_second_difference_scale
+            )
+        )
+        penalty = _topk_mean(per_joint_cost, topk)
+        penalty = torch.where(
+            self._history_count >= 2, penalty, torch.zeros_like(penalty)
+        )
+        gate = _root_dynamic_stability_gate(
+            asset,
+            upright_scale,
+            linear_velocity_scale,
+            angular_velocity_scale,
+            gate_power,
+        )
+
+        self._previous_target.copy_(target)
+        self._previous_target_velocity.copy_(target_velocity)
+        self._previous_action_delta.copy_(action_delta)
+        self._history_count.add_(1).clamp_max_(2)
+        return gate * penalty

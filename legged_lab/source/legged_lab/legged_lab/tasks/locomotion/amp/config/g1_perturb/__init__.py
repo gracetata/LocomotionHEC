@@ -206,3 +206,23 @@ gym.register(
         ),
     },
 )
+
+for branch, env_cfg_name in (
+    ("Base", "G1WalkAnkleSpacingBaseEnvCfg"),
+    ("Lateral", "G1WalkAnkleSpacingLateralEnvCfg"),
+    ("Yaw", "G1WalkAnkleSpacingYawEnvCfg"),
+):
+    gym.register(
+        id=f"LeggedLab-Isaac-AMP-G1-ArmHackWalkAnkleSpacing{branch}-v0",
+        entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.g1_walk_ankle_spacing_env_cfg:{env_cfg_name}"
+            ),
+            "rsl_rl_cfg_entry_point": (
+                f"{agents.__name__}.rsl_rl_ppo_cfg:"
+                "G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg"
+            ),
+        },
+    )

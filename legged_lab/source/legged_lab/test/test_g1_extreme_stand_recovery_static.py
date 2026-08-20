@@ -16,6 +16,10 @@ TASK_DIR = (
 )
 ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_env_cfg.py"
 V5_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v5_env_cfg.py"
+V6_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v6_env_cfg.py"
+V7_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v7_env_cfg.py"
+V8_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v8_env_cfg.py"
+V9_ENV_CFG = TASK_DIR / "g1_extreme_stand_recovery_v9_env_cfg.py"
 V5_DISTURBANCES = TASK_DIR / "disturbances.py"
 TASK_INIT = TASK_DIR / "__init__.py"
 RUNNER_CFG = TASK_DIR / "agents" / "rsl_rl_ppo_cfg.py"
@@ -41,6 +45,30 @@ SMOOTH_SETTLE_V5_TRAIN_SCRIPT = (
     / "extreme_stand_recovery"
     / "train_g1_extreme_stand_recovery_smooth_settle_v5.sh"
 )
+TARGET_LOCK_V6_TRAIN_SCRIPT = (
+    PROJECT_ROOT
+    / "scripts"
+    / "extreme_stand_recovery"
+    / "train_g1_extreme_stand_recovery_target_lock_v6.sh"
+)
+RECOVERY_PRESERVING_V7_TRAIN_SCRIPT = (
+    PROJECT_ROOT
+    / "scripts"
+    / "extreme_stand_recovery"
+    / "train_g1_extreme_stand_recovery_recovery_preserving_v7.sh"
+)
+SUPPORT_LOCK_V8_TRAIN_SCRIPT = (
+    PROJECT_ROOT
+    / "scripts"
+    / "extreme_stand_recovery"
+    / "train_g1_extreme_stand_recovery_support_lock_v8.sh"
+)
+DYNAMIC_LOCK_V9_TRAIN_SCRIPT = (
+    PROJECT_ROOT
+    / "scripts"
+    / "extreme_stand_recovery"
+    / "train_g1_extreme_stand_recovery_dynamic_lock_v9.sh"
+)
 VIS_SCRIPT = PROJECT_ROOT / "scripts" / "extreme_stand_recovery" / "vis_g1_extreme_stand_recovery.sh"
 MUJOCO_SCRIPT = PROJECT_ROOT / "scripts" / "extreme_stand_recovery" / "val_mujoco_g1_extreme_stand_recovery.sh"
 ROOT_MUJOCO_SCRIPT = PROJECT_ROOT.parent / "scripts" / "sim2sim_g1_extreme_stand_recovery_mujoco.sh"
@@ -53,6 +81,27 @@ PUSH_DIAGNOSTIC_PLOT_SCRIPT = (
 POSE_RECOVERY_SCRIPT = PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_random_pose_recovery_mujoco.sh"
 ANTI_JITTER_MUJOCO_SCRIPT = (
     PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_anti_jitter_v3_mujoco.sh"
+)
+TARGET_LOCK_V6_MUJOCO_SCRIPT = (
+    PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_target_lock_v6_mujoco.sh"
+)
+RECOVERY_PRESERVING_V7_SWEEP_SCRIPT = (
+    PROJECT_ROOT.parent
+    / "scripts"
+    / "sweep_g1_extreme_stand_recovery_preserving_v7_checkpoints_mujoco.sh"
+)
+RECOVERY_PRESERVING_V7_MUJOCO_SCRIPT = (
+    PROJECT_ROOT.parent
+    / "scripts"
+    / "test_g1_extreme_stand_recovery_preserving_v7_mujoco.sh"
+)
+SUPPORT_LOCK_V8_SWEEP_SCRIPT = (
+    PROJECT_ROOT.parent
+    / "scripts"
+    / "sweep_g1_extreme_stand_support_lock_v8_checkpoints_mujoco.sh"
+)
+SUPPORT_LOCK_V8_MUJOCO_SCRIPT = (
+    PROJECT_ROOT.parent / "scripts" / "test_g1_extreme_stand_support_lock_v8_mujoco.sh"
 )
 MUJOCO_ADAPTER = PROJECT_ROOT.parent / "unitree_sim2sim2real" / "deploy" / "deploy_mujoco" / "extreme_stand_recovery.py"
 MUJOCO_RUNNER = PROJECT_ROOT.parent / "unitree_sim2sim2real" / "deploy" / "deploy_mujoco" / "deploy_mujoco_g1_amp.py"
@@ -67,6 +116,10 @@ def test_extreme_stand_recovery_files_exist():
     for path in (
         ENV_CFG,
         V5_ENV_CFG,
+        V6_ENV_CFG,
+        V7_ENV_CFG,
+        V8_ENV_CFG,
+        V9_ENV_CFG,
         V5_DISTURBANCES,
         TASK_INIT,
         RUNNER_CFG,
@@ -75,6 +128,10 @@ def test_extreme_stand_recovery_files_exist():
         ANTI_JITTER_V3_TRAIN_SCRIPT,
         SMOOTH_TORQUE_V4_TRAIN_SCRIPT,
         SMOOTH_SETTLE_V5_TRAIN_SCRIPT,
+        TARGET_LOCK_V6_TRAIN_SCRIPT,
+        RECOVERY_PRESERVING_V7_TRAIN_SCRIPT,
+        SUPPORT_LOCK_V8_TRAIN_SCRIPT,
+        DYNAMIC_LOCK_V9_TRAIN_SCRIPT,
         VIS_SCRIPT,
         MUJOCO_SCRIPT,
         ROOT_MUJOCO_SCRIPT,
@@ -84,6 +141,11 @@ def test_extreme_stand_recovery_files_exist():
         PUSH_DIAGNOSTIC_PLOT_SCRIPT,
         POSE_RECOVERY_SCRIPT,
         ANTI_JITTER_MUJOCO_SCRIPT,
+        TARGET_LOCK_V6_MUJOCO_SCRIPT,
+        RECOVERY_PRESERVING_V7_SWEEP_SCRIPT,
+        RECOVERY_PRESERVING_V7_MUJOCO_SCRIPT,
+        SUPPORT_LOCK_V8_SWEEP_SCRIPT,
+        SUPPORT_LOCK_V8_MUJOCO_SCRIPT,
         MUJOCO_ADAPTER,
         MUJOCO_RUNNER,
     ):
@@ -240,6 +302,130 @@ def test_v5_uses_target_settling_topk_normalization_and_single_push_clock():
     assert "SAVE_INTERVAL=${SAVE_INTERVAL:-100}" in train_text
     assert '"agent.save_interval=${SAVE_INTERVAL}"' in train_text
     assert "e0addb8ce23153498d4f805c75f4e3ba19568198f890ffc980160fea7c3b7fff" in train_text
+
+
+def test_v6_fixes_dead_settle_signal_and_covers_large_push_impulse():
+    cfg_text = _read(V6_ENV_CFG)
+    rewards_text = _read(TASK_DIR / "rewards.py")
+    disturbance_text = _read(V5_DISTURBANCES)
+    train_text = _read(TARGET_LOCK_V6_TRAIN_SCRIPT)
+    task_text = _read(TASK_INIT)
+
+    assert "TargetLockV6" in task_text
+    assert "near_default_target_lock_penalty" in cfg_text
+    assert "post_disturbance_pose_recovery_rational" in cfg_text
+    assert "post_disturbance_stillness_rational" in cfg_text
+    assert "torch.reciprocal(1.0 + velocity_mse / velocity_scale)" in rewards_text
+    assert "torch.reciprocal(1.0 + mean_square_error / pose_scale)" in rewards_text
+    assert "force_magnitudes_n\": (45.0, 90.0, 150.0, 240.0)" in cfg_text
+    assert "stage_step_thresholds\": (4800, 9600, 16800)" in cfg_text
+    assert "quiet_duration_range_s\": (8.0, 12.0)" in cfg_text
+    assert "body_force_scales" in cfg_text
+    assert "applied_magnitude" in disturbance_text
+    assert "disturbance_applied_force_n" in disturbance_text
+    assert "MAX_ITERATIONS=${MAX_ITERATIONS:-1000}" in train_text
+    assert "LEARNING_RATE=${LEARNING_RATE:-5.0e-6}" in train_text
+    assert "13538475518be2a323dfedff230949b3c6b8057c8f4f9af000adbbfd90c7ee7c" in train_text
+
+
+def test_v7_preserves_recovery_with_clean_anchors_and_topk_target_lock():
+    cfg_text = _read(V7_ENV_CFG)
+    rewards_text = _read(TASK_DIR / "rewards.py")
+    disturbance_text = _read(V5_DISTURBANCES)
+    train_text = _read(RECOVERY_PRESERVING_V7_TRAIN_SCRIPT)
+    sweep_text = _read(RECOVERY_PRESERVING_V7_SWEEP_SCRIPT)
+    gate_text = _read(RECOVERY_PRESERVING_V7_MUJOCO_SCRIPT)
+    task_text = _read(TASK_INIT)
+
+    assert "RecoveryPreservingV7" in task_text
+    assert "near_default_topk_target_lock_penalty" in cfg_text
+    assert "def near_default_topk_target_lock_penalty" in rewards_text
+    assert "pose_error = _topk_mean" in rewards_text
+    assert "target_error = _topk_mean" in rewards_text
+    assert "velocity_error = _topk_mean" in rewards_text
+    assert "enabled_env_fraction\": 0.50" in cfg_text
+    assert "enabled_env_fraction" in disturbance_text
+    assert "self.disturbance_enabled" in disturbance_text
+    assert "force_magnitudes_n\": (20.0, 45.0, 90.0, 180.0)" in cfg_text
+    assert "stage_step_thresholds\": (3600, 7200, 10800)" in cfg_text
+    assert "self.rewards.target_q_default_error_l2 = None" in cfg_text
+    assert "self.rewards.target_q_velocity_l2 = None" in cfg_text
+    assert "self.rewards.target_q_acceleration_l2 = None" in cfg_text
+    assert "MAX_ITERATIONS=${MAX_ITERATIONS:-600}" in train_text
+    assert "LEARNING_RATE=${LEARNING_RATE:-1.0e-6}" in train_text
+    assert "SAVE_INTERVAL=${SAVE_INTERVAL:-50}" in train_text
+    assert "e0addb8ce23153498d4f805c75f4e3ba19568198f890ffc980160fea7c3b7fff" in train_text
+    assert "v4_baseline" in sweep_text
+    assert "0,50,100,150,200,250,300,350,400,450,500,550,599" in sweep_text
+    assert "nominal,pose_recovery,feet_distance_recovery" in sweep_text
+    assert 'row["pose_recovered"] is True' in sweep_text
+    assert 'row["feet_recovered"] is True' in sweep_text
+    assert 'max(0.05, baseline["pose_jerk_rms"] * 1.50)' in sweep_text
+    assert 'max(0.05, baseline["nominal_jerk_rms"] * 1.50)' in sweep_text
+    assert "BASELINE_LABEL=v4" in gate_text
+    assert 'CANDIDATE_LABEL="${V7_LABEL}"' in gate_text
+    assert 'V5_CHECKPOINT="${V7_CHECKPOINT}"' in gate_text
+    assert 'REQUIRE_PASS="${REQUIRE_PASS:-False}"' in gate_text
+
+
+def test_v8_support_gate_cannot_be_disabled_by_wrist_target_drift():
+    cfg_text = _read(V8_ENV_CFG)
+    rewards_text = _read(TASK_DIR / "rewards.py")
+    train_text = _read(SUPPORT_LOCK_V8_TRAIN_SCRIPT)
+    sweep_text = _read(SUPPORT_LOCK_V8_SWEEP_SCRIPT)
+    gate_text = _read(SUPPORT_LOCK_V8_MUJOCO_SCRIPT)
+    task_text = _read(TASK_INIT)
+
+    assert "SupportLockV8" in task_text
+    assert "support_stable_topk_target_lock_penalty" in cfg_text
+    assert "def support_stable_topk_target_lock_penalty" in rewards_text
+    assert "support_mse" in rewards_text
+    assert "target_q_default_topk_l2" in cfg_text
+    assert "def target_q_default_topk_l2" in rewards_text
+    assert "default_arm_joint_pose_exp" in cfg_text
+    assert "G1_LEG_JOINT_NAMES + G1_WAIST_JOINT_NAMES" in cfg_text
+    assert "enabled_env_fraction\": 0.25" in cfg_text
+    assert "stage_step_thresholds\": (2400, 4800, 7200)" in cfg_text
+    assert "self.rewards.near_default_topk_target_lock_penalty = None" in cfg_text
+    assert "MAX_ITERATIONS=${MAX_ITERATIONS:-400}" in train_text
+    assert "LEARNING_RATE=${LEARNING_RATE:-5.0e-7}" in train_text
+    assert "SAVE_INTERVAL=${SAVE_INTERVAL:-25}" in train_text
+    assert "e0addb8ce23153498d4f805c75f4e3ba19568198f890ffc980160fea7c3b7fff" in train_text
+    assert "0,25,50,75,100,125,150,175,200,225,250,275,300,325,350,375,399" in sweep_text
+    assert "target_joint_position_rad" in sweep_text
+    assert "pose_target_default_max_abs_rad" in sweep_text
+    assert 'row["pose_recovered"] is True' in sweep_text
+    assert 'row["feet_recovered"] is True' in sweep_text
+    assert "BASELINE_LABEL=v4" in gate_text
+    assert 'CANDIDATE_LABEL="${V8_LABEL}"' in gate_text
+    assert 'V5_CHECKPOINT="${V8_CHECKPOINT}"' in gate_text
+
+
+def test_v9_uses_joint_independent_stability_gate_and_v4_kl_retention():
+    cfg_text = _read(V9_ENV_CFG)
+    rewards_text = _read(TASK_DIR / "rewards.py")
+    train_text = _read(DYNAMIC_LOCK_V9_TRAIN_SCRIPT)
+    base_train_text = _read(TRAIN_SCRIPT)
+    task_text = _read(TASK_INIT)
+
+    assert "DynamicLockV9" in task_text
+    assert "dynamically_stable_topk_target_lock_penalty" in cfg_text
+    assert "def dynamically_stable_topk_target_lock_penalty" in rewards_text
+    assert "projected_gravity_b" in rewards_text
+    assert "root_lin_vel_b" in rewards_text
+    assert "root_ang_vel_b" in rewards_text
+    assert "data.joint_pos" not in rewards_text.split(
+        "def dynamically_stable_topk_target_lock_penalty", 1
+    )[1].split("target_q =", 1)[0]
+    assert "default_waist_joint_pose_exp" in cfg_text
+    assert "self.rewards.support_stable_topk_target_lock_penalty = None" in cfg_text
+    assert "stage_step_thresholds\": (1200, 2400, 3600)" in cfg_text
+    assert "MAX_ITERATIONS=${MAX_ITERATIONS:-200}" in train_text
+    assert "LEARNING_RATE=${LEARNING_RATE:-2.0e-7}" in train_text
+    assert "SAVE_INTERVAL=${SAVE_INTERVAL:-10}" in train_text
+    assert "BASELINE_KL_ENABLE=True" in train_text
+    assert 'BASELINE_KL_CHECKPOINT="${BASE_CHECKPOINT}"' in train_text
+    assert 'BASELINE_KL_ENABLE="${BASELINE_KL_ENABLE:-False}"' in base_train_text
 
 
 def test_launchers_never_enable_armhack_action_adapters():
