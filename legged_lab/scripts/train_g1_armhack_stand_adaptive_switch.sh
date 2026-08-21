@@ -18,6 +18,8 @@ TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-"${PROJECT_DIR}/logs/monitoring/${RUN_NAME}.log
 POSE_BANK=${POSE_BANK:-"${PROJECT_DIR}/Reference Data/ArmHack/StandPerturb/RandomizedTraining/random_arm_pose_bank_seed20260715.json"}
 TEACHER_CHECKPOINT=${TEACHER_CHECKPOINT:-${SOURCE_CHECKPOINT}}
 TEACHER_KL_SCALE=${TEACHER_KL_SCALE:-0.0003}
+PHASE_ONE_PROBABILITY=${PHASE_ONE_PROBABILITY:-0.0}
+PHASE_TWO_PROBABILITY=${PHASE_TWO_PROBABILITY:-0.0}
 
 die() { echo "Error: $*" >&2; exit 1; }
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "Isaac Python missing: ${ISAACLAB_PYTHON}"
@@ -41,8 +43,8 @@ RSI_ENABLE=False RANDOMIZATION_STRENGTH=1 STYLE_REWARD_SCALE=0.0 TASK_STYLE_LERP
 BASELINE_KL_ENABLE=True BASELINE_KL_CHECKPOINT="${TEACHER_CHECKPOINT}" BASELINE_KL_SCALE="${TEACHER_KL_SCALE}" \
 bash "${PROJECT_DIR}/scripts/train_g1_amp.sh" \
   "env.upper_body_perturbation.random_pose_bank_path='$(realpath "${POSE_BANK}")'" \
-  env.events.reset_robot_joints.params.phase_one_probability=0.0 \
-  env.events.reset_robot_joints.params.phase_two_probability=0.0 \
+  env.events.reset_robot_joints.params.phase_one_probability="${PHASE_ONE_PROBABILITY}" \
+  env.events.reset_robot_joints.params.phase_two_probability="${PHASE_TWO_PROBABILITY}" \
   agent.load_policy_only=True agent.reset_iteration_on_policy_only_load=True \
   agent.policy_only_noise_std_override=0.15 \
   agent.algorithm.learning_rate=8.0e-6 agent.algorithm.schedule=fixed \
