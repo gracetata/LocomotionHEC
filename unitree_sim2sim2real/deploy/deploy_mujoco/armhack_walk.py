@@ -142,6 +142,8 @@ def load_command_schedule(
                 "end_time": start_time + duration_s,
                 "duration_s": duration_s,
                 "command": command,
+                "pose_name": str(raw_segment.get("pose_name", "")).strip(),
+                "policy": str(raw_segment.get("policy", "primary")).strip().lower(),
             }
         )
         start_time += duration_s
@@ -189,6 +191,7 @@ class ArmHackWalkAdapter:
         self.schedule_path = Path(schedule_path_text).expanduser().resolve() if schedule_path_text else None
         self.scenario_name = str(config.get("armhack_walk_scenario_name", "")).strip()
         self.schedule = None
+        self._last_schedule_pose_index = -1
         if self.schedule_path is not None:
             if not self.schedule_path.is_file():
                 raise FileNotFoundError(f"Walk behavior schedule JSON does not exist: {self.schedule_path}")
@@ -197,6 +200,12 @@ class ArmHackWalkAdapter:
             self.schedule = load_command_schedule(
                 self.schedule_path, self.scenario_name, self.contract
             )
+            for segment in self.schedule["segments"]:
+                pose_name = str(segment.get("pose_name", ""))
+                if pose_name and pose_name not in self.pose_catalog:
+                    raise ValueError(f"Unknown scheduled Walk pose '{pose_name}'.")
+                if segment.get("policy") not in {"primary", "secondary", "walk", "stand"}:
+                    raise ValueError(f"Unknown scheduled policy role '{segment.get('policy')}'.")
         missing = sorted(set(ARM_JOINT_NAMES).difference(policy_joint_names))
         if missing:
             raise ValueError(f"Walk arm joints are absent from policy_joint_names: {missing}")
@@ -252,6 +261,12 @@ class ArmHackWalkAdapter:
         action = np.asarray(network_action, dtype=np.float32)
         if action.shape != (29,) or not np.all(np.isfinite(action)):
             raise ValueError(f"Walk actor must return 29 finite actions, got shape={action.shape}")
+        segment = self.current_schedule_segment(sim_time)
+        if segment is not None and int(segment["index"]) != self._last_schedule_pose_index:
+            self._last_schedule_pose_index = int(segment["index"])
+            scheduled_pose = str(segment.get("pose_name", ""))
+            if scheduled_pose and scheduled_pose != self.pose_name:
+                self._pending_pose_name = scheduled_pose
         self._apply_pending_pose(sim_time)
         self.arm_target = self._interpolated_arm_target(sim_time).astype(np.float32, copy=False)
         executed = action.copy()

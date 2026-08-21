@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command_frame": "robot_base_local",
+  "units": {"linear": "m/s", "angular": "rad/s", "duration": "s"},
+  "scenarios": {
+    "arms_down_to_front_stand": {
+      "description": "Stand continuously while both arms move from down to front.",
+      "segments": [
+        {"name": "stand_down", "duration_s": 3.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
+        {"name": "stand_raise_front", "duration_s": 7.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"}
+      ]
+    },
+    "raise_arms_while_walking": {
+      "description": "Establish forward walking, then raise both arms without resetting state.",
+      "segments": [
+        {"name": "walk_down", "duration_s": 4.0, "command": [0.25, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "walk_raise_front", "duration_s": 7.0, "command": [0.25, 0, 0], "pose_name": "pos3_front", "policy": "walk"}
+      ]
+    },
+    "walk_stop_then_move_arms": {
+      "description": "Walk, request zero, switch to Stand in the same state, then move arms.",
+      "segments": [
+        {"name": "walk", "duration_s": 5.0, "command": [0.25, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "zero_walk_settle", "duration_s": 2.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "switch_stand_down", "duration_s": 3.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
+        {"name": "stand_raise_front", "duration_s": 7.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"}
+      ]
+    },
+    "full_cycle": {
+      "description": "Stand arm motion, Stand->Walk, walking arm motion, zero, and Walk->Stand.",
+      "segments": [
+        {"name": "stand_down", "duration_s": 2.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
+        {"name": "stand_front", "duration_s": 4.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"},
+        {"name": "switch_walk_front", "duration_s": 5.0, "command": [0.25, 0, 0], "pose_name": "pos3_front", "policy": "walk"},
+        {"name": "walk_down", "duration_s": 4.0, "command": [0.20, 0.08, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "walk_zero", "duration_s": 2.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "switch_stand_front", "duration_s": 6.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"}
+      ]
+    }
+  }
+}

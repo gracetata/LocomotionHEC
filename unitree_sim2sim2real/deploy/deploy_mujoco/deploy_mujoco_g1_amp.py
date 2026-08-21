@@ -147,6 +147,21 @@ def load_config(config_path: str) -> dict:
         config = yaml.safe_load(file)
 
     config["policy_path"] = _resolve_path(os.environ.get("G1_AMP_POLICY_PATH", config["policy_path"]))
+    config["secondary_policy_path"] = _resolve_path(
+        os.environ.get("G1_AMP_SECONDARY_POLICY_PATH", config.get("secondary_policy_path", ""))
+    )
+    config["continuous_push_force_n"] = _env_float(
+        "G1_AMP_CONTINUOUS_PUSH_FORCE_N", float(config.get("continuous_push_force_n", 0.0))
+    )
+    config["continuous_push_start_s"] = _env_float(
+        "G1_AMP_CONTINUOUS_PUSH_START_S", float(config.get("continuous_push_start_s", 4.0))
+    )
+    config["continuous_push_period_s"] = _env_float(
+        "G1_AMP_CONTINUOUS_PUSH_PERIOD_S", float(config.get("continuous_push_period_s", 4.0))
+    )
+    config["continuous_push_duration_s"] = _env_float(
+        "G1_AMP_CONTINUOUS_PUSH_DURATION_S", float(config.get("continuous_push_duration_s", 0.20))
+    )
     config["robot_asset"], config["xml_path"] = _resolve_robot_xml(config)
     config["simulation_duration"] = float(os.environ.get("G1_AMP_SIMULATION_DURATION", config["simulation_duration"]))
     config["use_glfw"] = _env_bool("G1_AMP_USE_GLFW", bool(config.get("use_glfw", True)))
@@ -2646,6 +2661,7 @@ def run_mujoco(config: dict) -> None:
             model, data, floor_geom_ids, foot_body_ids
         ),
     }
+    last_policy_role = "primary"
 
     policy_path = Path(config["policy_path"])
     if policy_path.suffix.lower() == ".onnx":
@@ -2693,7 +2709,35 @@ def run_mujoco(config: dict) -> None:
 
         print(f"[INFO] Loaded TorchScript policy: {policy_path}")
 
+    secondary_policy_text = str(config.get("secondary_policy_path", "")).strip()
+    infer_secondary_policy = None
+    if secondary_policy_text:
+        secondary_policy_path = Path(secondary_policy_text)
+        if not secondary_policy_path.is_file():
+            raise FileNotFoundError(f"Secondary policy does not exist: {secondary_policy_path}")
+        if secondary_policy_path.suffix.lower() != ".onnx":
+            raise ValueError("Continuous switching currently requires a secondary ONNX policy.")
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise RuntimeError("Secondary ONNX policy requires onnxruntime.") from exc
+        secondary_session = ort.InferenceSession(
+            str(secondary_policy_path), providers=["CPUExecutionProvider"]
+        )
+        secondary_input_name = secondary_session.get_inputs()[0].name
+        secondary_output_name = secondary_session.get_outputs()[0].name
+
+        def infer_secondary_policy(obs: np.ndarray) -> np.ndarray:
+            output = secondary_session.run(
+                [secondary_output_name],
+                {secondary_input_name: obs[None, :].astype(np.float32, copy=False)},
+            )[0]
+            return np.asarray(output, dtype=np.float32).squeeze(0)
+
+        print(f"[INFO] Loaded secondary ONNX policy: {secondary_policy_path}")
+
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
+        nonlocal last_policy_role
         if counter % int(config["control_decimation"]) != 0:
             return action
         if armhack_stand is not None and not armhack_stand.policy_inference_enabled:
@@ -2709,7 +2753,29 @@ def run_mujoco(config: dict) -> None:
             command,
             config,
         )
-        if bool(config.get("adaptive_stand_phase_obs", False)):
+        schedule_segment = (
+            armhack_walk.current_schedule_segment(sim_time)
+            if armhack_walk is not None and armhack_walk.has_schedule
+            else None
+        )
+        scheduled_role = str(schedule_segment.get("policy", "primary")) if schedule_segment else "primary"
+        use_secondary = scheduled_role in {"secondary", "stand"}
+        if use_secondary and infer_secondary_policy is None:
+            raise RuntimeError("Schedule selected secondary policy but none was configured.")
+        policy_role = "secondary" if use_secondary else "primary"
+        if policy_role != last_policy_role:
+            print(f"[POLICY SWITCH] t={sim_time:.3f}s {last_policy_role}->{policy_role}", flush=True)
+            last_policy_role = policy_role
+            adaptive_stand_phase["phase"] = 0
+            adaptive_stand_phase["lifted"] = False
+            adaptive_stand_phase["phase_start_s"] = sim_time
+            adaptive_stand_phase["initial_z"] = np.asarray(
+                data.xpos[foot_body_ids, 2], dtype=np.float64
+            ).copy()
+            adaptive_stand_phase["previous_contact"] = foot_contact_states_with_floor(
+                model, data, floor_geom_ids, foot_body_ids
+            )
+        if bool(config.get("adaptive_stand_phase_obs", False)) and use_secondary:
             contacts = foot_contact_states_with_floor(model, data, floor_geom_ids, foot_body_ids)
             forces = foot_contact_forces_with_floor(model, data, floor_geom_ids, foot_body_ids)
             if adaptive_stand_phase["phase"] == 0 and not adaptive_stand_phase["lifted"] and sim_time <= 0.25:
@@ -2752,7 +2818,7 @@ def run_mujoco(config: dict) -> None:
                 )
                 obs[94] = 2.0 * float(active) - 1.0
                 obs[95] = float(bool(adaptive_stand_phase["lifted"]))
-        next_action = infer_policy(obs)
+        next_action = infer_secondary_policy(obs) if use_secondary else infer_policy(obs)
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
@@ -2772,6 +2838,18 @@ def run_mujoco(config: dict) -> None:
             while sim_time < float(config["simulation_duration"]):
                 if viewer is not None and not viewer.is_running():
                     break
+                data.xfrc_applied[torso_body_id, :].fill(0.0)
+                push_force = float(config.get("continuous_push_force_n", 0.0))
+                push_start = float(config.get("continuous_push_start_s", 4.0))
+                push_period = float(config.get("continuous_push_period_s", 4.0))
+                push_duration = float(config.get("continuous_push_duration_s", 0.20))
+                if push_force > 0.0 and push_period > 0.0 and sim_time >= push_start:
+                    push_index = int((sim_time - push_start) // push_period)
+                    push_phase = (sim_time - push_start) - push_index * push_period
+                    if push_phase < push_duration:
+                        data.xfrc_applied[torso_body_id, 1] = (
+                            push_force if push_index % 2 == 0 else -push_force
+                        )
                 if armhack_stand is not None and not armhack_stand.process_interaction_requests(sim_time):
                     print("[ArmHack Stand MuJoCo] Q stop requested.", flush=True)
                     break

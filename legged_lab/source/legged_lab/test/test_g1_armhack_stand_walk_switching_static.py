@@ -13,6 +13,8 @@ WALK_SAMPLING = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion
 STAND_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_stand_adaptive_switch.sh"
 WALK_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_walk_precision_switch.sh"
 MUJOCO_RUNNER = ROOT / "unitree_sim2sim2real/deploy/deploy_mujoco/deploy_mujoco_g1_amp.py"
+CONTINUOUS_SCRIPT = ROOT / "legged_lab/scripts/test_g1_armhack_continuous_switch_mujoco.sh"
+CONTINUOUS_SCENARIOS = ROOT / "legged_lab/Reference Data/ArmHack/WalkPerturbFinetune/continuous_switch_scenarios.json"
 
 
 def text(path: Path) -> str:
@@ -84,3 +86,18 @@ def test_training_sources_are_identity_locked_and_tasks_registered():
     assert "G1_AMP_ADAPTIVE_STAND_PHASE_OBS" in mujoco_runner
     assert "foot_contact_forces_with_floor" in mujoco_runner
     assert 'obs[94] = 2.0 * float(active) - 1.0' in mujoco_runner
+
+
+def test_continuous_switch_mujoco_contract_is_explicit_and_bounded():
+    runner = text(MUJOCO_RUNNER)
+    script = text(CONTINUOUS_SCRIPT)
+    scenarios = text(CONTINUOUS_SCENARIOS)
+    assert "G1_AMP_SECONDARY_POLICY_PATH" in runner
+    assert "[POLICY SWITCH]" in runner
+    assert "G1_AMP_CONTINUOUS_PUSH_FORCE_N" in runner
+    assert "arms_down_to_front_stand" in scenarios
+    assert "raise_arms_while_walking" in scenarios
+    assert "walk_stop_then_move_arms" in scenarios
+    assert "full_cycle" in scenarios
+    assert "push40" in script and "push80" in script and "push120" in script
+    assert "VISUAL_PUSH_FORCE_N" in script
