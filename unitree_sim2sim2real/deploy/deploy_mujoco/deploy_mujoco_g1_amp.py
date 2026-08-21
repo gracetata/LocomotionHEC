@@ -2682,6 +2682,7 @@ def run_mujoco(config: dict) -> None:
     }
     last_policy_role = "primary"
     manual_policy_role = "primary"
+    policy_switch_states: list[dict[str, object]] = []
     policy_switch_start_s = -math.inf
     policy_switch_source_action = action.copy()
     policy_switch_target_role = "primary"
@@ -2817,6 +2818,24 @@ def run_mujoco(config: dict) -> None:
         policy_role = "secondary" if use_secondary else "primary"
         if policy_role != last_policy_role:
             print(f"[POLICY SWITCH] t={sim_time:.3f}s {last_policy_role}->{policy_role}", flush=True)
+            policy_switch_states.append(
+                {
+                    "time_s": float(sim_time),
+                    "from": last_policy_role,
+                    "to": policy_role,
+                    "root_position": [float(value) for value in data.qpos[0:3]],
+                    "root_quaternion_wxyz": [float(value) for value in data.qpos[3:7]],
+                    "root_velocity_world": [float(value) for value in data.qvel[0:6]],
+                    "joint_positions": {
+                        name: float(data.qpos[qpos_addresses[name]]) for name in policy_joint_names
+                    },
+                    "joint_velocities": {
+                        name: float(data.qvel[qvel_addresses[name]]) for name in policy_joint_names
+                    },
+                    "previous_action": [float(value) for value in action],
+                    "command": [float(value) for value in command],
+                }
+            )
             policy_switch_start_s = sim_time
             policy_switch_source_action = action.copy()
             policy_switch_target_role = policy_role
@@ -3241,6 +3260,7 @@ def run_mujoco(config: dict) -> None:
                 "completion_count": int(adaptive_stand_phase["completion_count"]),
                 "post_complete_air_events": int(adaptive_stand_phase["post_complete_air_events"]),
             }
+        report["policy_switch_states"] = policy_switch_states
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:
