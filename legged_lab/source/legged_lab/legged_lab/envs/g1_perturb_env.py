@@ -180,6 +180,10 @@ class UpperBodyPerturbationCfg:
     pose_transition_curriculum_static_steps: int = 0
     pose_transition_curriculum_ramp_steps: int = 0
     pose_transition_curriculum_motion_scale: float = 1.0
+    producer_state_path: str = ""
+    producer_state_probability: float = 0.0
+    producer_joint_position_noise: float = 0.0
+    producer_joint_velocity_noise: float = 0.0
 
 
 class G1PerturbAmpEnv(ManagerBasedAmpEnv):
@@ -217,6 +221,8 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._ankle_roll_pitch_joint_ids: torch.Tensor | None = None
         self._lower_body_joint_ids_for_metrics: torch.Tensor | None = None
         self._stand_foot_body_ids: torch.Tensor | None = None
+        self._producer_switch_states: list[dict[str, object]] = []
+        self._producer_state_ready = False
 
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
@@ -278,6 +284,12 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         self._perturbation_cfg = getattr(self.cfg, "upper_body_perturbation", None)
         if self._perturbation_cfg is not None and self._perturbation_cfg.enabled:
             self._initialize_upper_body_perturbation()
+            self._load_producer_switch_states()
+            self._producer_state_ready = True
+            if self._producer_switch_states:
+                self._apply_producer_switch_states(
+                    torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+                )
         else:
             self._perturbation_cfg = None
 
@@ -409,6 +421,118 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             self._reset_pose_transitions(env_ids_tensor)
             if cfg.pose_transition_initialize_joint_state_on_reset:
                 self._initialize_pose_transition_arm_joint_state(env_ids_tensor)
+        if self._producer_state_ready and self._producer_switch_states:
+            self._apply_producer_switch_states(env_ids_tensor)
+
+    def _load_producer_switch_states(self) -> None:
+        cfg = self._perturbation_cfg
+        assert cfg is not None
+        path_text = str(cfg.producer_state_path).strip()
+        probability = float(cfg.producer_state_probability)
+        if not path_text or probability <= 0.0:
+            self._producer_switch_states = []
+            return
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError("producer_state_probability must be in [0, 1].")
+        path = Path(path_text).expanduser().resolve()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        states = payload.get("policy_switch_states", payload) if isinstance(payload, dict) else payload
+        if not isinstance(states, list):
+            raise ValueError(f"Producer state payload must be a list: {path}")
+        selected = [
+            state for state in states
+            if isinstance(state, dict)
+            and state.get("from") == "secondary"
+            and state.get("to") == "primary"
+        ]
+        if not selected:
+            raise ValueError(f"No secondary->primary producer states found in: {path}")
+        self._producer_switch_states = selected
+
+    def _apply_producer_switch_states(self, env_ids: torch.Tensor) -> None:
+        cfg = self._perturbation_cfg
+        action_term = self._joint_pos_action
+        assert cfg is not None and action_term is not None
+        if env_ids.numel() == 0:
+            return
+        apply_mask = torch.rand(env_ids.numel(), device=self.device) < float(
+            cfg.producer_state_probability
+        )
+        selected_env_ids = env_ids[apply_mask]
+        if selected_env_ids.numel() == 0:
+            return
+        state_indices = torch.randint(
+            len(self._producer_switch_states),
+            (selected_env_ids.numel(),),
+            device=self.device,
+        )
+        action_joint_names = list(action_term._joint_names)
+        source_joint_names = list(self._producer_switch_states[0]["joint_positions"])
+        if source_joint_names != action_joint_names:
+            raise ValueError("Producer state joint order does not match the policy action order.")
+        resolved_joint_ids = (
+            list(range(action_term.action_dim))
+            if isinstance(action_term._joint_ids, slice)
+            else list(action_term._joint_ids)
+        )
+
+        def state_tensor(key: str) -> torch.Tensor:
+            values = []
+            for index in state_indices.tolist():
+                mapping = self._producer_switch_states[index][key]
+                values.append([float(mapping[name]) for name in action_joint_names])
+            return torch.tensor(values, dtype=torch.float32, device=self.device)
+
+        joint_pos = state_tensor("joint_positions")
+        joint_vel = state_tensor("joint_velocities")
+        pos_noise = float(cfg.producer_joint_position_noise)
+        vel_noise = float(cfg.producer_joint_velocity_noise)
+        if pos_noise > 0.0:
+            joint_pos += torch.empty_like(joint_pos).uniform_(-pos_noise, pos_noise)
+        if vel_noise > 0.0:
+            joint_vel += torch.empty_like(joint_vel).uniform_(-vel_noise, vel_noise)
+
+        robot = self.scene["robot"]
+        robot.write_joint_state_to_sim(
+            joint_pos,
+            joint_vel,
+            joint_ids=resolved_joint_ids,
+            env_ids=selected_env_ids,
+        )
+
+        root_pose = torch.zeros((selected_env_ids.numel(), 7), dtype=torch.float32, device=self.device)
+        root_velocity = torch.zeros((selected_env_ids.numel(), 6), dtype=torch.float32, device=self.device)
+        for row, index in enumerate(state_indices.tolist()):
+            state = self._producer_switch_states[index]
+            root_pose[row, :3] = torch.tensor(state["root_position"], device=self.device)
+            root_pose[row, 3:] = torch.tensor(state["root_quaternion_wxyz"], device=self.device)
+            root_velocity[row] = torch.tensor(state["root_velocity_world"], device=self.device)
+        root_pose[:, :2] = self.scene.env_origins[selected_env_ids, :2]
+        robot.write_root_pose_to_sim(root_pose, env_ids=selected_env_ids)
+        robot.write_root_velocity_to_sim(root_velocity, env_ids=selected_env_ids)
+
+        previous_action = torch.tensor(
+            [self._producer_switch_states[index]["previous_action"] for index in state_indices.tolist()],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if previous_action.shape[1] != action_term.action_dim:
+            raise ValueError("Producer previous_action dimension does not match the action term.")
+        offset = action_term._offset[selected_env_ids] if isinstance(action_term._offset, torch.Tensor) else action_term._offset
+        scale = action_term._scale[selected_env_ids] if isinstance(action_term._scale, torch.Tensor) else action_term._scale
+        processed_action = previous_action * scale + offset
+        action_term._raw_actions[selected_env_ids] = previous_action
+        action_term._processed_actions[selected_env_ids] = processed_action
+        robot.set_joint_position_target(
+            processed_action,
+            joint_ids=resolved_joint_ids,
+            env_ids=selected_env_ids,
+        )
+        term_index = self.action_manager.active_terms.index("joint_pos")
+        term_start = sum(self.action_manager.action_term_dim[:term_index])
+        manager_ids = slice(term_start, term_start + action_term.action_dim)
+        self.action_manager._action[selected_env_ids, manager_ids] = previous_action
+        self.action_manager._prev_action[selected_env_ids, manager_ids] = previous_action
 
     def _initialize_upper_body_perturbation(self) -> None:
         action_term = self.action_manager.get_term("joint_pos")
