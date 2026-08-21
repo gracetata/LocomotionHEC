@@ -150,6 +150,15 @@ def load_config(config_path: str) -> dict:
     config["secondary_policy_path"] = _resolve_path(
         os.environ.get("G1_AMP_SECONDARY_POLICY_PATH", config.get("secondary_policy_path", ""))
     )
+    config["stand_hold_policy_path"] = _resolve_path(
+        os.environ.get("G1_AMP_STAND_HOLD_POLICY_PATH", config.get("stand_hold_policy_path", ""))
+    )
+    config["stand_hold_blend_s"] = _env_float(
+        "G1_AMP_STAND_HOLD_BLEND_S", float(config.get("stand_hold_blend_s", 1.0))
+    )
+    config["stand_hold_freeze_action"] = _env_bool(
+        "G1_AMP_STAND_HOLD_FREEZE_ACTION", bool(config.get("stand_hold_freeze_action", False))
+    )
     config["continuous_push_force_n"] = _env_float(
         "G1_AMP_CONTINUOUS_PUSH_FORCE_N", float(config.get("continuous_push_force_n", 0.0))
     )
@@ -2660,8 +2669,16 @@ def run_mujoco(config: dict) -> None:
         "previous_contact": foot_contact_states_with_floor(
             model, data, floor_geom_ids, foot_body_ids
         ),
+        "selection_announced": False,
+        "lift_count": 0,
+        "completion_count": 0,
+        "post_complete_air_events": 0,
+        "post_complete_airborne": False,
+        "hold_start_s": -1.0,
+        "hold_source_action": np.zeros(len(policy_joint_names), dtype=np.float32),
     }
     last_policy_role = "primary"
+    manual_policy_role = "primary"
 
     policy_path = Path(config["policy_path"])
     if policy_path.suffix.lower() == ".onnx":
@@ -2736,6 +2753,31 @@ def run_mujoco(config: dict) -> None:
 
         print(f"[INFO] Loaded secondary ONNX policy: {secondary_policy_path}")
 
+    stand_hold_policy_text = str(config.get("stand_hold_policy_path", "")).strip()
+    infer_stand_hold_policy = None
+    if stand_hold_policy_text:
+        stand_hold_policy_path = Path(stand_hold_policy_text)
+        if not stand_hold_policy_path.is_file():
+            raise FileNotFoundError(f"Stand hold policy does not exist: {stand_hold_policy_path}")
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise RuntimeError("Stand hold ONNX policy requires onnxruntime.") from exc
+        hold_session = ort.InferenceSession(
+            str(stand_hold_policy_path), providers=["CPUExecutionProvider"]
+        )
+        hold_input_name = hold_session.get_inputs()[0].name
+        hold_output_name = hold_session.get_outputs()[0].name
+
+        def infer_stand_hold_policy(obs: np.ndarray) -> np.ndarray:
+            output = hold_session.run(
+                [hold_output_name],
+                {hold_input_name: obs[None, :].astype(np.float32, copy=False)},
+            )[0]
+            return np.asarray(output, dtype=np.float32).squeeze(0)
+
+        print(f"[INFO] Loaded Stand hold ONNX policy: {stand_hold_policy_path}")
+
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
         nonlocal last_policy_role
         if counter % int(config["control_decimation"]) != 0:
@@ -2758,7 +2800,11 @@ def run_mujoco(config: dict) -> None:
             if armhack_walk is not None and armhack_walk.has_schedule
             else None
         )
-        scheduled_role = str(schedule_segment.get("policy", "primary")) if schedule_segment else "primary"
+        scheduled_role = (
+            str(schedule_segment.get("policy", "primary"))
+            if schedule_segment
+            else manual_policy_role
+        )
         use_secondary = scheduled_role in {"secondary", "stand"}
         if use_secondary and infer_secondary_policy is None:
             raise RuntimeError("Schedule selected secondary policy but none was configured.")
@@ -2775,13 +2821,37 @@ def run_mujoco(config: dict) -> None:
             adaptive_stand_phase["previous_contact"] = foot_contact_states_with_floor(
                 model, data, floor_geom_ids, foot_body_ids
             )
+            adaptive_stand_phase["selection_announced"] = False
+            adaptive_stand_phase["lift_count"] = 0
+            adaptive_stand_phase["completion_count"] = 0
+            adaptive_stand_phase["post_complete_air_events"] = 0
+            adaptive_stand_phase["post_complete_airborne"] = False
+            adaptive_stand_phase["hold_start_s"] = -1.0
+            adaptive_stand_phase["hold_source_action"] = action.copy()
         if bool(config.get("adaptive_stand_phase_obs", False)) and use_secondary:
             contacts = foot_contact_states_with_floor(model, data, floor_geom_ids, foot_body_ids)
             forces = foot_contact_forces_with_floor(model, data, floor_geom_ids, foot_body_ids)
-            if adaptive_stand_phase["phase"] == 0 and not adaptive_stand_phase["lifted"] and sim_time <= 0.25:
+            if (
+                adaptive_stand_phase["phase"] == 0
+                and not adaptive_stand_phase["lifted"]
+                and sim_time - float(adaptive_stand_phase["phase_start_s"]) <= 0.25
+            ):
                 first = int(np.argmin(forces))
                 adaptive_stand_phase["first"] = first
                 adaptive_stand_phase["second"] = 1 - first
+            if not adaptive_stand_phase["selection_announced"] and sim_time >= float(
+                adaptive_stand_phase["phase_start_s"]
+            ) + 0.20:
+                adaptive_stand_phase["selection_announced"] = True
+                print(
+                    "[STAND STEP] first={} second={} forces=({:.1f},{:.1f})N".format(
+                        "left" if adaptive_stand_phase["first"] == 0 else "right",
+                        "left" if adaptive_stand_phase["second"] == 0 else "right",
+                        float(forces[0]),
+                        float(forces[1]),
+                    ),
+                    flush=True,
+                )
             phase = int(adaptive_stand_phase["phase"])
             active = (
                 int(adaptive_stand_phase["first"])
@@ -2791,25 +2861,56 @@ def run_mujoco(config: dict) -> None:
             clearance = float(data.xpos[foot_body_ids[active], 2]) - float(
                 adaptive_stand_phase["initial_z"][active]
             )
-            if phase < 2 and (clearance >= 0.035 or not bool(contacts[active])):
+            if phase < 2 and not adaptive_stand_phase["lifted"] and clearance >= 0.035:
                 adaptive_stand_phase["lifted"] = True
-            touchdown = bool(contacts[active]) and not bool(
-                adaptive_stand_phase["previous_contact"][active]
-            )
+                adaptive_stand_phase["lift_count"] += 1
+                print(
+                    f"[STAND STEP] phase={phase} lift={'left' if active == 0 else 'right'} "
+                    f"clearance={clearance:.3f}m",
+                    flush=True,
+                )
             if (
                 phase < 2
                 and bool(adaptive_stand_phase["lifted"])
-                and touchdown
+                and bool(contacts[active])
                 and sim_time - float(adaptive_stand_phase["phase_start_s"]) >= 0.35
             ):
                 adaptive_stand_phase["phase"] = phase + 1
+                adaptive_stand_phase["completion_count"] += 1
                 adaptive_stand_phase["phase_start_s"] = sim_time
                 adaptive_stand_phase["lifted"] = False
+                if phase + 1 >= 2:
+                    adaptive_stand_phase["hold_start_s"] = sim_time
+                    adaptive_stand_phase["hold_source_action"] = action.copy()
+                    print("[STAND HOLD] two-step complete; blending to hold policy", flush=True)
+                print(
+                    f"[STAND STEP] phase {phase}->{phase + 1} touchdown="
+                    f"{'left' if active == 0 else 'right'} t={sim_time:.3f}s",
+                    flush=True,
+                )
                 phase += 1
             adaptive_stand_phase["previous_contact"] = contacts.copy()
             if phase >= 2:
                 obs[94] = 0.0
                 obs[95] = 0.0
+                clearance_now = np.asarray(data.xpos[foot_body_ids, 2], dtype=np.float64) - np.asarray(
+                    adaptive_stand_phase["initial_z"], dtype=np.float64
+                )
+                hold_grace_complete = sim_time >= float(
+                    adaptive_stand_phase["hold_start_s"]
+                ) + max(float(config.get("stand_hold_blend_s", 1.0)), 0.0) + 0.5
+                post_airborne = bool(
+                    hold_grace_complete
+                    and (np.any(~contacts) or np.any(clearance_now > 0.030))
+                )
+                if post_airborne and not adaptive_stand_phase["post_complete_airborne"]:
+                    adaptive_stand_phase["post_complete_air_events"] += 1
+                    print(
+                        "[STAND STEP WARNING] post-completion foot airborne "
+                        f"count={adaptive_stand_phase['post_complete_air_events']}",
+                        flush=True,
+                    )
+                adaptive_stand_phase["post_complete_airborne"] = post_airborne
             else:
                 active = (
                     int(adaptive_stand_phase["first"])
@@ -2819,6 +2920,27 @@ def run_mujoco(config: dict) -> None:
                 obs[94] = 2.0 * float(active) - 1.0
                 obs[95] = float(bool(adaptive_stand_phase["lifted"]))
         next_action = infer_secondary_policy(obs) if use_secondary else infer_policy(obs)
+        if (
+            use_secondary
+            and int(adaptive_stand_phase["phase"]) >= 2
+        ):
+            if bool(config.get("stand_hold_freeze_action", False)):
+                next_action = np.asarray(
+                    adaptive_stand_phase["hold_source_action"], dtype=np.float32
+                ).copy()
+            elif infer_stand_hold_policy is not None:
+                hold_action = infer_stand_hold_policy(obs)
+                blend_s = max(float(config.get("stand_hold_blend_s", 1.0)), 1.0e-6)
+                alpha = np.clip(
+                    (sim_time - float(adaptive_stand_phase["hold_start_s"])) / blend_s,
+                    0.0,
+                    1.0,
+                )
+                blend = alpha**3 * (10.0 - 15.0 * alpha + 6.0 * alpha**2)
+                next_action = (
+                    (1.0 - blend) * np.asarray(adaptive_stand_phase["hold_source_action"])
+                    + blend * hold_action
+                ).astype(np.float32)
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
@@ -3092,6 +3214,15 @@ def run_mujoco(config: dict) -> None:
             if motion_trace_path:
                 stand_report["motion_quality"]["trace_csv_path"] = motion_trace_path
             report["extreme_stand_recovery"] = stand_report
+        if bool(config.get("adaptive_stand_phase_obs", False)):
+            report["adaptive_stand_phase"] = {
+                "phase": int(adaptive_stand_phase["phase"]),
+                "first_foot": "left" if int(adaptive_stand_phase["first"]) == 0 else "right",
+                "second_foot": "left" if int(adaptive_stand_phase["second"]) == 0 else "right",
+                "lift_count": int(adaptive_stand_phase["lift_count"]),
+                "completion_count": int(adaptive_stand_phase["completion_count"]),
+                "post_complete_air_events": int(adaptive_stand_phase["post_complete_air_events"]),
+            }
         print_rollout_report(report)
         metrics_path = str(config.get("metrics_path", ""))
         if metrics_path:
@@ -3105,11 +3236,26 @@ def run_mujoco(config: dict) -> None:
 
         def armhack_walk_keyboard_callback(keycode: int) -> None:
             """Give SPACE/arm keys to the arm adapter and all other keys to velocity."""
+            nonlocal manual_policy_role
             if armhack_walk is None or keyboard is None:
                 return
-            armhack_walk.key_callback(keycode)
             key = chr(keycode).upper() if 0 <= int(keycode) < 128 else ""
-            if int(keycode) != 32 and key not in {"P", "Z", "X", "C"}:
+            if key == "M":
+                manual_policy_role = "secondary" if manual_policy_role == "primary" else "primary"
+                print(
+                    f"[MANUAL POLICY] requested {'STAND' if manual_policy_role == 'secondary' else 'WALK'}",
+                    flush=True,
+                )
+                return
+            if key == "H":
+                print(
+                    "[KEYS] M=Walk/Stand Z/X/C=back/down/front SPACE/P=cycle arms "
+                    "W/S=vx A/D=vy Q/E=yaw 0=zero",
+                    flush=True,
+                )
+                return
+            armhack_walk.key_callback(keycode)
+            if int(keycode) != 32 and key not in {"P", "Z", "X", "C", "M", "H"}:
                 keyboard.key_callback(keycode)
 
         key_callback = (

@@ -101,3 +101,6 @@ def test_continuous_switch_mujoco_contract_is_explicit_and_bounded():
     assert "full_cycle" in scenarios
     assert "push40" in script and "push80" in script and "push120" in script
     assert "VISUAL_PUSH_FORCE_N" in script
+    assert 'key == "M"' in runner
+    assert "[STAND STEP WARNING]" in runner
+    assert "post_complete_air_events" in runner

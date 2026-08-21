@@ -8,6 +8,7 @@ LEGGED_LAB_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 PROJECT_ROOT=$(cd "${LEGGED_LAB_DIR}/.." && pwd)
 WALK_POLICY=${WALK_POLICY:-"${LEGGED_LAB_DIR}/ArmHack Checkpoints/WalkPrecisionSwitch/final_mujoco_pass_20260821/policy.onnx"}
 STAND_POLICY=${STAND_POLICY:-"${LEGGED_LAB_DIR}/ArmHack Checkpoints/StandPerturb/final_sim2sim_spacing35_20260821/policy.onnx"}
+STAND_HOLD_POLICY=${STAND_HOLD_POLICY:-"${PROJECT_ROOT}/checkpoint/stand/stand_robust_model_2999.onnx"}
 POSE_PATH=${POSE_PATH:-"${LEGGED_LAB_DIR}/Reference Data/ArmHack/WalkPerturbFinetune/g1_arm_pose_set.json"}
 CONTRACT_PATH=${CONTRACT_PATH:-"${LEGGED_LAB_DIR}/Reference Data/ArmHack/WalkPerturbFinetune/real_deployment_contract.json"}
 SCHEDULE_PATH=${SCHEDULE_PATH:-"${LEGGED_LAB_DIR}/Reference Data/ArmHack/WalkPerturbFinetune/continuous_switch_scenarios.json"}
@@ -17,7 +18,7 @@ VISUALIZE=${VISUALIZE:-False}
 SCENARIO=${SCENARIO:-full_cycle}
 VISUAL_PUSH_FORCE_N=${VISUAL_PUSH_FORCE_N:-0}
 
-for required in "${WALK_POLICY}" "${STAND_POLICY}" "${POSE_PATH}" "${CONTRACT_PATH}" "${SCHEDULE_PATH}"; do
+for required in "${WALK_POLICY}" "${STAND_POLICY}" "${STAND_HOLD_POLICY}" "${POSE_PATH}" "${CONTRACT_PATH}" "${SCHEDULE_PATH}"; do
     [[ -f "${required}" ]] || { echo "Error: missing ${required}" >&2; exit 1; }
 done
 "${UNITREE_PYTHON}" -c 'import mujoco,numpy,onnxruntime,yaml,torch'
@@ -38,6 +39,9 @@ run_case() {
     output="${OUTPUT_ROOT}/${scenario}_${variant}"
     mkdir -p "${output}"
     G1_AMP_SECONDARY_POLICY_PATH="${STAND_POLICY}" \
+    G1_AMP_STAND_HOLD_POLICY_PATH="${STAND_HOLD_POLICY}" \
+    G1_AMP_STAND_HOLD_BLEND_S=1.0 \
+    G1_AMP_STAND_HOLD_FREEZE_ACTION=False \
     G1_AMP_ADAPTIVE_STAND_PHASE_OBS=True \
     G1_AMP_ARMHACK_WALK_ENABLE=True \
     G1_AMP_ARMHACK_WALK_POSE_PATH="${POSE_PATH}" \
@@ -67,7 +71,7 @@ if [[ "${VISUALIZE}" == "True" || "${VISUALIZE}" == "true" || "${VISUALIZE}" == 
     exit 0
 fi
 
-scenarios=(arms_down_to_front_stand raise_arms_while_walking walk_stop_then_move_arms full_cycle)
+scenarios=(stand_step_diagnostic arms_down_to_front_stand raise_arms_while_walking walk_stop_then_move_arms full_cycle)
 for scenario in "${scenarios[@]}"; do
     run_case "${scenario}" nominal 0 False
     run_case "${scenario}" push40 40 False
@@ -90,6 +94,12 @@ for path in sorted(root.glob("*/metrics.json")):
     if "full_cycle" in case or "walk_stop_then_move_arms" in case:
         if "[POLICY SWITCH]" not in log:
             raise RuntimeError(f"{case}: policy switch was not executed")
+    if case == "stand_step_diagnostic_nominal":
+        phase=data.get("adaptive_stand_phase", {})
+        if phase.get("completion_count") != 2 or phase.get("phase") != 2:
+            raise RuntimeError(f"{case}: did not complete two-step sequence: {phase}")
+        if phase.get("post_complete_air_events") != 0:
+            raise RuntimeError(f"{case}: repeated foot oscillation after completion: {phase}")
     results[case]={
         "required":required,
         "passed":passed,

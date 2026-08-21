@@ -3,6 +3,13 @@
   "command_frame": "robot_base_local",
   "units": {"linear": "m/s", "angular": "rad/s", "duration": "s"},
   "scenarios": {
+    "stand_step_diagnostic": {
+      "description": "Long Stand-only run that must complete exactly two steps and then stop lifting.",
+      "segments": [
+        {"name": "stand_down", "duration_s": 15.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
+        {"name": "stand_front", "duration_s": 15.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"}
+      ]
+    },
     "arms_down_to_front_stand": {
       "description": "Stand continuously while both arms move from down to front.",
       "segments": [
