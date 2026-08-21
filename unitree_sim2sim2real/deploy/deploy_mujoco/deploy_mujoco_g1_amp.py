@@ -156,6 +156,9 @@ def load_config(config_path: str) -> dict:
     config["stand_hold_blend_s"] = _env_float(
         "G1_AMP_STAND_HOLD_BLEND_S", float(config.get("stand_hold_blend_s", 1.0))
     )
+    config["stand_to_walk_blend_s"] = _env_float(
+        "G1_AMP_STAND_TO_WALK_BLEND_S", float(config.get("stand_to_walk_blend_s", 0.0))
+    )
     config["stand_hold_freeze_action"] = _env_bool(
         "G1_AMP_STAND_HOLD_FREEZE_ACTION", bool(config.get("stand_hold_freeze_action", False))
     )
@@ -2679,6 +2682,9 @@ def run_mujoco(config: dict) -> None:
     }
     last_policy_role = "primary"
     manual_policy_role = "primary"
+    policy_switch_start_s = -math.inf
+    policy_switch_source_action = action.copy()
+    policy_switch_target_role = "primary"
 
     policy_path = Path(config["policy_path"])
     if policy_path.suffix.lower() == ".onnx":
@@ -2779,7 +2785,7 @@ def run_mujoco(config: dict) -> None:
         print(f"[INFO] Loaded Stand hold ONNX policy: {stand_hold_policy_path}")
 
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
-        nonlocal last_policy_role
+        nonlocal last_policy_role, policy_switch_start_s, policy_switch_source_action, policy_switch_target_role
         if counter % int(config["control_decimation"]) != 0:
             return action
         if armhack_stand is not None and not armhack_stand.policy_inference_enabled:
@@ -2811,6 +2817,9 @@ def run_mujoco(config: dict) -> None:
         policy_role = "secondary" if use_secondary else "primary"
         if policy_role != last_policy_role:
             print(f"[POLICY SWITCH] t={sim_time:.3f}s {last_policy_role}->{policy_role}", flush=True)
+            policy_switch_start_s = sim_time
+            policy_switch_source_action = action.copy()
+            policy_switch_target_role = policy_role
             last_policy_role = policy_role
             adaptive_stand_phase["phase"] = 0
             adaptive_stand_phase["lifted"] = False
@@ -2945,6 +2954,15 @@ def run_mujoco(config: dict) -> None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
             next_action = armhack_walk.compose_action(next_action, sim_time)
+        if policy_switch_target_role == "primary" and policy_role == "primary":
+            blend_s = max(float(config.get("stand_to_walk_blend_s", 0.0)), 0.0)
+            if blend_s > 0.0 and sim_time < policy_switch_start_s + blend_s:
+                alpha = np.clip((sim_time - policy_switch_start_s) / blend_s, 0.0, 1.0)
+                blend = alpha**3 * (10.0 - 15.0 * alpha + 6.0 * alpha**2)
+                next_action = (
+                    (1.0 - blend) * np.asarray(policy_switch_source_action)
+                    + blend * next_action
+                ).astype(np.float32)
         return next_action
 
     def simulate_loop(viewer=None) -> None:

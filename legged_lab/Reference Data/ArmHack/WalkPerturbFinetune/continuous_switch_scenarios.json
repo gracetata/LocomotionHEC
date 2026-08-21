@@ -36,8 +36,8 @@
     "full_cycle": {
       "description": "Stand arm motion, Stand->Walk, walking arm motion, zero, and Walk->Stand.",
       "segments": [
-        {"name": "stand_down", "duration_s": 2.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
-        {"name": "stand_front", "duration_s": 4.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"},
+        {"name": "stand_down", "duration_s": 3.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
+        {"name": "stand_front", "duration_s": 7.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"},
         {"name": "switch_walk_zero", "duration_s": 1.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "walk"},
         {"name": "switch_walk_front", "duration_s": 4.0, "command": [0.25, 0, 0], "pose_name": "pos3_front", "policy": "walk"},
         {"name": "walk_down", "duration_s": 4.0, "command": [0.20, 0.08, 0], "pose_name": "pos2_down", "policy": "walk"},

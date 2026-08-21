@@ -27,41 +27,52 @@ class G1WalkSwitchOodEnvCfg(G1WalkPrecisionSwitchEnvCfg):
             func=mdp.reset_joints_with_random_stance,
             mode="reset",
             params={
-                "distance_range": (0.28, 0.40),
-                "close_distance_range": (0.28, 0.30),
-                "close_stance_probability": 0.0,
-                "nominal_distance_range": (0.32, 0.38),
-                "nominal_stance_probability": 0.35,
+                "distance_range": (0.24, 0.38),
+                "close_distance_range": (0.24, 0.27),
+                "close_stance_probability": 0.15,
+                "nominal_distance_range": (0.28, 0.33),
+                "nominal_stance_probability": 0.55,
                 "asymmetric_support_probability": 0.0,
                 "phase_one_probability": 0.0,
-                "phase_two_probability": 0.65,
+                "phase_two_probability": 0.20,
                 "support_distance_range": (0.28, 0.38),
                 "final_distance": 0.35,
                 "kinematic_nominal_distance": 0.237,
                 "kinematic_distance_per_rad": 1.22,
-                "position_scale_range": (0.98, 1.02),
-                "velocity_range": (-0.20, 0.20),
+                "position_scale_range": (0.99, 1.01),
+                "velocity_range": (-0.05, 0.05),
             },
         )
         self.events.reset_base.params["velocity_range"] = {
-            "x": (-0.12, 0.12),
-            "y": (-0.12, 0.12),
-            "z": (-0.08, 0.08),
-            "roll": (-0.15, 0.15),
-            "pitch": (-0.15, 0.15),
-            "yaw": (-0.20, 0.20),
+            "x": (-0.05, 0.05),
+            "y": (-0.05, 0.05),
+            "z": (-0.03, 0.03),
+            "roll": (-0.08, 0.08),
+            "pitch": (-0.08, 0.08),
+            "yaw": (-0.10, 0.10),
         }
         self.rewards.ankle_distance_30cm_kernel.weight = 120.0
         self.rewards.torso_roll_pitch_l2.weight = -3.0
         self.rewards.pure_yaw_planar_drift_l2 = RewTerm(
             func=mdp.pure_yaw_planar_drift_l2,
-            weight=-8.0,
+            weight=-4.0,
             params={
                 "command_name": "base_velocity",
                 "min_yaw_command": 0.10,
                 "velocity_scale": 0.08,
                 "max_penalty": 100.0,
                 "asset_cfg": SceneEntityCfg("robot"),
+            },
+        )
+        self.events.randomize_torso_wrench = EventTerm(
+            func=mdp.apply_external_force_torque,
+            mode="interval",
+            interval_range_s=(3.0, 5.0),
+            is_global_time=False,
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+                "force_range": (-40.0, 40.0),
+                "torque_range": (-3.0, 3.0),
             },
         )
 
