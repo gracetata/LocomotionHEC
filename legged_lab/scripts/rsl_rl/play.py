@@ -68,6 +68,18 @@ parser.add_argument(
 parser.add_argument("--camera_env_index", type=int, default=0, help="Environment index whose robot is tracked by follow camera.")
 parser.add_argument("--skip_export", action="store_true", default=False, help="Deprecated no-op; use export_g1_amp_policy.sh.")
 parser.add_argument(
+    "--producer_state_capture_path",
+    type=str,
+    default=None,
+    help="Write IsaacLab phase-two handoff states for producer-to-consumer fine-tuning.",
+)
+parser.add_argument(
+    "--producer_state_capture_after_phase2_steps",
+    type=int,
+    default=10,
+    help="Hold phase two for this many policy steps before capturing each environment.",
+)
+parser.add_argument(
     "--strict_export",
     action="store_true",
     default=False,
@@ -1126,6 +1138,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "command": {},
         "important": {},
     }
+    producer_state_records: list[dict[str, object]] = []
+    producer_phase2_counts = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
+    producer_state_captured = torch.zeros(env.num_envs, dtype=torch.bool, device=env.unwrapped.device)
     armhack_stand_report = None
     if args_cli.armhack_stand_report_path:
         if not any(token in task_name for token in ("StandPerturb", "StandRandomizedPayload")):
@@ -1151,6 +1166,61 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             _update_play_metrics(play_metrics, env, rewards, dones, extras)
             if armhack_stand_report is not None:
                 armhack_stand_report.update(dones)
+            if args_cli.producer_state_capture_path:
+                base_env = env.unwrapped
+                phase_state = getattr(base_env, "_armhack_sequential_foot_step_state", None)
+                if phase_state is None:
+                    raise RuntimeError("Producer capture requires an adaptive sequential Stand task.")
+                phase_two = phase_state["phase"] >= 2
+                producer_phase2_counts = torch.where(
+                    phase_two,
+                    producer_phase2_counts + 1,
+                    torch.zeros_like(producer_phase2_counts),
+                )
+                ready = (
+                    producer_phase2_counts
+                    >= max(int(args_cli.producer_state_capture_after_phase2_steps), 1)
+                ) & (~producer_state_captured)
+                if torch.any(ready):
+                    robot = base_env.scene["robot"]
+                    action_term = base_env.action_manager.get_term("joint_pos")
+                    action_joint_names = list(action_term._joint_names)
+                    resolved_joint_ids = (
+                        list(range(action_term.action_dim))
+                        if isinstance(action_term._joint_ids, slice)
+                        else list(action_term._joint_ids)
+                    )
+                    root_state = robot.data.root_state_w
+                    for env_index in ready.nonzero(as_tuple=False).squeeze(-1).tolist():
+                        producer_state_records.append(
+                            {
+                                "source_simulator": "isaaclab",
+                                "control_step": int(timestep + 1),
+                                "environment_index": int(env_index),
+                                "from": "secondary",
+                                "to": "primary",
+                                "root_position": root_state[env_index, :3].detach().cpu().tolist(),
+                                "root_quaternion_wxyz": root_state[env_index, 3:7].detach().cpu().tolist(),
+                                "root_velocity_world": root_state[env_index, 7:13].detach().cpu().tolist(),
+                                "joint_positions": {
+                                    name: float(robot.data.joint_pos[env_index, joint_id].item())
+                                    for name, joint_id in zip(action_joint_names, resolved_joint_ids)
+                                },
+                                "joint_velocities": {
+                                    name: float(robot.data.joint_vel[env_index, joint_id].item())
+                                    for name, joint_id in zip(action_joint_names, resolved_joint_ids)
+                                },
+                                "previous_action": base_env.action_manager.action[env_index]
+                                .detach()
+                                .cpu()
+                                .tolist(),
+                                "command": base_env.command_manager.get_command("base_velocity")[env_index]
+                                .detach()
+                                .cpu()
+                                .tolist(),
+                            }
+                        )
+                    producer_state_captured[ready] = True
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
         timestep += 1
@@ -1168,6 +1238,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             time.sleep(sleep_time)
 
     _print_play_report(play_metrics, timestep)
+    if args_cli.producer_state_capture_path:
+        output_path = Path(args_cli.producer_state_capture_path).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps({"policy_switch_states": producer_state_records}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[INFO] Wrote {len(producer_state_records)} Isaac producer states: {output_path}")
     if armhack_stand_report is not None:
         armhack_stand_report.write(play_metrics=play_metrics, steps=timestep, control_dt=dt)
 

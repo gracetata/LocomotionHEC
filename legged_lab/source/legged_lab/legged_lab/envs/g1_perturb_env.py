@@ -491,6 +491,8 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             joint_pos += torch.empty_like(joint_pos).uniform_(-pos_noise, pos_noise)
         if vel_noise > 0.0:
             joint_vel += torch.empty_like(joint_vel).uniform_(-vel_noise, vel_noise)
+        if cfg.source == "pose_set" and self._active_pose_targets is not None:
+            self._active_pose_targets[selected_env_ids] = joint_pos[:, self._upper_action_indices]
 
         robot = self.scene["robot"]
         robot.write_joint_state_to_sim(
