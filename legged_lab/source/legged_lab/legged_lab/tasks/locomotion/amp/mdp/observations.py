@@ -93,8 +93,12 @@ def sequential_phase_augmented_last_action(
     env: ManagerBasedEnv,
     phase_action_index: int = 27,
     lifted_action_index: int = 28,
+    se2_action_indices: tuple[int, int, int] = (24, 25, 26),
+    se2_xy_scale_m: float = 0.30,
+    se2_yaw_scale_rad: float = 0.50,
+    torso_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
 ) -> torch.Tensor:
-    """Encode selected swing foot and lift state in two hijacked action slots.
+    """Encode step phase and reset-relative torso SE(2) in scripted-arm slots.
 
     ArmHack replaces the commanded arm targets downstream, so these two actor
     action-history entries do not control the robot.  Reusing them keeps the
@@ -129,4 +133,33 @@ def sequential_phase_augmented_last_action(
         lifted_signal = lifted.gather(1, active_index.unsqueeze(1)).squeeze(1).float()
     actions[:, phase_action_index] = phase_signal
     actions[:, lifted_action_index] = lifted_signal
+    if len(se2_action_indices) != 3 or min(se2_action_indices) < 0 or max(se2_action_indices) >= actions.shape[1]:
+        raise ValueError("SE(2) action-history indices must contain three valid action indices.")
+    if se2_xy_scale_m <= 0.0 or se2_yaw_scale_rad <= 0.0:
+        raise ValueError("SE(2) observation scales must be positive.")
+    asset: RigidObject = env.scene[torso_cfg.name]
+    if len(torso_cfg.body_ids) != 1:
+        raise ValueError("SE(2) observation requires exactly one torso body.")
+    body_id = torso_cfg.body_ids[0]
+    position = asset.data.body_pos_w[:, body_id, :]
+    _, _, yaw = math_utils.euler_xyz_from_quat(asset.data.body_quat_w[:, body_id, :])
+    initial_position = getattr(env, "_important_metric_initial_torso_pos_w", None)
+    initial_yaw = getattr(env, "_important_metric_initial_torso_yaw_w", None)
+    if initial_position is None or initial_yaw is None:
+        initial_position = position.detach()
+        initial_yaw = yaw.detach()
+    delta_xy_w = position[:, :2] - initial_position[:, :2]
+    cos_yaw = torch.cos(initial_yaw)
+    sin_yaw = torch.sin(initial_yaw)
+    delta_x = cos_yaw * delta_xy_w[:, 0] + sin_yaw * delta_xy_w[:, 1]
+    delta_y = -sin_yaw * delta_xy_w[:, 0] + cos_yaw * delta_xy_w[:, 1]
+    se2_signal = torch.stack(
+        (
+            delta_x / float(se2_xy_scale_m),
+            delta_y / float(se2_xy_scale_m),
+            math_utils.wrap_to_pi(yaw - initial_yaw) / float(se2_yaw_scale_rad),
+        ),
+        dim=1,
+    ).clamp_(-1.0, 1.0)
+    actions[:, list(se2_action_indices)] = se2_signal
     return actions

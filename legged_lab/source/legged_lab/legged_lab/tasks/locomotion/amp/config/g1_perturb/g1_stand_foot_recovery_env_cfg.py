@@ -50,7 +50,14 @@ class G1StandFootRecoveryEnvCfg(G1StandRandomizedPayloadEnvCfg):
         )
         self.rewards.track_torso_lin_vel_xy_exp.weight = 3.0
         self.rewards.track_torso_yaw_rate_exp.weight = 1.5
-        sequential_phase_obs_params = {"phase_action_index": 27, "lifted_action_index": 28}
+        sequential_phase_obs_params = {
+            "phase_action_index": 27,
+            "lifted_action_index": 28,
+            "se2_action_indices": (24, 25, 26),
+            "se2_xy_scale_m": 0.30,
+            "se2_yaw_scale_rad": 0.50,
+            "torso_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+        }
         self.observations.policy.actions = ObsTerm(
             func=mdp.sequential_phase_augmented_last_action,
             params=sequential_phase_obs_params,

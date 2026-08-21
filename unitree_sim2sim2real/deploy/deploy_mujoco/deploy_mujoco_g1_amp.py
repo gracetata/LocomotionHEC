@@ -156,6 +156,13 @@ def load_config(config_path: str) -> dict:
     config["stand_hold_blend_s"] = _env_float(
         "G1_AMP_STAND_HOLD_BLEND_S", float(config.get("stand_hold_blend_s", 1.0))
     )
+    config["stand_hold_target_mix"] = _env_float(
+        "G1_AMP_STAND_HOLD_TARGET_MIX", float(config.get("stand_hold_target_mix", 1.0))
+    )
+    config["stand_post_complete_min_air_s"] = _env_float(
+        "G1_AMP_STAND_POST_COMPLETE_MIN_AIR_S",
+        float(config.get("stand_post_complete_min_air_s", 0.10)),
+    )
     config["stand_to_walk_blend_s"] = _env_float(
         "G1_AMP_STAND_TO_WALK_BLEND_S", float(config.get("stand_to_walk_blend_s", 0.0))
     )
@@ -2677,8 +2684,13 @@ def run_mujoco(config: dict) -> None:
         "completion_count": 0,
         "post_complete_air_events": 0,
         "post_complete_airborne": False,
+        "post_complete_air_since_s": -1.0,
         "hold_start_s": -1.0,
         "hold_source_action": np.zeros(len(policy_joint_names), dtype=np.float32),
+        "initial_root_position": np.asarray(data.qpos[0:3], dtype=np.float64).copy(),
+        "initial_root_yaw": float(quat_to_roll_pitch_yaw(data.qpos[3:7].copy())[2]),
+        "completion_root_position": np.asarray(data.qpos[0:3], dtype=np.float64).copy(),
+        "completion_root_quaternion_wxyz": np.asarray(data.qpos[3:7], dtype=np.float64).copy(),
     }
     last_policy_role = "primary"
     manual_policy_role = "primary"
@@ -2854,9 +2866,30 @@ def run_mujoco(config: dict) -> None:
             adaptive_stand_phase["completion_count"] = 0
             adaptive_stand_phase["post_complete_air_events"] = 0
             adaptive_stand_phase["post_complete_airborne"] = False
+            adaptive_stand_phase["post_complete_air_since_s"] = -1.0
             adaptive_stand_phase["hold_start_s"] = -1.0
             adaptive_stand_phase["hold_source_action"] = action.copy()
+            adaptive_stand_phase["initial_root_position"] = np.asarray(
+                data.qpos[0:3], dtype=np.float64
+            ).copy()
+            adaptive_stand_phase["initial_root_yaw"] = float(
+                quat_to_roll_pitch_yaw(data.qpos[3:7].copy())[2]
+            )
         if bool(config.get("adaptive_stand_phase_obs", False)) and use_secondary:
+            current_yaw = float(quat_to_roll_pitch_yaw(data.qpos[3:7].copy())[2])
+            initial_yaw = float(adaptive_stand_phase["initial_root_yaw"])
+            delta_xy_w = np.asarray(data.qpos[0:2], dtype=np.float64) - np.asarray(
+                adaptive_stand_phase["initial_root_position"][0:2], dtype=np.float64
+            )
+            cos_yaw, sin_yaw = math.cos(initial_yaw), math.sin(initial_yaw)
+            delta_x = cos_yaw * delta_xy_w[0] + sin_yaw * delta_xy_w[1]
+            delta_y = -sin_yaw * delta_xy_w[0] + cos_yaw * delta_xy_w[1]
+            yaw_error = (current_yaw - initial_yaw + math.pi) % (2.0 * math.pi) - math.pi
+            obs[91:94] = np.clip(
+                np.asarray([delta_x / 0.30, delta_y / 0.30, yaw_error / 0.50]),
+                -1.0,
+                1.0,
+            )
             contacts = foot_contact_states_with_floor(model, data, floor_geom_ids, foot_body_ids)
             forces = foot_contact_forces_with_floor(model, data, floor_geom_ids, foot_body_ids)
             if (
@@ -2910,6 +2943,12 @@ def run_mujoco(config: dict) -> None:
                 if phase + 1 >= 2:
                     adaptive_stand_phase["hold_start_s"] = sim_time
                     adaptive_stand_phase["hold_source_action"] = action.copy()
+                    adaptive_stand_phase["completion_root_position"] = np.asarray(
+                        data.qpos[0:3], dtype=np.float64
+                    ).copy()
+                    adaptive_stand_phase["completion_root_quaternion_wxyz"] = np.asarray(
+                        data.qpos[3:7], dtype=np.float64
+                    ).copy()
                     print("[STAND HOLD] two-step complete; blending to hold policy", flush=True)
                 print(
                     f"[STAND STEP] phase {phase}->{phase + 1} touchdown="
@@ -2931,14 +2970,24 @@ def run_mujoco(config: dict) -> None:
                     hold_grace_complete
                     and (np.any(~contacts) or np.any(clearance_now > 0.030))
                 )
-                if post_airborne and not adaptive_stand_phase["post_complete_airborne"]:
-                    adaptive_stand_phase["post_complete_air_events"] += 1
-                    print(
-                        "[STAND STEP WARNING] post-completion foot airborne "
-                        f"count={adaptive_stand_phase['post_complete_air_events']}",
-                        flush=True,
-                    )
-                adaptive_stand_phase["post_complete_airborne"] = post_airborne
+                if post_airborne:
+                    if float(adaptive_stand_phase["post_complete_air_since_s"]) < 0.0:
+                        adaptive_stand_phase["post_complete_air_since_s"] = sim_time
+                    dwell_s = sim_time - float(adaptive_stand_phase["post_complete_air_since_s"])
+                    if (
+                        not adaptive_stand_phase["post_complete_airborne"]
+                        and dwell_s >= max(float(config.get("stand_post_complete_min_air_s", 0.10)), 0.0)
+                    ):
+                        adaptive_stand_phase["post_complete_air_events"] += 1
+                        adaptive_stand_phase["post_complete_airborne"] = True
+                        print(
+                            "[STAND STEP WARNING] sustained post-completion foot airborne "
+                            f"dwell={dwell_s:.3f}s count={adaptive_stand_phase['post_complete_air_events']}",
+                            flush=True,
+                        )
+                else:
+                    adaptive_stand_phase["post_complete_air_since_s"] = -1.0
+                    adaptive_stand_phase["post_complete_airborne"] = False
             else:
                 active = (
                     int(adaptive_stand_phase["first"])
@@ -2958,6 +3007,10 @@ def run_mujoco(config: dict) -> None:
                 ).copy()
             elif infer_stand_hold_policy is not None:
                 hold_action = infer_stand_hold_policy(obs)
+                target_mix = np.clip(float(config.get("stand_hold_target_mix", 1.0)), 0.0, 1.0)
+                hold_action = (
+                    (1.0 - target_mix) * np.asarray(next_action) + target_mix * hold_action
+                ).astype(np.float32)
                 blend_s = max(float(config.get("stand_hold_blend_s", 1.0)), 1.0e-6)
                 alpha = np.clip(
                     (sim_time - float(adaptive_stand_phase["hold_start_s"])) / blend_s,
@@ -3259,6 +3312,13 @@ def run_mujoco(config: dict) -> None:
                 "lift_count": int(adaptive_stand_phase["lift_count"]),
                 "completion_count": int(adaptive_stand_phase["completion_count"]),
                 "post_complete_air_events": int(adaptive_stand_phase["post_complete_air_events"]),
+                "completion_root_position": [
+                    float(value) for value in adaptive_stand_phase["completion_root_position"]
+                ],
+                "completion_root_quaternion_wxyz": [
+                    float(value)
+                    for value in adaptive_stand_phase["completion_root_quaternion_wxyz"]
+                ],
             }
         report["policy_switch_states"] = policy_switch_states
         print_rollout_report(report)
