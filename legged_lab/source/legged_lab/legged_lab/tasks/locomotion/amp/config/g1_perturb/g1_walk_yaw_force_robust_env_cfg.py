@@ -17,8 +17,11 @@ class G1WalkYawForceRobustEnvCfg(G1WalkAnkleSpacingYawEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.rewards.pure_yaw_planar_drift_l2.weight = -5.0
+        # Keep the translation guard stronger than the spacing objective.  The
+        # previous -5/500 ratio learned to buy ankle width with planar drift.
+        self.rewards.pure_yaw_planar_drift_l2.weight = -50.0
         self.rewards.pure_yaw_planar_drift_l2.params["max_penalty"] = 100.0
+        self.rewards.ankle_distance_30cm_kernel.weight = 120.0
         self.rewards.torso_roll_pitch_l2.weight = -3.0
         self.rewards.track_ang_vel_z_exp.weight = 3.0
         for side in ("left", "right"):
