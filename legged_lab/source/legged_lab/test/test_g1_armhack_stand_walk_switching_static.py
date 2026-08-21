@@ -104,3 +104,17 @@ def test_continuous_switch_mujoco_contract_is_explicit_and_bounded():
     assert 'key == "M"' in runner
     assert "[STAND STEP WARNING]" in runner
     assert "post_complete_air_events" in runner
+
+
+def test_hold_and_yaw_force_refinement_contracts_are_isolated():
+    registry = text(REGISTRY)
+    hold = text(ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_stand_adaptive_hold_env_cfg.py")
+    yaw = text(ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_walk_yaw_force_robust_env_cfg.py")
+    assert "StandAdaptiveHold-v0" in registry
+    assert "ArmHackWalkYawForceRobust-v0" in registry
+    assert 'phase_two_probability"] = 0.45' in hold
+    assert "sequential_post_complete_contact_loss" in hold
+    assert "randomize_{side}_wrist_wrench" in hold
+    assert 'max_penalty"] = 100.0' in yaw
+    assert "torso_roll_pitch_l2.weight = -3.0" in yaw
+    assert "randomize_{side}_wrist_wrench" in yaw

@@ -1811,6 +1811,64 @@ def sequential_support_foot_drift_l2(
     return support_error_l2 * (state["phase"] < 2).float()
 
 
+def sequential_post_complete_foot_velocity_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize both feet moving after the two-step sequence is complete."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[foot_cfg.name]
+    velocity = asset.data.body_lin_vel_w[:, foot_cfg.body_ids, :]
+    return torch.sum(torch.square(velocity), dim=(1, 2)) * (state["phase"] == 2).float()
+
+
+def sequential_post_complete_contact_loss(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize either foot losing contact after phase-two completion."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    lost_contact = ~torch.all(state["contact"], dim=1)
+    return lost_contact.float() * (state["phase"] == 2).float()
+
+
+def sequential_post_complete_target_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Hold both feet exactly at their reset-SE(2)-relative final targets."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    error = torch.sum(torch.square(state["foot_pos"][:, :, :2] - state["targets_xy"]), dim=(1, 2))
+    return error * (state["phase"] == 2).float()
+
+
 def ankle_longitudinal_alignment_l2(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg(

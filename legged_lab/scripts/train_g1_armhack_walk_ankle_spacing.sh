@@ -37,6 +37,7 @@ case "${BRANCH}" in
     lateral) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkAnkleSpacingLateral-v0 ;;
     yaw) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkAnkleSpacingYaw-v0 ;;
 esac
+TASK=${TASK_OVERRIDE:-${TASK}}
 EXPERIMENT_NAME="g1_armhack_walk_ankle_spacing_${BRANCH}"
 OUTPUT_DIR="${LEGGED_LAB_DIR}/ArmHack Checkpoints/WalkAnkleSpacingFinetune/${BRANCH}"
 STAGING_RUN="_source_${BRANCH}_${SOURCE_SHA256:0:12}"

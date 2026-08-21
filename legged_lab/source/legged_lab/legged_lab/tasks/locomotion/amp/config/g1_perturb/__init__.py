@@ -100,6 +100,16 @@ gym.register(
 )
 
 gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandAdaptiveHold-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_stand_adaptive_hold_env_cfg:G1StandAdaptiveHoldEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg",
+    },
+)
+
+gym.register(
     id="LeggedLab-Isaac-AMP-G1-StandRobust-v0",
     entry_point="legged_lab.envs:G1PerturbAmpEnv",
     disable_env_checker=True,
@@ -291,6 +301,16 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.g1_walk_precision_switch_env_cfg:G1WalkPrecisionSwitchEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkYawForceRobust-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_walk_yaw_force_robust_env_cfg:G1WalkYawForceRobustEnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
     },
 )

@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-"${PROJECT_DIR}/logs/rsl_rl/g1_stand_perturb/2026-08-14_18-32-52_armhack_stand_low_torque_robust_explicit_3pose_2000_from_stage2_20260814/model_1999.pt"}
+TASK=${TASK:-LeggedLab-Isaac-AMP-G1-StandAdaptiveSwitch-v0}
 SOURCE_SHA256=${SOURCE_SHA256:-9ab48719840c98f1332693a56f58ed069463c0670737e339b90411985484a729}
 NUM_ENVS=${NUM_ENVS:-4096}
 MAX_ITERATIONS=${MAX_ITERATIONS:-2000}
@@ -31,7 +32,7 @@ mkdir -p "${STAGING_DIR}" "$(dirname "${TRAIN_LOG_FILE}")"
 ln -sfn "$(realpath "${SOURCE_CHECKPOINT}")" "${STAGING_DIR}/model_source.pt"
 
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y
-TASK=LeggedLab-Isaac-AMP-G1-StandAdaptiveSwitch-v0 \
+TASK="${TASK}" \
 NUM_ENVS="${NUM_ENVS}" MAX_ITERATIONS="${MAX_ITERATIONS}" SEED="${SEED}" \
 DEVICE=cuda:0 AGENT_DEVICE=cuda:0 ISAACLAB_PYTHON="${ISAACLAB_PYTHON}" \
 RUN_NAME="${RUN_NAME}" RESUME=True LOAD_RUN="^${STAGING_RUN}$" CHECKPOINT='^model_source.pt$' \

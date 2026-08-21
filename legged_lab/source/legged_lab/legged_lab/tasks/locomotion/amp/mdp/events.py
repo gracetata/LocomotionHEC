@@ -177,6 +177,7 @@ def reset_joints_with_random_stance(
     phase_one_probability: float = 0.0,
     phase_two_probability: float = 0.0,
     support_distance_range: tuple[float, float] = (0.20, 0.32),
+    final_distance: float = 0.30,
     kinematic_nominal_distance: float = 0.237,
     kinematic_distance_per_rad: float = 1.22,
     position_scale_range: tuple[float, float] = (0.95, 1.05),
@@ -220,6 +221,8 @@ def reset_joints_with_random_stance(
         raise ValueError("phase reset probabilities must be non-negative and sum to <= 1.")
     if not 0.0 < support_distance_min <= support_distance_max:
         raise ValueError("support_distance_range must satisfy 0 < min <= max.")
+    if float(final_distance) <= 0.0:
+        raise ValueError("final_distance must be positive.")
     if float(kinematic_distance_per_rad) <= 0.0:
         raise ValueError("kinematic_distance_per_rad must be positive.")
 
@@ -280,7 +283,7 @@ def reset_joints_with_random_stance(
     )
     final_roll_angles = torch.full_like(
         roll_angle,
-        (0.30 - float(kinematic_nominal_distance)) / float(kinematic_distance_per_rad),
+        (float(final_distance) - float(kinematic_nominal_distance)) / float(kinematic_distance_per_rad),
     )
     left_roll_angle = torch.where(phase_two_mask, final_roll_angles, left_roll_angle)
     right_roll_angle = torch.where(phase_two_mask, final_roll_angles, right_roll_angle)
@@ -317,7 +320,9 @@ def reset_joints_with_random_stance(
         setattr(env, "_armhack_initial_stance_distance_m", state)
     asymmetric_distance = 0.5 * (close_distance + support_distance)
     reset_distance = torch.where(asymmetric_mask, asymmetric_distance, sampled_distance)
-    state[env_ids] = torch.where(phase_two_mask, torch.full_like(reset_distance, 0.30), reset_distance)
+    state[env_ids] = torch.where(
+        phase_two_mask, torch.full_like(reset_distance, float(final_distance)), reset_distance
+    )
 
 
 def _select_motion_joint_state(
