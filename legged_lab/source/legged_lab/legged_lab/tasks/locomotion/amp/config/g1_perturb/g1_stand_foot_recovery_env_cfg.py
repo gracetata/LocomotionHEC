@@ -56,6 +56,7 @@ class G1StandFootRecoveryEnvCfg(G1StandRandomizedPayloadEnvCfg):
             "se2_action_indices": (24, 25, 26),
             "se2_xy_scale_m": 0.30,
             "se2_yaw_scale_rad": 0.50,
+            "se2_injection_gain": 1.0,
             "torso_cfg": SceneEntityCfg("robot", body_names="torso_link"),
         }
         self.observations.policy.actions = ObsTerm(

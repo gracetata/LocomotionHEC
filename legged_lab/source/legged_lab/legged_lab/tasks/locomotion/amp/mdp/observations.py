@@ -96,6 +96,7 @@ def sequential_phase_augmented_last_action(
     se2_action_indices: tuple[int, int, int] = (24, 25, 26),
     se2_xy_scale_m: float = 0.30,
     se2_yaw_scale_rad: float = 0.50,
+    se2_injection_gain: float = 1.0,
     torso_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
 ) -> torch.Tensor:
     """Encode step phase and reset-relative torso SE(2) in scripted-arm slots.
@@ -161,5 +162,5 @@ def sequential_phase_augmented_last_action(
         ),
         dim=1,
     ).clamp_(-1.0, 1.0)
-    actions[:, list(se2_action_indices)] = se2_signal
+    actions[:, list(se2_action_indices)] += float(se2_injection_gain) * se2_signal
     return actions

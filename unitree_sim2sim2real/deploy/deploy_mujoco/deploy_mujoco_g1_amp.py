@@ -1698,11 +1698,15 @@ def score_rollout(health: dict, tracking: dict, important_metrics: dict, sim_tim
 
 def summarize_rollout_metrics(metrics: dict, sim_time: float, command: np.ndarray, config: dict) -> dict:
     ankle_distance = np.asarray(metrics["ankle_distances_m"], dtype=np.float32)
+    sample_times = np.asarray(metrics["sample_times"], dtype=np.float64)
+    final_window = ankle_distance[sample_times >= max(float(sim_time) - 1.0, 0.0)]
     ankle_error = ankle_distance - 0.30
     ankle_spacing = {
         "target_m": 0.30,
         "sample_count": int(ankle_distance.size),
         "mean_m": float(np.mean(ankle_distance)) if ankle_distance.size else 0.0,
+        "final_m": float(ankle_distance[-1]) if ankle_distance.size else 0.0,
+        "final_1s_mean_m": float(np.mean(final_window)) if final_window.size else 0.0,
         "min_m": float(np.min(ankle_distance)) if ankle_distance.size else 0.0,
         "max_m": float(np.max(ankle_distance)) if ankle_distance.size else 0.0,
         "p05_m": float(np.percentile(ankle_distance, 5.0)) if ankle_distance.size else 0.0,
@@ -2885,7 +2889,7 @@ def run_mujoco(config: dict) -> None:
             delta_x = cos_yaw * delta_xy_w[0] + sin_yaw * delta_xy_w[1]
             delta_y = -sin_yaw * delta_xy_w[0] + cos_yaw * delta_xy_w[1]
             yaw_error = (current_yaw - initial_yaw + math.pi) % (2.0 * math.pi) - math.pi
-            obs[91:94] = np.clip(
+            obs[91:94] += np.clip(
                 np.asarray([delta_x / 0.30, delta_y / 0.30, yaw_error / 0.50]),
                 -1.0,
                 1.0,
