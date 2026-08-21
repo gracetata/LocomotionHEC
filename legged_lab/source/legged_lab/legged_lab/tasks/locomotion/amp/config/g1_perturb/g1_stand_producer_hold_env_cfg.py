@@ -29,6 +29,7 @@ class G1StandProducerHoldEnvCfg(G1StandAdaptiveHoldEnvCfg):
         reset_params = self.events.reset_robot_joints.params
         reset_params["phase_one_probability"] = 0.0
         reset_params["phase_two_probability"] = 1.0
+        self.terminations.sequential_pelvis_xy_out_of_bounds = None
         for reward_name in (
             "sequential_foot_step_progress",
             "sequential_foot_step_target_exp",
@@ -48,5 +49,7 @@ class G1StandProducerHoldEnvCfg(G1StandAdaptiveHoldEnvCfg):
         self.rewards.post_complete_contact_loss.weight = -45.0
         self.rewards.post_complete_target_l2.weight = -220.0
         self.rewards.double_support.weight = 0.75
-        self.rewards.torso_xy_position_near_stance_l2.weight = -45.0
-        self.rewards.torso_yaw_near_stance_l2.weight = -30.0
+        self.rewards.torso_xy_position_l2.weight = -35.0
+        self.rewards.torso_yaw_l2.weight = -25.0
+        self.rewards.torso_xy_position_near_stance_l2.weight = -120.0
+        self.rewards.torso_yaw_near_stance_l2.weight = -80.0
