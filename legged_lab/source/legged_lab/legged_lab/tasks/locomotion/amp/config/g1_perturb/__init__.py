@@ -314,3 +314,13 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
     },
 )
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkSwitchOod-v0",
+    entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_walk_switch_ood_env_cfg:G1WalkSwitchOodEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
+    },
+)

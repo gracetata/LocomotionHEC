@@ -12,6 +12,7 @@ NUM_ENVS=${NUM_ENVS:-4096}
 MAX_ITERATIONS=${MAX_ITERATIONS:-600}
 SEED=${SEED:-20260821}
 RUN_NAME=${RUN_NAME:-armhack_walk_precision_switch_30cm_20260820}
+TASK=${TASK:-LeggedLab-Isaac-AMP-G1-ArmHackWalkPrecisionSwitch-v0}
 ISAACLAB_PYTHON=${ISAACLAB_PYTHON:-${HOME}/anaconda3/envs/env_isaaclab/bin/python}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-"${PROJECT_DIR}/logs/monitoring/${RUN_NAME}.log"}
 KL_SCALE=${KL_SCALE:-0.20}
@@ -32,7 +33,7 @@ mkdir -p "${STAGING_DIR}" "$(dirname "${TRAIN_LOG_FILE}")"
 ln -sfn "$(realpath "${SOURCE_CHECKPOINT}")" "${STAGING_DIR}/model_source.pt"
 
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y
-TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkPrecisionSwitch-v0 \
+TASK="${TASK}" \
 NUM_ENVS="${NUM_ENVS}" MAX_ITERATIONS="${MAX_ITERATIONS}" SEED="${SEED}" \
 RUN_NAME="${RUN_NAME}" RESUME=True LOAD_RUN="^${STAGING_RUN}$" CHECKPOINT='^model_source.pt$' \
 HEADLESS=True QUIET_TERMINAL=True TRAIN_LOG_FILE="${TRAIN_LOG_FILE}" ROBOT_ASSET=s3_g1_29dof \
