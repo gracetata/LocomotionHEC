@@ -44,6 +44,22 @@
         {"name": "walk_zero", "duration_s": 2.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
         {"name": "switch_stand_front", "duration_s": 6.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"}
       ]
+    },
+    "repeated_handoff": {
+      "description": "Three zero-gated Walk-to-Stand-to-Walk handoffs ending in Stand hold.",
+      "segments": [
+        {"name": "walk_forward_1", "duration_s": 3.0, "command": [0.25, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "walk_zero_1", "duration_s": 1.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "stand_front_1", "duration_s": 8.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"},
+        {"name": "walk_zero_2", "duration_s": 1.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "walk"},
+        {"name": "walk_diagonal_2", "duration_s": 3.0, "command": [0.20, 0.12, 0], "pose_name": "pos1_back", "policy": "walk"},
+        {"name": "walk_zero_3", "duration_s": 1.0, "command": [0, 0, 0], "pose_name": "pos1_back", "policy": "walk"},
+        {"name": "stand_down_2", "duration_s": 8.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "stand"},
+        {"name": "walk_zero_4", "duration_s": 1.0, "command": [0, 0, 0], "pose_name": "pos2_down", "policy": "walk"},
+        {"name": "walk_yaw_3", "duration_s": 3.0, "command": [0, 0, 0.35], "pose_name": "pos3_front", "policy": "walk"},
+        {"name": "walk_zero_5", "duration_s": 1.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "walk"},
+        {"name": "stand_front_3", "duration_s": 10.0, "command": [0, 0, 0], "pose_name": "pos3_front", "policy": "stand"}
+      ]
     }
   }
 }

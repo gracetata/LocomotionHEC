@@ -15,6 +15,9 @@ WALK_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_walk_precision_switch.s
 MUJOCO_RUNNER = ROOT / "unitree_sim2sim2real/deploy/deploy_mujoco/deploy_mujoco_g1_amp.py"
 CONTINUOUS_SCRIPT = ROOT / "legged_lab/scripts/test_g1_armhack_continuous_switch_mujoco.sh"
 CONTINUOUS_SCENARIOS = ROOT / "legged_lab/Reference Data/ArmHack/WalkPerturbFinetune/continuous_switch_scenarios.json"
+FIRST_PRINCIPLES_CFG = ROOT / "legged_lab/source/legged_lab/legged_lab/tasks/locomotion/amp/config/g1_perturb/g1_armhack_first_principles_env_cfg.py"
+FIRST_PRINCIPLES_TRAIN = ROOT / "legged_lab/scripts/train_g1_armhack_first_principles.sh"
+FIRST_PRINCIPLES_TEST = ROOT / "legged_lab/scripts/test_g1_armhack_first_principles_mujoco.sh"
 
 
 def text(path: Path) -> str:
@@ -118,3 +121,35 @@ def test_hold_and_yaw_force_refinement_contracts_are_isolated():
     assert 'max_penalty"] = 100.0' in yaw
     assert "torso_roll_pitch_l2.weight = -3.0" in yaw
     assert "randomize_{side}_wrist_wrench" in yaw
+
+
+def test_first_principles_tasks_share_30cm_and_strict_handoff_contracts():
+    cfg = text(FIRST_PRINCIPLES_CFG)
+    registry = text(REGISTRY)
+    launcher = text(FIRST_PRINCIPLES_TRAIN)
+    acceptance = text(FIRST_PRINCIPLES_TEST)
+    assert "ANKLE_DISTANCE_TARGET_M = 0.30" in cfg
+    assert "FOOT_TARGET_OFFSET_M = 0.15" in cfg
+    assert "G1StandFirstPrinciplesEnvCfg" in cfg
+    assert "G1WalkFirstPrinciplesBaseEnvCfg" in cfg
+    assert "G1WalkFirstPrinciplesLateralEnvCfg" in cfg
+    assert "G1WalkFirstPrinciplesYawEnvCfg" in cfg
+    assert "post_complete_contact_force_balance_l2" in cfg
+    assert "post_complete_action_rate_l2" in cfg
+    assert "StandFirstPrinciples-v0" in registry
+    assert "WalkFirstPrinciples" in registry
+    assert "MODE=stand|walk_base|walk_lateral|walk_yaw" in launcher
+    assert "STAGE must be smoke, nominal, randomized, or handoff" in launcher
+    assert "post_complete_lower_joint_peak_to_peak_max_rad" in acceptance
+    assert "steady_mean_ankle_distance_m" in acceptance
+    assert "repeated_handoff" in text(CONTINUOUS_SCENARIOS)
+
+
+def test_manual_handoff_uses_zero_velocity_and_double_support_gate():
+    runner = text(MUJOCO_RUNNER)
+    assert "walk_to_stand" in runner and "stand_to_walk" in runner
+    assert "handoff_zero_hold_s" in runner
+    assert "handoff_max_linear_speed" in runner
+    assert "handoff_max_yaw_rate" in runner
+    assert "double_support" in runner
+    assert "policy-handoff zero" in runner

@@ -79,6 +79,10 @@ parser.add_argument(
     default=10,
     help="Hold phase two for this many policy steps before capturing each environment.",
 )
+parser.add_argument("--producer_state_capture_start_step", type=int, default=50)
+parser.add_argument("--producer_state_capture_every_steps", type=int, default=0)
+parser.add_argument("--producer_state_from", type=str, default="secondary")
+parser.add_argument("--producer_state_to", type=str, default="primary")
 parser.add_argument(
     "--strict_export",
     action="store_true",
@@ -1169,18 +1173,29 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if args_cli.producer_state_capture_path:
                 base_env = env.unwrapped
                 phase_state = getattr(base_env, "_armhack_sequential_foot_step_state", None)
-                if phase_state is None:
-                    raise RuntimeError("Producer capture requires an adaptive sequential Stand task.")
-                phase_two = phase_state["phase"] >= 2
-                producer_phase2_counts = torch.where(
-                    phase_two,
-                    producer_phase2_counts + 1,
-                    torch.zeros_like(producer_phase2_counts),
-                )
-                ready = (
-                    producer_phase2_counts
-                    >= max(int(args_cli.producer_state_capture_after_phase2_steps), 1)
-                ) & (~producer_state_captured)
+                if phase_state is not None:
+                    phase_two = phase_state["phase"] >= 2
+                    producer_phase2_counts = torch.where(
+                        phase_two,
+                        producer_phase2_counts + 1,
+                        torch.zeros_like(producer_phase2_counts),
+                    )
+                    ready = (
+                        producer_phase2_counts
+                        >= max(int(args_cli.producer_state_capture_after_phase2_steps), 1)
+                    ) & (~producer_state_captured)
+                else:
+                    every_steps = int(args_cli.producer_state_capture_every_steps)
+                    if every_steps <= 0:
+                        raise RuntimeError(
+                            "Non-Stand producer capture requires --producer_state_capture_every_steps."
+                        )
+                    current_step = timestep + 1
+                    capture_now = bool(
+                        current_step >= int(args_cli.producer_state_capture_start_step)
+                        and (current_step - int(args_cli.producer_state_capture_start_step)) % every_steps == 0
+                    )
+                    ready = torch.full_like(producer_state_captured, capture_now) & (~producer_state_captured)
                 if torch.any(ready):
                     robot = base_env.scene["robot"]
                     action_term = base_env.action_manager.get_term("joint_pos")
@@ -1197,8 +1212,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                                 "source_simulator": "isaaclab",
                                 "control_step": int(timestep + 1),
                                 "environment_index": int(env_index),
-                                "from": "secondary",
-                                "to": "primary",
+                                "from": str(args_cli.producer_state_from),
+                                "to": str(args_cli.producer_state_to),
                                 "root_position": root_state[env_index, :3].detach().cpu().tolist(),
                                 "root_quaternion_wxyz": root_state[env_index, 3:7].detach().cpu().tolist(),
                                 "root_velocity_world": root_state[env_index, 7:13].detach().cpu().tolist(),

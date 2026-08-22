@@ -182,6 +182,8 @@ class UpperBodyPerturbationCfg:
     pose_transition_curriculum_motion_scale: float = 1.0
     producer_state_path: str = ""
     producer_state_probability: float = 0.0
+    producer_state_from: str = "secondary"
+    producer_state_to: str = "primary"
     producer_joint_position_noise: float = 0.0
     producer_joint_velocity_noise: float = 0.0
 
@@ -442,11 +444,19 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
         selected = [
             state for state in states
             if isinstance(state, dict)
-            and state.get("from") == "secondary"
-            and state.get("to") == "primary"
+            and (
+                str(cfg.producer_state_from) == "*"
+                or state.get("from") == str(cfg.producer_state_from)
+            )
+            and (
+                str(cfg.producer_state_to) == "*"
+                or state.get("to") == str(cfg.producer_state_to)
+            )
         ]
         if not selected:
-            raise ValueError(f"No secondary->primary producer states found in: {path}")
+            raise ValueError(
+                f"No {cfg.producer_state_from}->{cfg.producer_state_to} producer states found in: {path}"
+            )
         self._producer_switch_states = selected
 
     def _apply_producer_switch_states(self, env_ids: torch.Tensor) -> None:

@@ -225,6 +225,10 @@ def load_config(config_path: str) -> dict:
     config["joint_frictionloss"] = _env_float("G1_AMP_JOINT_FRICTIONLOSS", float(config.get("joint_frictionloss", 0.2)))
     config["wrist_frictionloss"] = _env_float("G1_AMP_WRIST_FRICTIONLOSS", float(config.get("wrist_frictionloss", 0.1)))
     config["metrics_path"] = os.environ.get("G1_AMP_METRICS_PATH", config.get("metrics_path", ""))
+    config["stand_hold_distill_trace_path"] = os.environ.get(
+        "G1_AMP_STAND_HOLD_DISTILL_TRACE_PATH",
+        config.get("stand_hold_distill_trace_path", ""),
+    )
     config["torso_body_name"] = os.environ.get("G1_AMP_TORSO_BODY_NAME", config.get("torso_body_name", "torso_link"))
     config["torso_trace_enable"] = _env_bool(
         "G1_AMP_TORSO_TRACE_ENABLE", bool(config.get("torso_trace_enable", True))
@@ -2749,6 +2753,9 @@ def run_mujoco(config: dict) -> None:
     policy_switch_start_s = -math.inf
     policy_switch_source_action = action.copy()
     policy_switch_target_role = "primary"
+    hold_distill_observations: list[np.ndarray] = []
+    hold_distill_actions: list[np.ndarray] = []
+    hold_distill_times: list[float] = []
 
     policy_path = Path(config["policy_path"])
     if policy_path.suffix.lower() == ".onnx":
@@ -3187,6 +3194,15 @@ def run_mujoco(config: dict) -> None:
                     (1.0 - blend) * np.asarray(policy_switch_source_action)
                     + blend * next_action
                 ).astype(np.float32)
+        if (
+            bool(str(config.get("stand_hold_distill_trace_path", "")).strip())
+            and use_secondary
+            and int(adaptive_stand_phase["phase"]) >= 2
+            and sim_time >= float(adaptive_stand_phase["hold_start_s"]) + 0.50
+        ):
+            hold_distill_observations.append(np.asarray(obs, dtype=np.float32).copy())
+            hold_distill_actions.append(np.asarray(next_action, dtype=np.float32).copy())
+            hold_distill_times.append(float(sim_time))
         return next_action
 
     def simulate_loop(viewer=None) -> None:
@@ -3555,6 +3571,22 @@ def run_mujoco(config: dict) -> None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
             print(f"[INFO] MuJoCo metrics written to: {output_path}")
+        hold_trace_path = str(config.get("stand_hold_distill_trace_path", "")).strip()
+        if hold_trace_path:
+            trace_path = Path(hold_trace_path).expanduser().resolve()
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                trace_path,
+                observations=np.asarray(hold_distill_observations, dtype=np.float32),
+                actions=np.asarray(hold_distill_actions, dtype=np.float32),
+                times=np.asarray(hold_distill_times, dtype=np.float64),
+                lower_action_indices=lower_policy_indices,
+            )
+            print(
+                f"[INFO] Stand hold distillation trace: {trace_path} "
+                f"samples={len(hold_distill_observations)}",
+                flush=True,
+            )
 
     if bool(config.get("use_glfw", True)):
         from mujoco import viewer as mujoco_viewer

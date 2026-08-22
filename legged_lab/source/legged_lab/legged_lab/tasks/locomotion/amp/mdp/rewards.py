@@ -1874,6 +1874,50 @@ def sequential_post_complete_contact_force_balance_l2(
     return torch.square(imbalance) * (state["phase"] == 2).float()
 
 
+def sequential_post_complete_action_rate_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    action_indices: list[int],
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize planted-leg target changes only after phase-two completion."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    action_delta = (
+        env.action_manager.action[:, action_indices]
+        - env.action_manager.prev_action[:, action_indices]
+    )
+    return torch.sum(torch.square(action_delta), dim=1) * (state["phase"] == 2).float()
+
+
+def sequential_post_complete_joint_velocity_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lower_body_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize planted-leg joint motion only after phase-two completion."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[lower_body_cfg.name]
+    velocity = asset.data.joint_vel[:, lower_body_cfg.joint_ids]
+    return torch.sum(torch.square(velocity), dim=1) * (state["phase"] == 2).float()
+
+
 def sequential_post_complete_contact_loss(
     env: ManagerBasedRLEnv,
     pelvis_cfg: SceneEntityCfg,
@@ -1910,6 +1954,30 @@ def sequential_post_complete_target_l2(
     )
     error = torch.sum(torch.square(state["foot_pos"][:, :, :2] - state["targets_xy"]), dim=(1, 2))
     return error * (state["phase"] == 2).float()
+
+
+def sequential_post_complete_foot_yaw_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Align both completed feet with the reset-relative pelvis yaw."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[foot_cfg.name]
+    _, _, foot_yaw = math_utils.euler_xyz_from_quat(
+        asset.data.body_quat_w[:, foot_cfg.body_ids, :].reshape(-1, 4)
+    )
+    foot_yaw = foot_yaw.reshape(env.num_envs, 2)
+    yaw_error = math_utils.wrap_to_pi(foot_yaw - state["pelvis_yaw"].unsqueeze(1))
+    return torch.sum(torch.square(yaw_error), dim=1) * (state["phase"] == 2).float()
 
 
 def ankle_longitudinal_alignment_l2(

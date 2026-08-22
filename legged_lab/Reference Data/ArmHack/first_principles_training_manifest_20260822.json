@@ -1,0 +1,35 @@
+{
+  "contract": "legged_lab/docs/ARMHACK_FIRST_PRINCIPLES_TRAINING.md",
+  "stand": {
+    "task": "LeggedLab-Isaac-AMP-G1-StandFirstPrinciples-v0",
+    "source_checkpoint": "legged_lab/logs/rsl_rl/g1_stand_perturb/2026-08-14_18-32-52_armhack_stand_low_torque_robust_explicit_3pose_2000_from_stage2_20260814/model_1999.pt",
+    "source_sha256": "9ab48719840c98f1332693a56f58ed069463c0670737e339b90411985484a729",
+    "walk_producer_states": "legged_lab/evaluations/handoff_walk_zero_to_stand_curated_20260822/states.json",
+    "walk_producer_state_count": 84
+  },
+  "walk": {
+    "gate_source_checkpoint": "legged_lab/ArmHack Checkpoints/WalkPrecisionSwitch/final_gated_spacing_force_20260822/model.pt",
+    "gate_source_sha256": "7baf8c666cec597b57dbbac73a4f68873c43b5015ada44531f05c74743b56c80",
+    "base": {
+      "task": "LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesBase-v0",
+      "source_checkpoint": "legged_lab/logs/training_sources/walk_first_principles_source_split_20260822/source_base.pt",
+      "source_sha256": "ae6e312f0fd82d186dd4e2cca738ed0ddcda38bd37685c89ddba75db5ad73aa4"
+    },
+    "lateral": {
+      "task": "LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesLateral-v0",
+      "source_checkpoint": "legged_lab/logs/training_sources/walk_first_principles_source_split_20260822/source_lateral.pt",
+      "source_sha256": "6ec04aada23e19d08657907f0ef958428fd51f1629616a2053f2318ffaa0c32e"
+    },
+    "yaw": {
+      "task": "LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesYaw-v0",
+      "source_checkpoint": "legged_lab/logs/training_sources/walk_first_principles_source_split_20260822/source_yaw.pt",
+      "source_sha256": "a8ca245f704d26ec4956eda1609c6fc01c377c18b0d4b24ac48964e2c57f7b56"
+    },
+    "stand_producer_states": "legged_lab/evaluations/handoff_stand_to_walk_curated_20260822/states.json",
+    "stand_producer_state_count": 110
+  },
+  "launcher": "legged_lab/scripts/train_g1_armhack_first_principles.sh",
+  "acceptance": "legged_lab/scripts/test_g1_armhack_first_principles_mujoco.sh",
+  "formal_training_started": false,
+  "real_robot_started": false
+}

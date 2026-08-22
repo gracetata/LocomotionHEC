@@ -334,3 +334,28 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
     },
 )
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-StandFirstPrinciples-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_armhack_first_principles_env_cfg:G1StandFirstPrinciplesEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1StandPerturbRslRlOnPolicyRunnerAmpCfg",
+    },
+)
+
+for branch, cfg_name in (
+    ("Base", "G1WalkFirstPrinciplesBaseEnvCfg"),
+    ("Lateral", "G1WalkFirstPrinciplesLateralEnvCfg"),
+    ("Yaw", "G1WalkFirstPrinciplesYawEnvCfg"),
+):
+    gym.register(
+        id=f"LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciples{branch}-v0",
+        entry_point="legged_lab.envs:G1WalkPerturbAmpEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.g1_armhack_first_principles_env_cfg:{cfg_name}",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg",
+        },
+    )
