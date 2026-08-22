@@ -159,12 +159,25 @@ def load_config(config_path: str) -> dict:
     config["stand_hold_target_mix"] = _env_float(
         "G1_AMP_STAND_HOLD_TARGET_MIX", float(config.get("stand_hold_target_mix", 1.0))
     )
+    config["stand_hold_action_filter_tau"] = _env_float(
+        "G1_AMP_STAND_HOLD_ACTION_FILTER_TAU",
+        float(config.get("stand_hold_action_filter_tau", 0.0)),
+    )
     config["stand_post_complete_min_air_s"] = _env_float(
         "G1_AMP_STAND_POST_COMPLETE_MIN_AIR_S",
         float(config.get("stand_post_complete_min_air_s", 0.10)),
     )
     config["stand_to_walk_blend_s"] = _env_float(
         "G1_AMP_STAND_TO_WALK_BLEND_S", float(config.get("stand_to_walk_blend_s", 0.0))
+    )
+    config["handoff_zero_hold_s"] = _env_float(
+        "G1_AMP_HANDOFF_ZERO_HOLD_S", float(config.get("handoff_zero_hold_s", 0.50))
+    )
+    config["handoff_max_linear_speed"] = _env_float(
+        "G1_AMP_HANDOFF_MAX_LINEAR_SPEED", float(config.get("handoff_max_linear_speed", 0.10))
+    )
+    config["handoff_max_yaw_rate"] = _env_float(
+        "G1_AMP_HANDOFF_MAX_YAW_RATE", float(config.get("handoff_max_yaw_rate", 0.15))
     )
     config["stand_hold_freeze_action"] = _env_bool(
         "G1_AMP_STAND_HOLD_FREEZE_ACTION", bool(config.get("stand_hold_freeze_action", False))
@@ -2230,6 +2243,10 @@ class KeyboardCommandReader:
         )
         self._print_command(source)
 
+    def set_zero(self, source: str = "zero") -> None:
+        """Force a zero target for a safe policy handoff."""
+        self._set([0.0, 0.0, 0.0], source)
+
     def key_callback(self, keycode: int) -> None:
         key = chr(keycode).upper() if 0 <= keycode < 128 else ""
         delta = np.zeros(3, dtype=np.float32)
@@ -2586,6 +2603,14 @@ def run_mujoco(config: dict) -> None:
         target_command = sample_random_command(rng, config)
     command = np.zeros(3, dtype=np.float32) if bool(config.get("command_ramp", False)) else target_command.copy()
     action = np.zeros(len(policy_joint_names), dtype=np.float32)
+    lower_policy_indices = np.asarray(
+        [
+            index
+            for index, name in enumerate(policy_joint_names)
+            if not any(token in name for token in ("shoulder", "elbow", "wrist"))
+        ],
+        dtype=np.int32,
+    )
 
     kp_by_joint = dict(zip(policy_joint_names, kps))
     kd_by_joint = dict(zip(policy_joint_names, kds))
@@ -2689,8 +2714,28 @@ def run_mujoco(config: dict) -> None:
         "post_complete_air_events": 0,
         "post_complete_airborne": False,
         "post_complete_air_since_s": -1.0,
+        "post_complete_foot_reference": np.asarray(
+            data.xpos[foot_body_ids], dtype=np.float64
+        ).copy(),
+        "post_complete_prev_foot_pos": np.asarray(
+            data.xpos[foot_body_ids], dtype=np.float64
+        ).copy(),
+        "post_complete_prev_time_s": -1.0,
+        "post_complete_foot_speed_sum": 0.0,
+        "post_complete_foot_speed_count": 0,
+        "post_complete_foot_speed_max": 0.0,
+        "post_complete_foot_xy_displacement_max": 0.0,
+        "post_complete_lower_joint_min": np.full(lower_policy_indices.size, np.inf),
+        "post_complete_lower_joint_max": np.full(lower_policy_indices.size, -np.inf),
+        "post_complete_lower_joint_vel_sq_sum": 0.0,
+        "post_complete_lower_joint_vel_count": 0,
+        "post_complete_lower_joint_vel_peak": 0.0,
+        "post_complete_action_delta_sq_sum": 0.0,
+        "post_complete_action_delta_count": 0,
+        "post_complete_action_delta_peak": 0.0,
         "hold_start_s": -1.0,
         "hold_source_action": np.zeros(len(policy_joint_names), dtype=np.float32),
+        "hold_filtered_action": np.zeros(len(policy_joint_names), dtype=np.float32),
         "initial_root_position": np.asarray(data.qpos[0:3], dtype=np.float64).copy(),
         "initial_root_yaw": float(quat_to_roll_pitch_yaw(data.qpos[3:7].copy())[2]),
         "completion_root_position": np.asarray(data.qpos[0:3], dtype=np.float64).copy(),
@@ -2698,6 +2743,8 @@ def run_mujoco(config: dict) -> None:
     }
     last_policy_role = "primary"
     manual_policy_role = "primary"
+    manual_transition_state = "idle"
+    manual_transition_stable_since = -math.inf
     policy_switch_states: list[dict[str, object]] = []
     policy_switch_start_s = -math.inf
     policy_switch_source_action = action.copy()
@@ -2871,8 +2918,26 @@ def run_mujoco(config: dict) -> None:
             adaptive_stand_phase["post_complete_air_events"] = 0
             adaptive_stand_phase["post_complete_airborne"] = False
             adaptive_stand_phase["post_complete_air_since_s"] = -1.0
+            adaptive_stand_phase["post_complete_prev_time_s"] = -1.0
+            adaptive_stand_phase["post_complete_foot_speed_sum"] = 0.0
+            adaptive_stand_phase["post_complete_foot_speed_count"] = 0
+            adaptive_stand_phase["post_complete_foot_speed_max"] = 0.0
+            adaptive_stand_phase["post_complete_foot_xy_displacement_max"] = 0.0
+            adaptive_stand_phase["post_complete_lower_joint_min"] = np.full(
+                lower_policy_indices.size, np.inf
+            )
+            adaptive_stand_phase["post_complete_lower_joint_max"] = np.full(
+                lower_policy_indices.size, -np.inf
+            )
+            adaptive_stand_phase["post_complete_lower_joint_vel_sq_sum"] = 0.0
+            adaptive_stand_phase["post_complete_lower_joint_vel_count"] = 0
+            adaptive_stand_phase["post_complete_lower_joint_vel_peak"] = 0.0
+            adaptive_stand_phase["post_complete_action_delta_sq_sum"] = 0.0
+            adaptive_stand_phase["post_complete_action_delta_count"] = 0
+            adaptive_stand_phase["post_complete_action_delta_peak"] = 0.0
             adaptive_stand_phase["hold_start_s"] = -1.0
             adaptive_stand_phase["hold_source_action"] = action.copy()
+            adaptive_stand_phase["hold_filtered_action"] = action.copy()
             adaptive_stand_phase["initial_root_position"] = np.asarray(
                 data.qpos[0:3], dtype=np.float64
             ).copy()
@@ -2947,12 +3012,20 @@ def run_mujoco(config: dict) -> None:
                 if phase + 1 >= 2:
                     adaptive_stand_phase["hold_start_s"] = sim_time
                     adaptive_stand_phase["hold_source_action"] = action.copy()
+                    adaptive_stand_phase["hold_filtered_action"] = action.copy()
                     adaptive_stand_phase["completion_root_position"] = np.asarray(
                         data.qpos[0:3], dtype=np.float64
                     ).copy()
                     adaptive_stand_phase["completion_root_quaternion_wxyz"] = np.asarray(
                         data.qpos[3:7], dtype=np.float64
                     ).copy()
+                    adaptive_stand_phase["post_complete_foot_reference"] = np.asarray(
+                        data.xpos[foot_body_ids], dtype=np.float64
+                    ).copy()
+                    adaptive_stand_phase["post_complete_prev_foot_pos"] = np.asarray(
+                        data.xpos[foot_body_ids], dtype=np.float64
+                    ).copy()
+                    adaptive_stand_phase["post_complete_prev_time_s"] = sim_time
                     print("[STAND HOLD] two-step complete; blending to hold policy", flush=True)
                 print(
                     f"[STAND STEP] phase {phase}->{phase + 1} touchdown="
@@ -2964,6 +3037,33 @@ def run_mujoco(config: dict) -> None:
             if phase >= 2:
                 obs[94] = 0.0
                 obs[95] = 0.0
+                current_foot_pos = np.asarray(data.xpos[foot_body_ids], dtype=np.float64)
+                foot_xy_displacement = np.linalg.norm(
+                    current_foot_pos[:, :2]
+                    - np.asarray(adaptive_stand_phase["post_complete_foot_reference"])[:, :2],
+                    axis=1,
+                )
+                adaptive_stand_phase["post_complete_foot_xy_displacement_max"] = max(
+                    float(adaptive_stand_phase["post_complete_foot_xy_displacement_max"]),
+                    float(np.max(foot_xy_displacement)),
+                )
+                previous_time = float(adaptive_stand_phase["post_complete_prev_time_s"])
+                if previous_time >= 0.0 and sim_time > previous_time:
+                    foot_speed = np.linalg.norm(
+                        current_foot_pos
+                        - np.asarray(adaptive_stand_phase["post_complete_prev_foot_pos"]),
+                        axis=1,
+                    ) / (sim_time - previous_time)
+                    adaptive_stand_phase["post_complete_foot_speed_sum"] += float(
+                        np.mean(foot_speed)
+                    )
+                    adaptive_stand_phase["post_complete_foot_speed_count"] += 1
+                    adaptive_stand_phase["post_complete_foot_speed_max"] = max(
+                        float(adaptive_stand_phase["post_complete_foot_speed_max"]),
+                        float(np.max(foot_speed)),
+                    )
+                adaptive_stand_phase["post_complete_prev_foot_pos"] = current_foot_pos.copy()
+                adaptive_stand_phase["post_complete_prev_time_s"] = sim_time
                 clearance_now = np.asarray(data.xpos[foot_body_ids, 2], dtype=np.float64) - np.asarray(
                     adaptive_stand_phase["initial_z"], dtype=np.float64
                 )
@@ -3026,10 +3126,58 @@ def run_mujoco(config: dict) -> None:
                     (1.0 - blend) * np.asarray(adaptive_stand_phase["hold_source_action"])
                     + blend * hold_action
                 ).astype(np.float32)
+            filter_tau = max(float(config.get("stand_hold_action_filter_tau", 0.0)), 0.0)
+            if filter_tau > 0.0:
+                control_dt = float(model.opt.timestep) * int(config["control_decimation"])
+                filter_alpha = control_dt / (filter_tau + control_dt)
+                filtered_action = np.asarray(
+                    adaptive_stand_phase["hold_filtered_action"], dtype=np.float32
+                ).copy()
+                filtered_action[lower_policy_indices] += filter_alpha * (
+                    np.asarray(next_action, dtype=np.float32)[lower_policy_indices]
+                    - filtered_action[lower_policy_indices]
+                )
+                next_action = np.asarray(next_action, dtype=np.float32).copy()
+                next_action[lower_policy_indices] = filtered_action[lower_policy_indices]
+                adaptive_stand_phase["hold_filtered_action"] = filtered_action
         if armhack_stand is not None:
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
             next_action = armhack_walk.compose_action(next_action, sim_time)
+        if use_secondary and int(adaptive_stand_phase["phase"]) >= 2:
+            lower_joint_pos = np.asarray(
+                [data.qpos[qpos_addresses[policy_joint_names[index]]] for index in lower_policy_indices],
+                dtype=np.float64,
+            )
+            lower_joint_vel = np.asarray(
+                [data.qvel[qvel_addresses[policy_joint_names[index]]] for index in lower_policy_indices],
+                dtype=np.float64,
+            )
+            lower_action_delta = np.asarray(next_action, dtype=np.float64)[lower_policy_indices] - np.asarray(
+                action, dtype=np.float64
+            )[lower_policy_indices]
+            adaptive_stand_phase["post_complete_lower_joint_min"] = np.minimum(
+                adaptive_stand_phase["post_complete_lower_joint_min"], lower_joint_pos
+            )
+            adaptive_stand_phase["post_complete_lower_joint_max"] = np.maximum(
+                adaptive_stand_phase["post_complete_lower_joint_max"], lower_joint_pos
+            )
+            adaptive_stand_phase["post_complete_lower_joint_vel_sq_sum"] += float(
+                np.mean(np.square(lower_joint_vel))
+            )
+            adaptive_stand_phase["post_complete_lower_joint_vel_count"] += 1
+            adaptive_stand_phase["post_complete_lower_joint_vel_peak"] = max(
+                float(adaptive_stand_phase["post_complete_lower_joint_vel_peak"]),
+                float(np.max(np.abs(lower_joint_vel))),
+            )
+            adaptive_stand_phase["post_complete_action_delta_sq_sum"] += float(
+                np.mean(np.square(lower_action_delta))
+            )
+            adaptive_stand_phase["post_complete_action_delta_count"] += 1
+            adaptive_stand_phase["post_complete_action_delta_peak"] = max(
+                float(adaptive_stand_phase["post_complete_action_delta_peak"]),
+                float(np.max(np.abs(lower_action_delta))),
+            )
         if policy_switch_target_role == "primary" and policy_role == "primary":
             blend_s = max(float(config.get("stand_to_walk_blend_s", 0.0)), 0.0)
             if blend_s > 0.0 and sim_time < policy_switch_start_s + blend_s:
@@ -3043,6 +3191,7 @@ def run_mujoco(config: dict) -> None:
 
     def simulate_loop(viewer=None) -> None:
         nonlocal action, command, target_command, current_segment_id, current_adapter_segment_index, next_command_time
+        nonlocal manual_policy_role, manual_transition_state, manual_transition_stable_since
         counter = 0
         sim_time = 0.0
         wall_start = time.perf_counter()
@@ -3120,8 +3269,48 @@ def run_mujoco(config: dict) -> None:
                                 "name": "keyboard",
                                 "start_time": float(sim_time),
                                 "command": [float(value) for value in target_command],
-                            }
+                                }
+                            )
+                if armhack_walk is not None and keyboard is not None:
+                    if manual_policy_role == "secondary" or manual_transition_state != "idle":
+                        target_command = np.zeros(3, dtype=np.float32)
+                    if manual_transition_state != "idle":
+                        root_linear_speed = float(np.linalg.norm(data.qvel[0:2]))
+                        root_yaw_rate = abs(float(data.qvel[5]))
+                        double_support = bool(
+                            np.all(
+                                foot_contact_states_with_floor(
+                                    model, data, floor_geom_ids, foot_body_ids
+                                )
+                            )
                         )
+                        stable = bool(
+                            float(np.linalg.norm(command)) <= 0.02
+                            and root_linear_speed <= float(config.get("handoff_max_linear_speed", 0.10))
+                            and root_yaw_rate <= float(config.get("handoff_max_yaw_rate", 0.15))
+                            and double_support
+                        )
+                        if stable:
+                            if not math.isfinite(manual_transition_stable_since):
+                                manual_transition_stable_since = sim_time
+                            if sim_time - manual_transition_stable_since >= float(
+                                config.get("handoff_zero_hold_s", 0.50)
+                            ):
+                                manual_policy_role = (
+                                    "secondary"
+                                    if manual_transition_state == "walk_to_stand"
+                                    else "primary"
+                                )
+                                print(
+                                    "[MANUAL HANDOFF] committed "
+                                    f"{'STAND' if manual_policy_role == 'secondary' else 'WALK'} "
+                                    f"at zero command after {sim_time - manual_transition_stable_since:.2f}s stable",
+                                    flush=True,
+                                )
+                                manual_transition_state = "idle"
+                                manual_transition_stable_since = -math.inf
+                        else:
+                            manual_transition_stable_since = -math.inf
                 elif nav2_replay is not None:
                     target_command, nav2_segment_info = nav2_replay.update(float(model.opt.timestep), sim_time)
                     if nav2_segment_info is not None:
@@ -3323,6 +3512,40 @@ def run_mujoco(config: dict) -> None:
                     float(value)
                     for value in adaptive_stand_phase["completion_root_quaternion_wxyz"]
                 ],
+                "post_complete_foot_xy_displacement_max_m": float(
+                    adaptive_stand_phase["post_complete_foot_xy_displacement_max"]
+                ),
+                "post_complete_foot_speed_mean_m_per_s": float(
+                    adaptive_stand_phase["post_complete_foot_speed_sum"]
+                    / max(int(adaptive_stand_phase["post_complete_foot_speed_count"]), 1)
+                ),
+                "post_complete_foot_speed_max_m_per_s": float(
+                    adaptive_stand_phase["post_complete_foot_speed_max"]
+                ),
+                "post_complete_lower_joint_peak_to_peak_max_rad": float(
+                    np.max(
+                        np.asarray(adaptive_stand_phase["post_complete_lower_joint_max"])
+                        - np.asarray(adaptive_stand_phase["post_complete_lower_joint_min"])
+                    )
+                ) if int(adaptive_stand_phase["post_complete_lower_joint_vel_count"]) > 0 else 0.0,
+                "post_complete_lower_joint_velocity_rms_rad_per_s": float(
+                    math.sqrt(
+                        float(adaptive_stand_phase["post_complete_lower_joint_vel_sq_sum"])
+                        / max(int(adaptive_stand_phase["post_complete_lower_joint_vel_count"]), 1)
+                    )
+                ),
+                "post_complete_lower_joint_velocity_peak_rad_per_s": float(
+                    adaptive_stand_phase["post_complete_lower_joint_vel_peak"]
+                ),
+                "post_complete_lower_action_delta_rms": float(
+                    math.sqrt(
+                        float(adaptive_stand_phase["post_complete_action_delta_sq_sum"])
+                        / max(int(adaptive_stand_phase["post_complete_action_delta_count"]), 1)
+                    )
+                ),
+                "post_complete_lower_action_delta_peak": float(
+                    adaptive_stand_phase["post_complete_action_delta_peak"]
+                ),
             }
         report["policy_switch_states"] = policy_switch_states
         print_rollout_report(report)
@@ -3338,14 +3561,23 @@ def run_mujoco(config: dict) -> None:
 
         def armhack_walk_keyboard_callback(keycode: int) -> None:
             """Give SPACE/arm keys to the arm adapter and all other keys to velocity."""
-            nonlocal manual_policy_role
+            nonlocal manual_policy_role, manual_transition_state, manual_transition_stable_since
             if armhack_walk is None or keyboard is None:
                 return
             key = chr(keycode).upper() if 0 <= int(keycode) < 128 else ""
             if key == "M":
-                manual_policy_role = "secondary" if manual_policy_role == "primary" else "primary"
+                if manual_transition_state != "idle":
+                    print(f"[MANUAL HANDOFF] already pending: {manual_transition_state}", flush=True)
+                    return
+                keyboard.set_zero("policy-handoff zero")
+                manual_transition_state = (
+                    "walk_to_stand" if manual_policy_role == "primary" else "stand_to_walk"
+                )
+                manual_transition_stable_since = -math.inf
                 print(
-                    f"[MANUAL POLICY] requested {'STAND' if manual_policy_role == 'secondary' else 'WALK'}",
+                    "[MANUAL HANDOFF] requested "
+                    f"{'STAND' if manual_transition_state == 'walk_to_stand' else 'WALK'}; "
+                    "holding zero until velocity and double-support gates pass",
                     flush=True,
                 )
                 return

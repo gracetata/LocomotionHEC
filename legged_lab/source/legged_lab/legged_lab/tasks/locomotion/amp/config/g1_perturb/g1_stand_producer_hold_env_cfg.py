@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
+
+import legged_lab.tasks.locomotion.amp.mdp as mdp
 
 from .g1_stand_adaptive_hold_env_cfg import G1StandAdaptiveHoldEnvCfg
 from .g1_walk_perturb_env_cfg import (
@@ -45,10 +48,27 @@ class G1StandProducerHoldEnvCfg(G1StandAdaptiveHoldEnvCfg):
             "sequential_foot_step_order_violation",
         ):
             getattr(self.rewards, reward_name).weight = 0.0
-        self.rewards.post_complete_foot_velocity_l2.weight = -45.0
-        self.rewards.post_complete_contact_loss.weight = -45.0
+        self.rewards.post_complete_foot_velocity_l2.weight = -500.0
+        post_complete_params = dict(self.rewards.post_complete_foot_velocity_l2.params)
+        self.rewards.post_complete_foot_angular_velocity_l2 = RewTerm(
+            func=mdp.sequential_post_complete_foot_angular_velocity_l2,
+            weight=-5.0,
+            params=post_complete_params,
+        )
+        self.rewards.post_complete_contact_force_balance_l2 = RewTerm(
+            func=mdp.sequential_post_complete_contact_force_balance_l2,
+            weight=-20.0,
+            params=post_complete_params,
+        )
+        self.rewards.post_complete_contact_loss.weight = -60.0
         self.rewards.post_complete_target_l2.weight = -220.0
         self.rewards.double_support.weight = 0.75
+        self.rewards.lower_body_joint_vel_l2.weight = -1.0
+        self.rewards.lower_body_joint_acc_l2.weight = -5.0e-4
+        self.rewards.lower_body_action_rate_l2.weight = -5.0
+        self.rewards.ankle_separation_speed_l2.weight = -100.0
+        self.rewards.feet_slide.weight = -2.0
+        self.rewards.foot_contact_force_excess_l2.weight = -0.20
         self.rewards.torso_xy_position_l2.weight = -35.0
         self.rewards.torso_yaw_l2.weight = -25.0
         self.rewards.torso_xy_position_near_stance_l2.weight = -120.0

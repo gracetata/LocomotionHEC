@@ -1831,6 +1831,49 @@ def sequential_post_complete_foot_velocity_l2(
     return torch.sum(torch.square(velocity), dim=(1, 2)) * (state["phase"] == 2).float()
 
 
+def sequential_post_complete_foot_angular_velocity_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize foot rocking after the two-step sequence is complete."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[foot_cfg.name]
+    angular_velocity = asset.data.body_ang_vel_w[:, foot_cfg.body_ids, :]
+    return torch.sum(torch.square(angular_velocity), dim=(1, 2)) * (state["phase"] == 2).float()
+
+
+def sequential_post_complete_contact_force_balance_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize left/right vertical-force rocking during completed double support."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    force_z = torch.abs(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2])
+    imbalance = (force_z[:, 0] - force_z[:, 1]) / torch.clamp(
+        force_z[:, 0] + force_z[:, 1], min=1.0
+    )
+    return torch.square(imbalance) * (state["phase"] == 2).float()
+
+
 def sequential_post_complete_contact_loss(
     env: ManagerBasedRLEnv,
     pelvis_cfg: SceneEntityCfg,
