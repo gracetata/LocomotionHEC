@@ -475,22 +475,25 @@ class G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg(
         super().__post_init__()
         self.upper_body_perturbation.random_curriculum_enabled = False
         self.upper_body_perturbation.random_curriculum_motion_scale = 1.0
-        self.commands.base_velocity.mode_probability = 0.90
-        self.events.random_end_effector_wrench.params["force_range"] = (-15.0, 15.0)
-        self.events.random_end_effector_wrench.params["torque_range"] = (-2.0, 2.0)
-        self.rewards.strict_zero_body_motion_l2.weight = -4.0
-        self.rewards.strict_zero_feet_motion_l2.weight = -2.0
-        self.rewards.strict_zero_joint_vel_l2.weight = -0.03
-        self.rewards.strict_zero_double_support.weight = 2.0
-        self.rewards.useful_low_speed_tracking_l2.weight = -2.5
-        self.rewards.pure_yaw_planar_drift_l2.weight = -8.0
-        self.rewards.pure_yaw_rate_error_l2.weight = -4.0
-        self.rewards.pure_yaw_torso_pitch_l2.weight = -3.0
-        self.rewards.feet_swing_clearance_band_l2.weight = -1.5
-        self.rewards.track_lin_vel_xy_exp.weight = 3.0
-        self.rewards.track_ang_vel_z_exp.weight = 2.5
-        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.5
-        self.rewards.track_torso_yaw_rate_exp.weight = 1.0
+        # Precision stage increases stop/yaw pressure without introducing the
+        # full force range in one discontinuous jump. A later robust stage
+        # reaches the final disturbance envelope.
+        self.commands.base_velocity.mode_probability = 0.85
+        self.events.random_end_effector_wrench.params["force_range"] = (-5.0, 5.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-0.75, 0.75)
+        self.rewards.strict_zero_body_motion_l2.weight = -1.0
+        self.rewards.strict_zero_feet_motion_l2.weight = -0.5
+        self.rewards.strict_zero_joint_vel_l2.weight = -0.01
+        self.rewards.strict_zero_double_support.weight = 0.8
+        self.rewards.useful_low_speed_tracking_l2.weight = -1.0
+        self.rewards.pure_yaw_planar_drift_l2.weight = -4.0
+        self.rewards.pure_yaw_rate_error_l2.weight = -2.0
+        self.rewards.pure_yaw_torso_pitch_l2.weight = -1.0
+        self.rewards.feet_swing_clearance_band_l2.weight = -1.0
+        self.rewards.track_lin_vel_xy_exp.weight = 2.5
+        self.rewards.track_ang_vel_z_exp.weight = 2.0
+        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.2
+        self.rewards.track_torso_yaw_rate_exp.weight = 0.8
 
 
 @configclass
