@@ -48,6 +48,10 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
         self.upper_body_perturbation.random_curriculum_enabled = False
         self.upper_body_perturbation.random_curriculum_motion_scale = 1.0
         self.upper_body_perturbation.random_transition_duration_range_s = (1.5, 5.0)
+        # The inherited recovery schedule rewrites reward weights every step.
+        # This task is a fresh objective, so its explicit weights below are the
+        # sole source of truth and randomization is full-strength from reset.
+        self.curriculum.stance_recovery = None
 
         pelvis_cfg = SceneEntityCfg("robot", body_names="pelvis")
         torso_cfg = SceneEntityCfg("robot", body_names="torso_link")

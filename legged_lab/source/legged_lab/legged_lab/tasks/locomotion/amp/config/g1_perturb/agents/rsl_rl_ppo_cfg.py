@@ -197,7 +197,7 @@ class G1ArmHackStandFirstPrinciplesSingleRunnerCfg(
         self.algorithm.baseline_kl_cfg.scale = 0.0
         # Producer-state resets are deliberately OOD relative to the source;
         # keep KL as a soft anchor without aborting the necessary takeover update.
-        self.algorithm.baseline_kl_cfg.hard_limit = 2.0
+        self.algorithm.baseline_kl_cfg.hard_limit = 0.0
         self.algorithm.amp_cfg.freeze_discriminator = True
 
 
@@ -226,7 +226,7 @@ class G1ArmHackWalkFirstPrinciplesSingleRunnerCfg(
         self.algorithm.max_grad_norm = 0.5
         self.algorithm.baseline_kl_cfg.enabled = False
         self.algorithm.baseline_kl_cfg.scale = 0.0
-        self.algorithm.baseline_kl_cfg.hard_limit = 1.0
+        self.algorithm.baseline_kl_cfg.hard_limit = 0.0
         self.algorithm.amp_cfg.freeze_discriminator = True
         self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 1.0
         self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.90

@@ -39,7 +39,10 @@ def test_objectives_and_bidirectional_producer_reset_are_explicit():
         "pure_yaw_torso_pitch_l2",
         "random_end_effector_wrench",
         "handoff_state_reset",
+        "self.curriculum.stance_recovery = None",
     ):
         assert token in cfg_text
     for field in ("root_state", "joint_pos", "joint_vel", "action"):
         assert field in events_text
+    runner_text = RUNNER.read_text()
+    assert runner_text.count("baseline_kl_cfg.hard_limit = 0.0") >= 2
