@@ -9,6 +9,7 @@ WORKTREE_ROOT=$(cd "${LEGGED_LAB_DIR}/.." && pwd)
 SOURCE_REPO=${SOURCE_REPO:-/home/tata/Workspace/Locomotion/G1-Locomotion}
 MODEL=${MODEL:?set MODEL=stand or MODEL=walk}
 STAND_PROFILE=${STAND_PROFILE:-acquisition}
+WALK_PROFILE=${WALK_PROFILE:-acquisition}
 SMOKE=${SMOKE:-False}
 NUM_ENVS=${NUM_ENVS:-6144}
 MAX_ITERATIONS=${MAX_ITERATIONS:-2000}
@@ -46,7 +47,11 @@ if [[ "${MODEL}" == "stand" ]]; then
     TASK_STYLE_LERP=1.0
     BASELINE_KL_SCALE=${BASELINE_KL_SCALE:-2.0e-4}
 else
-    TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesSingle-v0
+    case "${WALK_PROFILE}" in
+        acquisition) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesSingle-v0 ;;
+        strict) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesStrictSingle-v0 ;;
+        *) die "WALK_PROFILE must be acquisition or strict" ;;
+    esac
     EXPERIMENT=g1_armhack_walk_first_principles_single
     SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-${SOURCE_REPO}/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/base/2026-08-14_16-56-58_ankle30_base_full_20260814/model_199.pt}
     EXPECTED_SOURCE_SHA256=${EXPECTED_SOURCE_SHA256:-9d4583a535ea67086f429b20793a4f75dd00afbacab7c2aee5bc868be5a6e355}

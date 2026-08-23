@@ -324,7 +324,7 @@ class G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg_PLAY(
 
 @configclass
 class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
-    """One actor covers stop, low speed, general walking and pure yaw."""
+    """Acquisition stage: retain the gait while arms begin to move."""
 
     def __post_init__(self):
         super().__post_init__()
@@ -334,7 +334,9 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
             STAND_RANDOM_POSE_BANK_RELATIVE_PATH.as_posix()
         )
         self.upper_body_perturbation.random_initialize_joint_state_on_reset = True
-        self.upper_body_perturbation.random_curriculum_enabled = False
+        self.upper_body_perturbation.random_curriculum_enabled = True
+        self.upper_body_perturbation.random_curriculum_static_steps = 24_000
+        self.upper_body_perturbation.random_curriculum_ramp_steps = 24_000
         self.upper_body_perturbation.random_curriculum_motion_scale = 1.0
         self.upper_body_perturbation.random_transition_duration_range_s = (1.5, 5.0)
 
@@ -351,7 +353,7 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
 
         # Command sampler starts at exact zero, then transitions through the
         # useful <=0.4 band before full commands. No command-specific actors.
-        self.commands.base_velocity.mode_probability = 0.90
+        self.commands.base_velocity.mode_probability = 0.70
         self.commands.base_velocity.hard_zero_stand = True
         self.commands.base_velocity.mode_command_clip_min = (-0.40, -0.40, -0.40)
         self.commands.base_velocity.mode_command_clip_max = (0.40, 0.40, 0.40)
@@ -376,8 +378,8 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
                     body_names=["left_wrist_yaw_link", "right_wrist_yaw_link"],
                     preserve_order=True,
                 ),
-                "force_range": (-15.0, 15.0),
-                "torque_range": (-2.0, 2.0),
+                "force_range": (-3.0, 3.0),
+                "torque_range": (-0.5, 0.5),
             },
         )
 
@@ -388,7 +390,7 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
         )
         self.rewards.useful_low_speed_tracking_l2 = RewTerm(
             func=mdp.useful_low_speed_tracking_l2,
-            weight=-2.5,
+            weight=-0.5,
             params={
                 "command_name": "base_velocity",
                 "deadband": 0.03,
@@ -399,7 +401,7 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
         )
         self.rewards.pure_yaw_planar_drift_l2 = RewTerm(
             func=mdp.pure_yaw_planar_drift_l2,
-            weight=-8.0,
+            weight=-2.0,
             params={
                 "command_name": "base_velocity",
                 "min_yaw_command": 0.05,
@@ -409,7 +411,7 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
         )
         self.rewards.pure_yaw_rate_error_l2 = RewTerm(
             func=mdp.pure_yaw_root_rate_error_l2,
-            weight=-4.0,
+            weight=-1.0,
             params={
                 "command_name": "base_velocity",
                 "min_yaw_command": 0.05,
@@ -419,7 +421,7 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
         )
         self.rewards.pure_yaw_torso_pitch_l2 = RewTerm(
             func=mdp.pure_yaw_torso_pitch_l2,
-            weight=-3.0,
+            weight=-0.5,
             params={
                 "command_name": "base_velocity",
                 "min_yaw_command": 0.05,
@@ -430,7 +432,7 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
         )
         self.rewards.feet_swing_clearance_band_l2 = RewTerm(
             func=mdp.feet_swing_clearance_band_l2,
-            weight=-1.5,
+            weight=-0.75,
             params={
                 "command_name": "base_velocity",
                 "sensor_cfg": contact_cfg,
@@ -442,16 +444,58 @@ class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
                 "max_height": 0.14,
             },
         )
-        self.rewards.track_lin_vel_xy_exp.weight = 3.0
-        self.rewards.track_ang_vel_z_exp.weight = 2.5
-        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.5
-        self.rewards.track_torso_yaw_rate_exp.weight = 1.0
+        self.rewards.strict_zero_body_motion_l2.weight = -0.2
+        self.rewards.strict_zero_feet_motion_l2.weight = -0.1
+        self.rewards.strict_zero_joint_vel_l2.weight = -0.003
+        self.rewards.strict_zero_double_support.weight = 0.2
+        self.rewards.track_lin_vel_xy_exp.weight = 2.0
+        self.rewards.track_ang_vel_z_exp.weight = 1.8
+        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.0
+        self.rewards.track_torso_yaw_rate_exp.weight = 0.7
         self.rewards.termination_penalty.weight = -300.0
 
 
 @configclass
 class G1ArmHackWalkFirstPrinciplesSingleEnvCfg_PLAY(
     G1ArmHackWalkFirstPrinciplesSingleEnvCfg
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg(
+    G1ArmHackWalkFirstPrinciplesSingleEnvCfg
+):
+    """Full stop/low-speed/pure-yaw/force objectives in the same Walk actor."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.upper_body_perturbation.random_curriculum_enabled = False
+        self.upper_body_perturbation.random_curriculum_motion_scale = 1.0
+        self.commands.base_velocity.mode_probability = 0.90
+        self.events.random_end_effector_wrench.params["force_range"] = (-15.0, 15.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-2.0, 2.0)
+        self.rewards.strict_zero_body_motion_l2.weight = -4.0
+        self.rewards.strict_zero_feet_motion_l2.weight = -2.0
+        self.rewards.strict_zero_joint_vel_l2.weight = -0.03
+        self.rewards.strict_zero_double_support.weight = 2.0
+        self.rewards.useful_low_speed_tracking_l2.weight = -2.5
+        self.rewards.pure_yaw_planar_drift_l2.weight = -8.0
+        self.rewards.pure_yaw_rate_error_l2.weight = -4.0
+        self.rewards.pure_yaw_torso_pitch_l2.weight = -3.0
+        self.rewards.feet_swing_clearance_band_l2.weight = -1.5
+        self.rewards.track_lin_vel_xy_exp.weight = 3.0
+        self.rewards.track_ang_vel_z_exp.weight = 2.5
+        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.5
+        self.rewards.track_torso_yaw_rate_exp.weight = 1.0
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg_PLAY(
+    G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg
 ):
     def __post_init__(self):
         super().__post_init__()
