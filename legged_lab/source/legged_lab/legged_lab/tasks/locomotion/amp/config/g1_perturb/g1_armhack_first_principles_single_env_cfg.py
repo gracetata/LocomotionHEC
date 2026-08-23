@@ -104,8 +104,8 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
                 "nominal_distance_range": (0.27, 0.33),
                 "nominal_stance_probability": 0.15,
                 "asymmetric_support_probability": 0.50,
-                "phase_one_probability": 0.30,
-                "phase_two_probability": 0.30,
+                "phase_one_probability": 0.40,
+                "phase_two_probability": 0.10,
                 "support_distance_range": (0.22, 0.34),
                 "position_scale_range": (0.92, 1.08),
                 "velocity_range": (-0.20, 0.20),
@@ -144,15 +144,15 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
         # Dense target/single-support rewards are intentionally small: large
         # per-step rewards make hovering more profitable than touchdown.
         self.rewards.sequential_foot_step_target_exp.weight = 1.0
-        self.rewards.sequential_foot_step_clearance_exp.weight = 10.0
-        self.rewards.sequential_active_foot_clearance_l2.weight = -450.0
-        self.rewards.sequential_active_foot_upward_velocity.weight = 3.0
+        self.rewards.sequential_foot_step_clearance_exp.weight = 18.0
+        self.rewards.sequential_active_foot_clearance_l2.weight = -1500.0
+        self.rewards.sequential_active_foot_upward_velocity.weight = 8.0
         self.rewards.sequential_active_foot_velocity_l2.weight = -0.2
         self.rewards.sequential_active_foot_single_support.weight = 0.5
-        self.rewards.sequential_active_foot_contact.weight = -5.0
+        self.rewards.sequential_active_foot_contact.weight = -50.0
         self.rewards.sequential_foot_step_landing_exp.weight = 80.0
         self.rewards.sequential_foot_step_completion.weight = 150.0
-        self.rewards.sequential_foot_step_lift.weight = 45.0
+        self.rewards.sequential_foot_step_lift.weight = 150.0
         self.rewards.sequential_foot_step_order_violation.weight = -30.0
         self.rewards.sequential_foot_final_target_l2.weight = -60.0
         self.rewards.sequential_final_ankle_distance_exp.weight = 45.0
