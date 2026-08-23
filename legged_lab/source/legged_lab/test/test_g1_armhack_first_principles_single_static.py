@@ -14,6 +14,7 @@ def test_exactly_two_single_actor_tasks_are_registered_by_design():
     assert "G1ArmHackWalkFirstPrinciplesSingleEnvCfg" in text
     assert "G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg" in text
+    assert "G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg" in text
     forbidden = ("ActorCriticCommandResidual", "TwoGoal", "Gated", "ExpertEnvCfg")
     assert not any(token in text for token in forbidden)
 

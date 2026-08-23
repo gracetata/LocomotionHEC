@@ -504,3 +504,37 @@ class G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg_PLAY(
         super().__post_init__()
         self.scene.num_envs = 48
         self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg(
+    G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg
+):
+    """Force-ramp stage before the final full disturbance envelope."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_probability = 0.88
+        self.events.random_end_effector_wrench.params["force_range"] = (-8.0, 8.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-1.0, 1.0)
+        self.events.random_torso_external_wrench = EventTerm(
+            func=mdp.apply_external_force_torque,
+            mode="interval",
+            interval_range_s=(2.0, 5.0),
+            is_global_time=False,
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+                "force_range": (-5.0, 5.0),
+                "torque_range": (-0.75, 0.75),
+            },
+        )
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg_PLAY(
+    G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5

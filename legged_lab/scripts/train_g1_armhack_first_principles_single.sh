@@ -50,7 +50,8 @@ else
     case "${WALK_PROFILE}" in
         acquisition) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesSingle-v0 ;;
         strict) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesStrictSingle-v0 ;;
-        *) die "WALK_PROFILE must be acquisition or strict" ;;
+        robust) TASK=LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesRobustSingle-v0 ;;
+        *) die "WALK_PROFILE must be acquisition, strict or robust" ;;
     esac
     EXPERIMENT=g1_armhack_walk_first_principles_single
     SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-${SOURCE_REPO}/legged_lab/ArmHack Checkpoints/WalkAnkleSpacingFinetune/base/2026-08-14_16-56-58_ankle30_base_full_20260814/model_199.pt}
