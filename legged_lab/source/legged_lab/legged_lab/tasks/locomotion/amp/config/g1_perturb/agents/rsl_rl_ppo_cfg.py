@@ -166,3 +166,67 @@ class G1WalkAnkleSpacingRslRlOnPolicyRunnerAmpCfg(
         self.algorithm.baseline_kl_cfg.enabled = True
         self.algorithm.baseline_kl_cfg.scale = 1.00
         self.algorithm.baseline_kl_cfg.hard_limit = 0.25
+
+
+@configclass
+class G1ArmHackStandFirstPrinciplesSingleRunnerCfg(
+    G1StandPerturbRslRlOnPolicyRunnerAmpCfg
+):
+    """Single feed-forward Stand actor; no experts, router or hierarchy."""
+
+    experiment_name = "g1_armhack_stand_first_principles_single"
+    checkpoint_output_dir = "ArmHack Checkpoints/FirstPrinciplesSingle/Stand"
+    load_policy_only = True
+    reset_iteration_on_policy_only_load = True
+    restore_configured_learning_rate_on_load = True
+    save_interval = 100
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 1.0e-5
+        self.algorithm.schedule = "adaptive"
+        self.algorithm.desired_kl = 0.01
+        self.algorithm.clip_param = 0.10
+        self.algorithm.num_learning_epochs = 4
+        self.algorithm.num_mini_batches = 8
+        self.algorithm.entropy_coef = 8.0e-4
+        self.algorithm.max_grad_norm = 0.5
+        # The training launcher enables this only after supplying a SHA-locked
+        # path; keeping it off by default lets play/export load the actor alone.
+        self.algorithm.baseline_kl_cfg.enabled = False
+        self.algorithm.baseline_kl_cfg.scale = 0.0
+        # Producer-state resets are deliberately OOD relative to the source;
+        # keep KL as a soft anchor without aborting the necessary takeover update.
+        self.algorithm.baseline_kl_cfg.hard_limit = 2.0
+        self.algorithm.amp_cfg.freeze_discriminator = True
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesSingleRunnerCfg(
+    G1WalkBehaviorFinetuneRslRlOnPolicyRunnerAmpCfg
+):
+    """Single feed-forward Walk actor covering every command family."""
+
+    experiment_name = "g1_armhack_walk_first_principles_single"
+    checkpoint_output_dir = "ArmHack Checkpoints/FirstPrinciplesSingle/Walk"
+    load_policy_only = True
+    reset_iteration_on_policy_only_load = True
+    restore_configured_learning_rate_on_load = True
+    save_interval = 100
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.learning_rate = 1.5e-5
+        self.algorithm.schedule = "adaptive"
+        self.algorithm.desired_kl = 0.012
+        self.algorithm.clip_param = 0.10
+        self.algorithm.num_learning_epochs = 4
+        self.algorithm.num_mini_batches = 8
+        self.algorithm.entropy_coef = 1.0e-3
+        self.algorithm.max_grad_norm = 0.5
+        self.algorithm.baseline_kl_cfg.enabled = False
+        self.algorithm.baseline_kl_cfg.scale = 0.0
+        self.algorithm.baseline_kl_cfg.hard_limit = 1.0
+        self.algorithm.amp_cfg.freeze_discriminator = True
+        self.algorithm.amp_cfg.amp_discriminator.style_reward_scale = 1.0
+        self.algorithm.amp_cfg.amp_discriminator.task_style_lerp = 0.90

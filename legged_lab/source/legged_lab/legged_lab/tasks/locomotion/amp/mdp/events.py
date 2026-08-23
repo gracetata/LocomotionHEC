@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import torch
 from typing import TYPE_CHECKING, Literal
 import random
@@ -23,6 +24,82 @@ from isaaclab.terrains import TerrainImporter
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
     from legged_lab.envs import ManagerBasedAmpEnv
+
+
+_HANDOFF_STATE_LIBRARY_CACHE: dict[tuple[str, str], dict[str, torch.Tensor]] = {}
+
+
+def reset_from_handoff_state_library(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    state_library_path: str = "",
+    probability: float = 0.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """Reset a subset of environments from real producer-policy states.
+
+    The library is a torch payload with ``root_state`` (13), ``joint_pos``,
+    ``joint_vel`` and ``action`` arrays. Root XY is stored relative to the
+    producer environment origin and is translated to the consumer origin.
+    Contact state/force arrays may be included for provenance and sampling;
+    PhysX reconstructs the actual contacts from the restored generalized state.
+    """
+    if env_ids.numel() == 0 or not state_library_path or float(probability) <= 0.0:
+        return
+    if not 0.0 <= float(probability) <= 1.0:
+        raise ValueError("handoff reset probability must be in [0, 1].")
+
+    resolved = Path(state_library_path).expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"handoff state library not found: {resolved}")
+    cache_key = (str(resolved), str(env.device))
+    payload = _HANDOFF_STATE_LIBRARY_CACHE.get(cache_key)
+    if payload is None:
+        raw = torch.load(resolved, map_location=env.device, weights_only=False)
+        required = {"root_state", "joint_pos", "joint_vel", "action"}
+        missing = required.difference(raw)
+        if missing:
+            raise ValueError(f"handoff state library missing fields: {sorted(missing)}")
+        payload = {name: raw[name].to(device=env.device, dtype=torch.float32) for name in required}
+        sample_count = payload["root_state"].shape[0]
+        if sample_count == 0 or any(value.shape[0] != sample_count for value in payload.values()):
+            raise ValueError("handoff state library arrays must have one shared non-zero sample count.")
+        if payload["root_state"].shape[1] != 13:
+            raise ValueError("handoff root_state must have shape [N, 13].")
+        _HANDOFF_STATE_LIBRARY_CACHE[cache_key] = payload
+
+    selected_mask = torch.rand(env_ids.numel(), device=env.device) < float(probability)
+    selected_env_ids = env_ids[selected_mask]
+    if selected_env_ids.numel() == 0:
+        return
+    sample_ids = torch.randint(
+        payload["root_state"].shape[0],
+        (selected_env_ids.numel(),),
+        device=env.device,
+    )
+    asset: Articulation = env.scene[asset_cfg.name]
+    root_state = payload["root_state"][sample_ids].clone()
+    root_state[:, :2] += env.scene.env_origins[selected_env_ids, :2]
+    asset.write_root_pose_to_sim(root_state[:, :7], env_ids=selected_env_ids)
+    asset.write_root_velocity_to_sim(root_state[:, 7:13], env_ids=selected_env_ids)
+    joint_pos = payload["joint_pos"][sample_ids]
+    joint_vel = payload["joint_vel"][sample_ids]
+    if joint_pos.shape[1] != asset.data.joint_pos.shape[1]:
+        raise ValueError("handoff joint dimension does not match the consumer robot.")
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=selected_env_ids)
+    asset.set_joint_position_target(joint_pos, env_ids=selected_env_ids)
+
+    action = payload["action"][sample_ids]
+    if action.shape[1] != env.action_manager.action.shape[1]:
+        raise ValueError("handoff action dimension does not match the consumer policy.")
+    env.action_manager._action[selected_env_ids] = action
+    env.action_manager._prev_action[selected_env_ids] = action
+    handoff_mask = getattr(env, "_armhack_handoff_reset_mask", None)
+    if handoff_mask is None or handoff_mask.shape != (env.num_envs,):
+        handoff_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        setattr(env, "_armhack_handoff_reset_mask", handoff_mask)
+    handoff_mask[env_ids] = False
+    handoff_mask[selected_env_ids] = True
 
 
 def cache_default_key_body_offsets(

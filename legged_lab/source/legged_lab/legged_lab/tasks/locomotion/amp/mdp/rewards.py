@@ -1693,6 +1693,132 @@ def sequential_support_foot_drift_l2(
     return support_error_l2 * (state["phase"] < 2).float()
 
 
+def sequential_post_completion_airborne(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize every loss of foot contact after the two-step task completes."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torch.sum((~state["contact"]).float(), dim=1) * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_foot_motion_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+    velocity_scale: float = 0.10,
+) -> torch.Tensor:
+    """Suppress sliding, re-lifting and the observed roughly 1 Hz post-step cycle."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[foot_cfg.name]
+    velocity = asset.data.body_lin_vel_w[:, foot_cfg.body_ids, :]
+    return (
+        torch.sum(torch.square(velocity / max(float(velocity_scale), 1.0e-6)), dim=(1, 2))
+        * (state["phase"] >= 2).float()
+    )
+
+
+def sequential_post_completion_joint_vel_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize lower-body motion only after both commanded footsteps finish."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[asset_cfg.name]
+    value = torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
+    return value * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_action_rate_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    action_indices: list[int],
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize lower-body target chatter only in the final planted phase."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    delta = env.action_manager.action[:, action_indices] - env.action_manager.prev_action[:, action_indices]
+    return torch.sum(torch.square(delta), dim=1) * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_contact_imbalance_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+    force_scale_n: float = 300.0,
+) -> torch.Tensor:
+    """Reduce alternating left/right load transfer after settling."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    vertical_force = torch.abs(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2])
+    imbalance = (vertical_force[:, 0] - vertical_force[:, 1]) / max(float(force_scale_n), 1.0e-6)
+    return torch.square(imbalance) * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_ankle_torque_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    ankle_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Minimize ankle effort after both feet have reached their targets."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[ankle_cfg.name]
+    value = torch.sum(torch.square(asset.data.applied_torque[:, ankle_cfg.joint_ids]), dim=1)
+    return value * (state["phase"] >= 2).float()
+
+
 def ankle_longitudinal_alignment_l2(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg(
@@ -2731,6 +2857,55 @@ def pure_yaw_root_rate_error_l2(
     _, pure_yaw = two_goal_command_masks(command, pure_yaw_min_command=min_yaw_command)
     error = torch.square(asset.data.root_ang_vel_b[:, 2] - command[:, 2])
     return torch.clamp(error / float(error_scale) ** 2, max=float(max_penalty)) * pure_yaw.float()
+
+
+def pure_yaw_torso_pitch_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_yaw_command: float = 0.05,
+    max_translation_command: float = 0.01,
+    pitch_scale: float = 0.08,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="torso_link"),
+) -> torch.Tensor:
+    """Penalize forward/backward torso lean during a true in-place turn."""
+    if pitch_scale <= 0.0:
+        raise ValueError("pure_yaw_torso_pitch_l2 pitch_scale must be positive.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    body_id = _single_body_id(asset_cfg)
+    _, pitch, _ = math_utils.euler_xyz_from_quat(asset.data.body_quat_w[:, body_id, :])
+    command = env.command_manager.get_command(command_name)
+    pure_yaw = (
+        torch.linalg.vector_norm(command[:, :2], dim=1) <= float(max_translation_command)
+    ) & (torch.abs(command[:, 2]) >= float(min_yaw_command))
+    return torch.square(math_utils.wrap_to_pi(pitch) / float(pitch_scale)) * pure_yaw.float()
+
+
+def useful_low_speed_tracking_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    deadband: float = 0.03,
+    max_command: float = 0.40,
+    linear_error_scale: float = 0.10,
+    yaw_error_scale: float = 0.15,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Track the common <=0.4 command band while ignoring the sim-real deadband."""
+    if not 0.0 <= deadband < max_command:
+        raise ValueError("useful low-speed tracking requires 0 <= deadband < max_command.")
+    asset: Articulation = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    active_component = (torch.abs(command) >= float(deadband)) & (
+        torch.abs(command) <= float(max_command)
+    )
+    actual = torch.cat([asset.data.root_lin_vel_b[:, :2], asset.data.root_ang_vel_b[:, 2:3]], dim=1)
+    scale = torch.tensor(
+        [linear_error_scale, linear_error_scale, yaw_error_scale],
+        device=command.device,
+        dtype=command.dtype,
+    )
+    squared_error = torch.square((actual - command) / scale.clamp(min=1.0e-6))
+    active_count = torch.clamp(torch.sum(active_component.float(), dim=1), min=1.0)
+    return torch.sum(squared_error * active_component.float(), dim=1) / active_count
 
 
 def lateral_command_leak_l2(

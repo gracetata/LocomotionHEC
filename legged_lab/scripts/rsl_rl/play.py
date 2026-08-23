@@ -103,6 +103,15 @@ parser.add_argument(
     default=0.0,
     help="Fixed added mass per wrist-yaw link recorded in the ArmHack Stand report.",
 )
+parser.add_argument(
+    "--capture_handoff_library",
+    type=str,
+    default=None,
+    help="Save producer generalized states for the other single policy's reset distribution.",
+)
+parser.add_argument("--capture_warmup_steps", type=int, default=20)
+parser.add_argument("--capture_stride", type=int, default=5)
+parser.add_argument("--capture_max_samples", type=int, default=16384)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -1139,6 +1148,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             test_manifest_path=args_cli.armhack_stand_manifest,
             payload_kg=args_cli.armhack_stand_payload_kg,
         )
+    handoff_samples: dict[str, list[torch.Tensor]] | None = None
+    if args_cli.capture_handoff_library:
+        if args_cli.capture_warmup_steps < 0 or args_cli.capture_stride <= 0:
+            raise ValueError("handoff capture warmup must be non-negative and stride must be positive.")
+        if args_cli.capture_max_samples <= 0:
+            raise ValueError("handoff capture max samples must be positive.")
+        handoff_samples = {
+            "root_state": [],
+            "joint_pos": [],
+            "joint_vel": [],
+            "action": [],
+            "torso_state": [],
+            "foot_contact": [],
+            "foot_contact_force": [],
+        }
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -1151,6 +1175,54 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             _update_play_metrics(play_metrics, env, rewards, dones, extras)
             if armhack_stand_report is not None:
                 armhack_stand_report.update(dones)
+            if (
+                handoff_samples is not None
+                and timestep >= args_cli.capture_warmup_steps
+                and (timestep - args_cli.capture_warmup_steps) % args_cli.capture_stride == 0
+            ):
+                base_env = env.unwrapped
+                robot = base_env.scene["robot"]
+                valid = ~dones.bool()
+                remaining = args_cli.capture_max_samples - sum(
+                    sample.shape[0] for sample in handoff_samples["root_state"]
+                )
+                valid_ids = torch.nonzero(valid, as_tuple=False).squeeze(-1)[:remaining]
+                if valid_ids.numel() > 0:
+                    root_state = robot.data.root_state_w[valid_ids].detach().clone()
+                    root_state[:, :2] -= base_env.scene.env_origins[valid_ids, :2]
+                    torso_ids, _ = robot.find_bodies("torso_link")
+                    foot_ids, _ = robot.find_bodies(
+                        ["left_ankle_roll_link", "right_ankle_roll_link"], preserve_order=True
+                    )
+                    contact_sensor = base_env.scene.sensors["contact_forces"]
+                    contact_ids, _ = contact_sensor.find_bodies(
+                        ["left_ankle_roll_link", "right_ankle_roll_link"], preserve_order=True
+                    )
+                    torso_id = torso_ids[0]
+                    torso_state = torch.cat(
+                        [
+                            robot.data.body_pos_w[valid_ids, torso_id],
+                            robot.data.body_quat_w[valid_ids, torso_id],
+                            robot.data.body_lin_vel_w[valid_ids, torso_id],
+                            robot.data.body_ang_vel_w[valid_ids, torso_id],
+                        ],
+                        dim=1,
+                    )
+                    contact_force = contact_sensor.data.net_forces_w[
+                        valid_ids.unsqueeze(1), torch.as_tensor(contact_ids, device=valid_ids.device)
+                    ]
+                    contact = contact_sensor.data.current_contact_time[
+                        valid_ids.unsqueeze(1), torch.as_tensor(contact_ids, device=valid_ids.device)
+                    ] > 0.0
+                    handoff_samples["root_state"].append(root_state.cpu())
+                    handoff_samples["joint_pos"].append(robot.data.joint_pos[valid_ids].detach().cpu())
+                    handoff_samples["joint_vel"].append(robot.data.joint_vel[valid_ids].detach().cpu())
+                    handoff_samples["action"].append(
+                        base_env.action_manager.action[valid_ids].detach().cpu()
+                    )
+                    handoff_samples["torso_state"].append(torso_state.detach().cpu())
+                    handoff_samples["foot_contact"].append(contact.detach().cpu())
+                    handoff_samples["foot_contact_force"].append(contact_force.detach().cpu())
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
         timestep += 1
@@ -1170,6 +1242,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     _print_play_report(play_metrics, timestep)
     if armhack_stand_report is not None:
         armhack_stand_report.write(play_metrics=play_metrics, steps=timestep, control_dt=dt)
+    if handoff_samples is not None:
+        if not handoff_samples["root_state"]:
+            raise RuntimeError("handoff capture produced no valid samples.")
+        output_path = Path(args_cli.capture_handoff_library).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {name: torch.cat(values, dim=0) for name, values in handoff_samples.items()}
+        payload.update(
+            {
+                "schema_version": 1,
+                "producer_task": task_name,
+                "producer_checkpoint": str(Path(resume_path).resolve()),
+                "producer_checkpoint_sha256": _sha256(Path(resume_path)),
+                "joint_names": list(env.unwrapped.scene["robot"].joint_names),
+                "foot_body_names": ["left_ankle_roll_link", "right_ankle_roll_link"],
+            }
+        )
+        torch.save(payload, output_path)
+        print(f"[HANDOFF] Saved {payload['root_state'].shape[0]} producer states: {output_path}")
 
     # close the simulator
     env.close()
