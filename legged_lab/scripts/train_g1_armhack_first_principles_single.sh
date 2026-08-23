@@ -8,6 +8,7 @@ LEGGED_LAB_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 WORKTREE_ROOT=$(cd "${LEGGED_LAB_DIR}/.." && pwd)
 SOURCE_REPO=${SOURCE_REPO:-/home/tata/Workspace/Locomotion/G1-Locomotion}
 MODEL=${MODEL:?set MODEL=stand or MODEL=walk}
+STAND_PROFILE=${STAND_PROFILE:-acquisition}
 SMOKE=${SMOKE:-False}
 NUM_ENVS=${NUM_ENVS:-6144}
 MAX_ITERATIONS=${MAX_ITERATIONS:-2000}
@@ -33,7 +34,11 @@ if pgrep -af 'scripts/rsl_rl/train.py.*ArmHack.*FirstPrinciplesSingle' >/dev/nul
 fi
 
 if [[ "${MODEL}" == "stand" ]]; then
-    TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesSingle-v0
+    case "${STAND_PROFILE}" in
+        acquisition) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesSingle-v0 ;;
+        strict) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesStrictSingle-v0 ;;
+        *) die "STAND_PROFILE must be acquisition or strict" ;;
+    esac
     EXPERIMENT=g1_armhack_stand_first_principles_single
     SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-${SOURCE_REPO}/legged_lab/logs/rsl_rl/g1_stand_perturb/2026-08-14_18-32-52_armhack_stand_low_torque_robust_explicit_3pose_2000_from_stage2_20260814/model_1999.pt}
     EXPECTED_SOURCE_SHA256=${EXPECTED_SOURCE_SHA256:-9ab48719840c98f1332693a56f58ed069463c0670737e339b90411985484a729}
