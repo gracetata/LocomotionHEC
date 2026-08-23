@@ -296,6 +296,31 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
                 self._advance_pose_transitions(motion_scale)
 
         step_result = super().step(action)
+        sequential_state = getattr(self, "_armhack_sequential_foot_step_state", None)
+        if sequential_state is not None:
+            log_extras = self.extras.setdefault("log", {})
+            phase = sequential_state["phase"]
+            log_extras["ArmHack/stand_phase0_fraction"] = torch.mean((phase == 0).float())
+            log_extras["ArmHack/stand_phase1_fraction"] = torch.mean((phase == 1).float())
+            log_extras["ArmHack/stand_phase2_fraction"] = torch.mean((phase >= 2).float())
+            log_extras["ArmHack/stand_left_completion_event_rate"] = torch.mean(
+                sequential_state["left_complete_event"].float()
+            )
+            log_extras["ArmHack/stand_right_completion_event_rate"] = torch.mean(
+                sequential_state["right_complete_event"].float()
+            )
+            log_extras["ArmHack/stand_left_lift_event_rate"] = torch.mean(
+                sequential_state["left_lift_event"].float()
+            )
+            log_extras["ArmHack/stand_right_lift_event_rate"] = torch.mean(
+                sequential_state["right_lift_event"].float()
+            )
+            log_extras["ArmHack/stand_foot_target_error_mean_m"] = torch.mean(
+                sequential_state["foot_error"]
+            )
+            log_extras["ArmHack/stand_double_contact_fraction"] = torch.mean(
+                torch.all(sequential_state["contact"], dim=1).float()
+            )
         if self._ankle_roll_pitch_joint_ids is not None:
             ankle_torque = self.scene["robot"].data.applied_torque[
                 :, self._ankle_roll_pitch_joint_ids

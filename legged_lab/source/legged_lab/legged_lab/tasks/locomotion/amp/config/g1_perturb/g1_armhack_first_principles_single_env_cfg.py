@@ -26,8 +26,8 @@ def _step_params(pelvis_cfg, ankle_cfg, contact_cfg) -> dict:
         "sensor_cfg": contact_cfg,
         "lateral_target_offset_m": 0.15,
         "min_clearance_m": 0.035,
-        "landing_tolerance_m": 0.025,
-        "min_step_duration_s": 0.40,
+        "landing_tolerance_m": 0.10,
+        "min_step_duration_s": 0.20,
     }
 
 
@@ -70,6 +70,29 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
         leg_cfg = SceneEntityCfg("robot", joint_names=leg_names, preserve_order=True)
         leg_action_indices = [G1_LOCOMOTION_JOINT_NAMES.index(name) for name in leg_names]
         step = _step_params(pelvis_cfg, ankle_cfg, contact_cfg)
+        # Skill-acquisition stage: a coarse touchdown gate lets the single
+        # actor experience phase transitions. Later 2000-iteration stages
+        # tighten this to the final precision target.
+        sequential_terms = (
+            "sequential_foot_step_progress",
+            "sequential_foot_step_target_exp",
+            "sequential_foot_step_clearance_exp",
+            "sequential_active_foot_contact",
+            "sequential_active_foot_clearance_l2",
+            "sequential_active_foot_upward_velocity",
+            "sequential_active_foot_velocity_l2",
+            "sequential_active_foot_single_support",
+            "sequential_foot_step_landing_exp",
+            "sequential_foot_step_completion",
+            "sequential_foot_step_lift",
+            "sequential_foot_step_order_violation",
+            "sequential_foot_final_target_l2",
+            "sequential_final_ankle_distance_exp",
+            "sequential_support_foot_drift_l2",
+        )
+        for term_name in sequential_terms:
+            getattr(self.rewards, term_name).params["landing_tolerance_m"] = 0.10
+            getattr(self.rewards, term_name).params["min_step_duration_s"] = 0.20
 
         # Broad initial stance and velocity distribution. Phase-zero dominates;
         # phase-one/final samples keep the second step and planted hold trainable.
@@ -80,9 +103,9 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
                 "close_stance_probability": 0.45,
                 "nominal_distance_range": (0.27, 0.33),
                 "nominal_stance_probability": 0.15,
-                "asymmetric_support_probability": 0.40,
-                "phase_one_probability": 0.20,
-                "phase_two_probability": 0.10,
+                "asymmetric_support_probability": 0.50,
+                "phase_one_probability": 0.30,
+                "phase_two_probability": 0.30,
                 "support_distance_range": (0.22, 0.34),
                 "position_scale_range": (0.92, 1.08),
                 "velocity_range": (-0.20, 0.20),
@@ -104,35 +127,59 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
                     body_names=["left_wrist_yaw_link", "right_wrist_yaw_link"],
                     preserve_order=True,
                 ),
-                "force_range": (-15.0, 15.0),
-                "torque_range": (-2.0, 2.0),
+                "force_range": (-5.0, 5.0),
+                "torque_range": (-0.75, 0.75),
             },
         )
+        self.events.random_torso_external_wrench.params["force_range"] = (-5.0, 5.0)
+        self.events.random_torso_external_wrench.params["torque_range"] = (-0.75, 0.75)
+        self.events.push_robot.params["velocity_range"] = {
+            "x": (-0.10, 0.10),
+            "y": (-0.10, 0.10),
+            "yaw": (-0.12, 0.12),
+        }
 
         # Two real single-foot swings, accurate landing, fixed support foot.
         self.rewards.sequential_foot_step_progress.weight = 12.0
-        self.rewards.sequential_foot_step_target_exp.weight = 14.0
+        # Dense target/single-support rewards are intentionally small: large
+        # per-step rewards make hovering more profitable than touchdown.
+        self.rewards.sequential_foot_step_target_exp.weight = 1.0
         self.rewards.sequential_foot_step_clearance_exp.weight = 10.0
         self.rewards.sequential_active_foot_clearance_l2.weight = -450.0
         self.rewards.sequential_active_foot_upward_velocity.weight = 3.0
-        self.rewards.sequential_active_foot_velocity_l2.weight = -12.0
-        self.rewards.sequential_active_foot_single_support.weight = 6.0
+        self.rewards.sequential_active_foot_velocity_l2.weight = -0.2
+        self.rewards.sequential_active_foot_single_support.weight = 0.5
         self.rewards.sequential_active_foot_contact.weight = -5.0
-        self.rewards.sequential_foot_step_landing_exp.weight = 35.0
-        self.rewards.sequential_foot_step_completion.weight = 80.0
+        self.rewards.sequential_foot_step_landing_exp.weight = 80.0
+        self.rewards.sequential_foot_step_completion.weight = 150.0
         self.rewards.sequential_foot_step_lift.weight = 45.0
         self.rewards.sequential_foot_step_order_violation.weight = -30.0
-        self.rewards.sequential_foot_final_target_l2.weight = -120.0
+        self.rewards.sequential_foot_final_target_l2.weight = -60.0
         self.rewards.sequential_final_ankle_distance_exp.weight = 45.0
-        self.rewards.sequential_support_foot_drift_l2.weight = -220.0
+        self.rewards.sequential_support_foot_drift_l2.weight = -80.0
+        self.rewards.sequential_active_foot_air_time_excess_l2 = RewTerm(
+            func=mdp.sequential_active_foot_air_time_excess_l2,
+            weight=-15.0,
+            params={**step, "max_step_duration_s": 1.0},
+        )
+        self.rewards.sequential_active_foot_descent_exp = RewTerm(
+            func=mdp.sequential_active_foot_descent_exp,
+            weight=8.0,
+            params={
+                **step,
+                "target_downward_velocity_mps": 0.15,
+                "velocity_std_mps": 0.10,
+                "target_gate_std_m": 0.08,
+            },
+        )
 
         # SE(2) is reset-relative and remains active through the whole episode.
-        self.rewards.torso_xy_position_l2.weight = -35.0
-        self.rewards.torso_yaw_l2.weight = -18.0
-        self.rewards.torso_xy_position_near_stance_l2.weight = -80.0
-        self.rewards.torso_yaw_near_stance_l2.weight = -35.0
+        self.rewards.torso_xy_position_l2.weight = -8.0
+        self.rewards.torso_yaw_l2.weight = -4.0
+        self.rewards.torso_xy_position_near_stance_l2.weight = -20.0
+        self.rewards.torso_yaw_near_stance_l2.weight = -10.0
         self.rewards.root_xy_position_l2.weight = 0.0
-        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.35
+        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.60
 
         # Final-phase objectives directly target the reported failure: repeated
         # stepping, foot velocity, load oscillation, action chatter and ankle effort.

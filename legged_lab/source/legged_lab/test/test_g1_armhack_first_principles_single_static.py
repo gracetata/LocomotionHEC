@@ -35,6 +35,8 @@ def test_objectives_and_bidirectional_producer_reset_are_explicit():
         "post_completion_airborne",
         "post_completion_contact_imbalance_l2",
         "post_completion_ankle_torque_l2",
+        "sequential_active_foot_air_time_excess_l2",
+        "sequential_active_foot_descent_exp",
         "ankle_distance_30cm",
         "useful_low_speed_tracking_l2",
         "pure_yaw_planar_drift_l2",
