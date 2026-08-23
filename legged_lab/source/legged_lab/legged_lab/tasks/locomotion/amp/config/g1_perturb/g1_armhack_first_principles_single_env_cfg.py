@@ -274,18 +274,20 @@ class G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg(
         self.events.reset_robot_joints.params.update(
             {
                 "phase_one_probability": 0.25,
-                "phase_two_probability": 0.30,
+                "phase_two_probability": 0.40,
                 "asymmetric_support_probability": 0.45,
             }
         )
-        self.events.random_end_effector_wrench.params["force_range"] = (-15.0, 15.0)
-        self.events.random_end_effector_wrench.params["torque_range"] = (-2.0, 2.0)
-        self.events.random_torso_external_wrench.params["force_range"] = (-20.0, 20.0)
-        self.events.random_torso_external_wrench.params["torque_range"] = (-3.0, 3.0)
+        # Precision/hold stage remains mildly perturbed. Full-force robustness
+        # is a later 2000-iteration continuation after this skill is retained.
+        self.events.random_end_effector_wrench.params["force_range"] = (-5.0, 5.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-0.75, 0.75)
+        self.events.random_torso_external_wrench.params["force_range"] = (-5.0, 5.0)
+        self.events.random_torso_external_wrench.params["torque_range"] = (-0.75, 0.75)
         self.events.push_robot.params["velocity_range"] = {
-            "x": (-0.25, 0.25),
-            "y": (-0.25, 0.25),
-            "yaw": (-0.35, 0.35),
+            "x": (-0.10, 0.10),
+            "y": (-0.10, 0.10),
+            "yaw": (-0.12, 0.12),
         }
 
         self.rewards.sequential_active_foot_contact.weight = -20.0
@@ -296,18 +298,18 @@ class G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg(
         self.rewards.sequential_foot_step_lift.weight = 100.0
         self.rewards.sequential_foot_final_target_l2.weight = -150.0
         self.rewards.sequential_support_foot_drift_l2.weight = -180.0
-        self.rewards.torso_xy_position_l2.weight = -25.0
-        self.rewards.torso_yaw_l2.weight = -12.0
-        self.rewards.torso_xy_position_near_stance_l2.weight = -60.0
-        self.rewards.torso_yaw_near_stance_l2.weight = -30.0
-        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.25
+        self.rewards.torso_xy_position_l2.weight = -12.0
+        self.rewards.torso_yaw_l2.weight = -6.0
+        self.rewards.torso_xy_position_near_stance_l2.weight = -35.0
+        self.rewards.torso_yaw_near_stance_l2.weight = -18.0
+        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.40
 
-        self.rewards.post_completion_airborne.weight = -80.0
-        self.rewards.post_completion_foot_motion_l2.weight = -4.0
-        self.rewards.post_completion_joint_vel_l2.weight = -0.05
-        self.rewards.post_completion_action_rate_l2.weight = -0.15
-        self.rewards.post_completion_contact_imbalance_l2.weight = -4.0
-        self.rewards.post_completion_ankle_torque_l2.weight = -4.0e-4
+        self.rewards.post_completion_airborne.weight = -40.0
+        self.rewards.post_completion_foot_motion_l2.weight = -2.0
+        self.rewards.post_completion_joint_vel_l2.weight = -0.03
+        self.rewards.post_completion_action_rate_l2.weight = -0.10
+        self.rewards.post_completion_contact_imbalance_l2.weight = -2.0
+        self.rewards.post_completion_ankle_torque_l2.weight = -2.0e-4
 
 
 @configclass
