@@ -24,6 +24,8 @@ def test_runner_forces_plain_actor_critic_and_formal_runs_are_2000_plus():
     assert "agent.policy.class_name=ActorCritic" in launcher_text
     assert '"${MAX_ITERATIONS}" -lt 2000' in launcher_text
     assert "formal continuation runs must be at least 2000 iterations" in launcher_text
+    assert "formal run stopped before iteration" in launcher_text
+    assert "formal run did not save model_" in launcher_text
 
 
 def test_objectives_and_bidirectional_producer_reset_are_explicit():
@@ -40,6 +42,7 @@ def test_objectives_and_bidirectional_producer_reset_are_explicit():
         "random_end_effector_wrench",
         "handoff_state_reset",
         "self.curriculum.stance_recovery = None",
+        "self.rewards.feet_planar_separation_l2.weight = 0.0",
     ):
         assert token in cfg_text
     for field in ("root_state", "joint_pos", "joint_vel", "action"):

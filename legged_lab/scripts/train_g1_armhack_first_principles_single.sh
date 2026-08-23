@@ -99,4 +99,11 @@ grep -q 'Learning iteration' "${TRAIN_LOG_FILE}" || die "no PPO iteration was re
 if grep -Eq 'Traceback \(most recent call last\)|CUDA out of memory|nan detected|TypeError:' "${TRAIN_LOG_FILE}"; then
     die "fatal error detected in training log"
 fi
+if [[ "${SMOKE}" != "True" ]]; then
+    FINAL_ITERATION=$((MAX_ITERATIONS - 1))
+    grep -q "Learning iteration ${FINAL_ITERATION}/${MAX_ITERATIONS}" "${TRAIN_LOG_FILE}" \
+        || die "formal run stopped before iteration ${FINAL_ITERATION}/${MAX_ITERATIONS}"
+    grep -q "model_${FINAL_ITERATION}.pt" "${TRAIN_LOG_FILE}" \
+        || die "formal run did not save model_${FINAL_ITERATION}.pt"
+fi
 echo "Training completed: ${RUN_NAME}"

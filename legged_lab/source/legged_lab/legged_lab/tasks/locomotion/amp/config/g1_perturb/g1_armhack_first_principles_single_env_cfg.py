@@ -80,9 +80,9 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
                 "close_stance_probability": 0.45,
                 "nominal_distance_range": (0.27, 0.33),
                 "nominal_stance_probability": 0.15,
-                "asymmetric_support_probability": 0.20,
+                "asymmetric_support_probability": 0.40,
                 "phase_one_probability": 0.20,
-                "phase_two_probability": 0.20,
+                "phase_two_probability": 0.10,
                 "support_distance_range": (0.22, 0.34),
                 "position_scale_range": (0.92, 1.08),
                 "velocity_range": (-0.20, 0.20),
@@ -132,7 +132,7 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
         self.rewards.torso_xy_position_near_stance_l2.weight = -80.0
         self.rewards.torso_yaw_near_stance_l2.weight = -35.0
         self.rewards.root_xy_position_l2.weight = 0.0
-        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.25
+        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.35
 
         # Final-phase objectives directly target the reported failure: repeated
         # stepping, foot velocity, load oscillation, action chatter and ankle effort.
@@ -164,9 +164,12 @@ class G1ArmHackStandFirstPrinciplesSingleEnvCfg(G1StandFootRecoveryEnvCfg):
             weight=-2.0e-4,
             params={**step, "ankle_cfg": ankle_joint_cfg},
         )
-        self.rewards.ankle_distance_l1.weight = -4.0
-        self.rewards.ankle_distance_exp.weight = 4.0
-        self.rewards.ankle_distance_success.weight = 6.0
+        # Do not pay the global distance objective before the ordered task is
+        # complete: otherwise both feet can slide apart without taking steps.
+        self.rewards.feet_planar_separation_l2.weight = 0.0
+        self.rewards.ankle_distance_l1.weight = 0.0
+        self.rewards.ankle_distance_exp.weight = 0.0
+        self.rewards.ankle_distance_success.weight = 0.0
         self.rewards.ankle_distance_success.params["tolerance"] = 0.02
         self.rewards.termination_penalty.weight = -500.0
 
