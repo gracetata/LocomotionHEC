@@ -23,8 +23,8 @@ TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-${LEGGED_LAB_DIR}/logs/monitoring/${RUN_NAME}.l
 
 die() { echo "Error: $*" >&2; exit 1; }
 case "$(hostname)" in
-    tata-futurelab|hecggdz-System-Product-Name) ;;
-    *) die "training host is not an approved Future/HEC 5090 worker" ;;
+    tata-futurelab|hecggdz-System-Product-Name|wenduo-System-Product-Name) ;;
+    *) die "training host is not an approved Future/HEC/Dual 5090 worker" ;;
 esac
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "IsaacLab Python missing: ${ISAACLAB_PYTHON}"
 nvidia-smi --query-gpu=name --format=csv,noheader | grep -q 'RTX 5090' || die "RTX 5090 not detected"
