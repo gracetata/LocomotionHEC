@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -324,6 +325,10 @@ def load_config(config_path: str) -> dict:
         "G1_AMP_ARMHACK_STAND_INTERACTIVE_ENABLE",
         bool(config.get("armhack_stand_interactive_enable", False)),
     )
+    config["armhack_stand_interactive_direct_enter"] = _env_bool(
+        "G1_AMP_ARMHACK_STAND_INTERACTIVE_DIRECT_ENTER",
+        bool(config.get("armhack_stand_interactive_direct_enter", False)),
+    )
     config["armhack_stand_preset_path"] = _resolve_path(
         os.environ.get("G1_AMP_ARMHACK_STAND_PRESET_PATH", config.get("armhack_stand_preset_path", ""))
     )
@@ -365,6 +370,27 @@ def load_config(config_path: str) -> dict:
     )
     config["armhack_walk_enable"] = _env_bool(
         "G1_AMP_ARMHACK_WALK_ENABLE", bool(config.get("armhack_walk_enable", False))
+    )
+    config["policy_switch_enable"] = _env_bool(
+        "G1_AMP_POLICY_SWITCH_ENABLE", bool(config.get("policy_switch_enable", False))
+    )
+    config["policy_switch_walk_policy_path"] = _resolve_path(
+        os.environ.get(
+            "G1_AMP_POLICY_SWITCH_WALK_POLICY_PATH",
+            config.get("policy_switch_walk_policy_path", ""),
+        )
+    )
+    config["policy_switch_walk_policy_sha256"] = os.environ.get(
+        "G1_AMP_POLICY_SWITCH_WALK_POLICY_SHA256",
+        config.get("policy_switch_walk_policy_sha256", ""),
+    ).strip().lower()
+    config["policy_switch_auto_toggle_interval_s"] = _env_float(
+        "G1_AMP_POLICY_SWITCH_AUTO_TOGGLE_INTERVAL_S",
+        float(config.get("policy_switch_auto_toggle_interval_s", -1.0)),
+    )
+    config["policy_switch_auto_toggle_max"] = _env_int(
+        "G1_AMP_POLICY_SWITCH_AUTO_TOGGLE_MAX",
+        int(config.get("policy_switch_auto_toggle_max", 0)),
     )
     config["armhack_walk_pose_path"] = _resolve_path(
         os.environ.get("G1_AMP_ARMHACK_WALK_POSE_PATH", config.get("armhack_walk_pose_path", ""))
@@ -2496,6 +2522,7 @@ def run_mujoco(config: dict) -> None:
         if bool(config.get("armhack_walk_enable", False))
         else None
     )
+    policy_switch_enabled = bool(config.get("policy_switch_enable", False))
     extreme_stand_recovery = (
         ExtremeStandRecoveryPerturbation(config, policy_joint_names)
         if bool(config.get("extreme_stand_recovery_enable", False))
@@ -2505,7 +2532,29 @@ def run_mujoco(config: dict) -> None:
         raise ValueError("ArmHack Stand and Walk adapters cannot be enabled together.")
     if extreme_stand_recovery is not None and (armhack_stand is not None or armhack_walk is not None):
         raise ValueError("Extreme Stand recovery cannot be combined with an ArmHack action adapter.")
-    if armhack_stand is not None:
+    if policy_switch_enabled:
+        if armhack_stand is None or not armhack_stand.interactive:
+            raise ValueError("Policy switch mode requires interactive ArmHack Stand.")
+        if armhack_walk is not None:
+            raise ValueError("Policy switch mode uses Stand as the shared arm adapter; disable ArmHack Walk adapter.")
+        if str(config.get("command_mode", "")).lower() != "keyboard":
+            raise ValueError("Policy switch mode requires keyboard command mode.")
+        auto_toggle_interval = float(config.get("policy_switch_auto_toggle_interval_s", -1.0))
+        auto_toggle_max = int(config.get("policy_switch_auto_toggle_max", 0))
+        if auto_toggle_interval == 0.0 or auto_toggle_max < 0:
+            raise ValueError("Policy switch automatic toggle interval must be non-zero and max non-negative.")
+        automatic_smoke = auto_toggle_interval > 0.0 and auto_toggle_max > 0
+        if (
+            not automatic_smoke
+            and (not bool(config.get("use_glfw", False)) or not bool(config.get("real_time", False)))
+        ):
+            raise ValueError(
+                "Interactive policy switch mode requires GLFW and real time; "
+                "headless runs require explicit automatic toggles."
+            )
+        if not bool(config.get("command_ramp", False)):
+            raise ValueError("Policy switch mode requires command_ramp=True.")
+    if armhack_stand is not None and not policy_switch_enabled:
         if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
             raise ValueError("ArmHack Stand MuJoCo replay requires fixed independent zero commands.")
         if not np.allclose(np.asarray(config["cmd_init"], dtype=np.float32), 0.0, atol=1.0e-8):
@@ -2552,6 +2601,10 @@ def run_mujoco(config: dict) -> None:
         target_command, nav2_segment_info = nav2_replay.sample_window(0.0)
     elif bool(config.get("random_commands", False)):
         target_command = sample_random_command(rng, config)
+    if policy_switch_enabled:
+        # The keyboard reader retains the requested Walk command, but paused
+        # and Stand modes always expose an exact zero locomotion command.
+        target_command = np.zeros(3, dtype=np.float32)
     command = np.zeros(3, dtype=np.float32) if bool(config.get("command_ramp", False)) else target_command.copy()
     action = np.zeros(len(policy_joint_names), dtype=np.float32)
 
@@ -2687,22 +2740,79 @@ def run_mujoco(config: dict) -> None:
 
         print(f"[INFO] Loaded TorchScript policy: {policy_path}")
 
+    infer_walk_policy = None
+    if policy_switch_enabled:
+        walk_policy_path = Path(str(config.get("policy_switch_walk_policy_path", ""))).expanduser().resolve()
+        if not walk_policy_path.is_file() or walk_policy_path.suffix.lower() != ".onnx":
+            raise FileNotFoundError(
+                f"Policy switch Walk actor must be an ONNX file: {walk_policy_path}"
+            )
+        expected_walk_sha = str(config.get("policy_switch_walk_policy_sha256", "")).strip().lower()
+        digest = hashlib.sha256()
+        with walk_policy_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        actual_walk_sha = digest.hexdigest()
+        if expected_walk_sha and actual_walk_sha != expected_walk_sha:
+            raise ValueError(
+                "Policy switch Walk ONNX SHA-256 mismatch: "
+                f"expected={expected_walk_sha} actual={actual_walk_sha}"
+            )
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise RuntimeError("Policy switch mode requires onnxruntime.") from exc
+        walk_session = ort.InferenceSession(
+            str(walk_policy_path), providers=["CPUExecutionProvider"]
+        )
+        walk_input_name = walk_session.get_inputs()[0].name
+        walk_output_name = walk_session.get_outputs()[0].name
+        walk_input_shape = walk_session.get_inputs()[0].shape
+        walk_output_shape = walk_session.get_outputs()[0].shape
+        if walk_input_shape != [1, 96] or walk_output_shape != [1, 29]:
+            raise ValueError(
+                "Policy switch Walk actor must use [1,96] -> [1,29], got "
+                f"{walk_input_shape} -> {walk_output_shape}."
+            )
+
+        def infer_walk_policy(obs: np.ndarray) -> np.ndarray:
+            output = walk_session.run(
+                [walk_output_name],
+                {walk_input_name: obs[None, :].astype(np.float32, copy=False)},
+            )[0]
+            return np.asarray(output, dtype=np.float32).squeeze(0)
+
+        print(
+            f"[INFO] Loaded switch Walk ONNX: {walk_policy_path} sha256={actual_walk_sha}",
+            flush=True,
+        )
+
+    policy_switch_state = {"mode": "paused", "pending_toggle": False}
+
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
         if counter % int(config["control_decimation"]) != 0:
             return action
-        if armhack_stand is not None and armhack_stand.should_hold_default(sim_time):
+        switch_mode = str(policy_switch_state["mode"])
+        if policy_switch_enabled and switch_mode == "paused":
+            assert armhack_stand is not None
+            return armhack_stand.compose_action(np.zeros_like(action), sim_time)
+        stand_selected = armhack_stand is not None and (
+            (not policy_switch_enabled) or switch_mode == "stand"
+        )
+        walk_selected = policy_switch_enabled and switch_mode == "walk"
+        if stand_selected and armhack_stand.should_hold_default(sim_time):
             return armhack_stand.compose_action(np.zeros_like(action), 0.0)
-        if armhack_stand is not None and not armhack_stand.policy_inference_enabled:
+        if stand_selected and not armhack_stand.policy_inference_enabled:
             # Damping/standby simulation: no actor inference before ENTER.
             return armhack_stand.compose_action(np.zeros_like(action), sim_time)
         observation_action = (
             armhack_stand.augment_last_action(action, data, sim_time)
-            if armhack_stand is not None
+            if stand_selected
             else action
         )
         observation_command = (
             armhack_stand.relative_pose_command(data)
-            if armhack_stand is not None
+            if stand_selected
             else command
         )
         obs = build_observation(
@@ -2715,9 +2825,18 @@ def run_mujoco(config: dict) -> None:
             observation_command,
             config,
         )
-        next_action = infer_policy(obs)
-        if armhack_stand is not None:
+        if walk_selected:
+            assert infer_walk_policy is not None
+            next_action = infer_walk_policy(obs)
+        else:
+            next_action = infer_policy(obs)
+        if stand_selected:
             next_action = armhack_stand.filter_policy_action(action, next_action)
+            next_action = armhack_stand.compose_action(next_action, sim_time)
+        elif walk_selected:
+            # Use one shared, interruptible minimum-jerk arm target across both
+            # actors so Enter never introduces an arm discontinuity.
+            assert armhack_stand is not None
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
             next_action = armhack_walk.compose_action(next_action, sim_time)
@@ -2732,10 +2851,49 @@ def run_mujoco(config: dict) -> None:
         next_render_time = 0.0
         status_interval = float(config.get("realtime_status_interval_s", 5.0))
         next_status_time = status_interval
+        auto_toggle_interval = float(config.get("policy_switch_auto_toggle_interval_s", -1.0))
+        auto_toggle_max = int(config.get("policy_switch_auto_toggle_max", 0))
+        next_auto_toggle_time = auto_toggle_interval
+        auto_toggle_count = 0
         try:
             while sim_time < float(config["simulation_duration"]):
                 if viewer is not None and not viewer.is_running():
                     break
+                if (
+                    policy_switch_enabled
+                    and auto_toggle_interval > 0.0
+                    and auto_toggle_count < auto_toggle_max
+                    and sim_time >= next_auto_toggle_time
+                ):
+                    policy_switch_state["pending_toggle"] = True
+                    auto_toggle_count += 1
+                    next_auto_toggle_time += auto_toggle_interval
+                if policy_switch_enabled and bool(policy_switch_state["pending_toggle"]):
+                    policy_switch_state["pending_toggle"] = False
+                    previous_mode = str(policy_switch_state["mode"])
+                    assert armhack_stand is not None
+                    if previous_mode == "paused":
+                        armhack_stand.pending_enter = True
+                        armhack_stand.reset_switch_reference(data, sim_time)
+                        policy_switch_state["mode"] = "stand"
+                        command = np.zeros(3, dtype=np.float32)
+                        target_command = np.zeros(3, dtype=np.float32)
+                        print("[POLICY SWITCH] ENTER: PAUSED -> STAND", flush=True)
+                    elif previous_mode == "stand":
+                        policy_switch_state["mode"] = "walk"
+                        print(
+                            "[POLICY SWITCH] ENTER: STAND -> WALK; command ramps from zero.",
+                            flush=True,
+                        )
+                    else:
+                        policy_switch_state["mode"] = "stand"
+                        command = np.zeros(3, dtype=np.float32)
+                        target_command = np.zeros(3, dtype=np.float32)
+                        armhack_stand.reset_switch_reference(data, sim_time)
+                        print(
+                            "[POLICY SWITCH] ENTER: WALK -> STAND; zero command and new torso SE(2) reference.",
+                            flush=True,
+                        )
                 if armhack_stand is not None and not armhack_stand.process_interaction_requests(sim_time):
                     print("[ArmHack Stand MuJoCo] Q stop requested.", flush=True)
                     break
@@ -2780,7 +2938,11 @@ def run_mujoco(config: dict) -> None:
                 elif joystick is not None:
                     target_command = joystick.read_command()
                 elif keyboard is not None:
-                    keyboard_command = keyboard.read_command()
+                    keyboard_command = (
+                        keyboard.read_command()
+                        if (not policy_switch_enabled or policy_switch_state["mode"] == "walk")
+                        else np.zeros(3, dtype=np.float32)
+                    )
                     if not np.allclose(keyboard_command, target_command, rtol=0.0, atol=1.0e-8):
                         target_command = keyboard_command
                         current_segment_id += 1
@@ -2998,19 +3160,38 @@ def run_mujoco(config: dict) -> None:
             if int(keycode) != 32 and key not in {"P", "Z", "X", "C"}:
                 keyboard.key_callback(keycode)
 
+        def policy_switch_keyboard_callback(keycode: int) -> None:
+            """ENTER toggles actors; SPACE owns arms; motion keys own Walk command."""
+            assert armhack_stand is not None and keyboard is not None
+            key = chr(keycode).upper() if 0 <= int(keycode) < 128 else ""
+            if int(keycode) in {10, 13, 257, 335}:
+                policy_switch_state["pending_toggle"] = True
+            elif int(keycode) == 32:
+                armhack_stand.key_callback(keycode)
+            elif key == "P":
+                armhack_stand.key_callback(32)
+            elif int(keycode) == 256:
+                armhack_stand.stop_requested = True
+            else:
+                keyboard.key_callback(keycode)
+
         key_callback = (
-            armhack_stand.key_callback
-            if armhack_stand is not None and armhack_stand.interactive
+            policy_switch_keyboard_callback
+            if policy_switch_enabled
             else (
-                armhack_walk_keyboard_callback
-                if armhack_walk is not None and keyboard is not None
+                armhack_stand.key_callback
+                if armhack_stand is not None and armhack_stand.interactive
                 else (
-                    armhack_walk.key_callback
-                    if armhack_walk is not None
+                    armhack_walk_keyboard_callback
+                    if armhack_walk is not None and keyboard is not None
                     else (
-                        extreme_stand_recovery.key_callback
-                        if extreme_stand_recovery is not None
-                        else keyboard.key_callback if keyboard is not None else None
+                        armhack_walk.key_callback
+                        if armhack_walk is not None
+                        else (
+                            extreme_stand_recovery.key_callback
+                            if extreme_stand_recovery is not None
+                            else keyboard.key_callback if keyboard is not None else None
+                        )
                     )
                 )
             )

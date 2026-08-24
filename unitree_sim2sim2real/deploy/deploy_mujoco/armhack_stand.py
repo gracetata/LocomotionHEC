@@ -159,6 +159,9 @@ class ArmHackStandReplay:
         self.test_id = str(config.get("armhack_stand_test_id", "all"))
         self.payload_kg = float(config.get("armhack_stand_payload_kg", 0.0))
         self.interactive = bool(config.get("armhack_stand_interactive_enable", False))
+        self.interactive_direct_enter = bool(
+            config.get("armhack_stand_interactive_direct_enter", False)
+        )
         self.ankle_diagnostics_enabled = bool(
             config.get("armhack_stand_ankle_diagnostics_enable", True)
         )
@@ -270,6 +273,7 @@ class ArmHackStandReplay:
         self._step_phase = 0
         self._step_lifted = np.zeros(2, dtype=bool)
         self._step_phase_start_time_s = 0.0
+        self._policy_takeover_time_s = 0.0
         self._reset_root_xy: np.ndarray | None = None
         self._reset_root_yaw = 0.0
         self._phase_action_index = 27
@@ -374,6 +378,41 @@ class ArmHackStandReplay:
             return
         self.policy_active = True
         self.policy_activation_time_s = float(sim_time)
+        if self.interactive_direct_enter:
+            self.startup_complete = True
+            self.startup_completion_announced = True
+            self._trim_timeline_at(sim_time)
+            assert self.interactive_sequencer is not None
+            self.interactive_sequencer.active_index = 0
+            self.interactive_sequencer.start_positions = self.last_target.copy()
+            self.interactive_sequencer.target_positions = self.interactive_sequencer.poses[0].copy()
+            self.interactive_sequencer.start_time = float(sim_time)
+            # sample_target() selects the sequencer after csv_duration_s.  Shift
+            # the activation clock so direct policy entry remains smooth while
+            # skipping the legacy 25.5 s scripted arm startup.
+            self.policy_activation_time_s = float(sim_time) - self.csv_duration_s - 1.0e-6
+            transition_end = float(sim_time) + self.interactive_sequencer.transition_s
+            self.timeline.extend(
+                [
+                    {
+                        "kind": "interactive_direct_enter_transition",
+                        "label": self.interactive_sequencer.pose_ids[0],
+                        "start_s": float(sim_time),
+                        "end_s": transition_end,
+                    },
+                    {
+                        "kind": "interactive_pose_hold",
+                        "label": self.interactive_sequencer.pose_ids[0],
+                        "start_s": transition_end,
+                        "end_s": float("inf"),
+                    },
+                ]
+            )
+            print(
+                "[ArmHack Stand MuJoCo] ENTER -> POLICY ON; direct minimum-jerk arm ready transition.",
+                flush=True,
+            )
+            return
         self.startup_complete = False
         self._trim_timeline_at(sim_time)
         for stage in self.startup_timeline:
@@ -678,6 +717,7 @@ class ArmHackStandReplay:
             self._step_phase = 0
             self._step_lifted[:] = False
         self._step_phase_start_time_s = float(time_s)
+        self._policy_takeover_time_s = float(time_s)
         self._step_contract_ready = True
         if self._torso_body_id is not None:
             self.torso_reference = self._torso_pose(data, self._torso_body_id)
@@ -686,6 +726,10 @@ class ArmHackStandReplay:
             f"phase={self._step_phase} target_error_m={error.tolist()} contact={contact.tolist()}",
             flush=True,
         )
+
+    def reset_switch_reference(self, data, time_s: float) -> None:
+        """Capture the current torso SE(2) and rebuild the ordered 30 cm targets."""
+        self._initialize_ordered_step_state(data, float(time_s))
 
     def should_hold_default(self, time_s: float) -> bool:
         """The same Stand actor supplies phase-two balance during settling."""
@@ -708,7 +752,7 @@ class ArmHackStandReplay:
     def augment_last_action(self, last_action: np.ndarray, data, time_s: float) -> np.ndarray:
         """Mirror IsaacLab's phase-augmented last-action observation."""
         augmented = np.asarray(last_action, dtype=np.float32).copy()
-        if float(time_s) < self.policy_settle_s:
+        if float(time_s) - self._policy_takeover_time_s < self.policy_settle_s:
             # Phase two is the learned planted hold. Use the same actor (not a
             # separate damping policy) until MuJoCo contacts become valid.
             augmented[self._phase_action_index] = -1.0
