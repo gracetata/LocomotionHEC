@@ -417,16 +417,16 @@ class PPO:
 
     def broadcast_parameters(self) -> None:
         """Broadcast model parameters to all GPUs."""
-        # Obtain the model parameters on current GPU
-        model_params = [self.policy.state_dict()]
+        # Parameters and buffers already live on the rank-local CUDA device.
+        # Broadcast them directly instead of serializing whole state dicts
+        # through ``broadcast_object_list``.  The object collective creates an
+        # auxiliary size tensor whose device selection can fail with NCCL on
+        # multi-GPU Blackwell hosts.
+        for tensor in self.policy.state_dict().values():
+            torch.distributed.broadcast(tensor, src=0)
         if self.rnd:
-            model_params.append(self.rnd.predictor.state_dict())
-        # Broadcast the model parameters
-        torch.distributed.broadcast_object_list(model_params, src=0)
-        # Load the model parameters on all GPUs from source GPU
-        self.policy.load_state_dict(model_params[0])
-        if self.rnd:
-            self.rnd.predictor.load_state_dict(model_params[1])
+            for tensor in self.rnd.predictor.state_dict().values():
+                torch.distributed.broadcast(tensor, src=0)
 
     def reduce_parameters(self) -> None:
         """Collect gradients from all GPUs and average them.
