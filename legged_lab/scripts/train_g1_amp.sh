@@ -189,6 +189,8 @@ BASELINE_KL_MIN_STD=${BASELINE_KL_MIN_STD:-1e-4}
 QUIET_TERMINAL=${QUIET_TERMINAL:-True}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-${LEGGED_LAB_DIR}/logs/rsl_rl/g1_amp/train_${RUN_NAME:-g1_amp}_$(date +%Y%m%d_%H%M%S).log}
 EXTRA_HYDRA_ARGS=${EXTRA_HYDRA_ARGS:-}
+DISTRIBUTED=${DISTRIBUTED:-False}
+NPROC_PER_NODE=${NPROC_PER_NODE:-2}
 
 if [[ ! -x "${ISAACLAB_PYTHON}" ]]; then
     echo "Error: ISAACLAB_PYTHON is not executable: ${ISAACLAB_PYTHON}" >&2
@@ -268,6 +270,9 @@ args=(
     agent.algorithm.amp_cfg.amp_discriminator.task_style_lerp="${TASK_STYLE_LERP}"
     agent.algorithm.amp_cfg.grad_penalty_scale="${AMP_GRAD_PENALTY_SCALE}"
 )
+if [[ "${DISTRIBUTED}" == "True" || "${DISTRIBUTED}" == "true" || "${DISTRIBUTED}" == "1" ]]; then
+    args+=(--distributed)
+fi
 if [[ -n "${ENTROPY_COEF:-}" ]]; then
     args+=(agent.algorithm.entropy_coef="${ENTROPY_COEF}")
 fi
@@ -367,6 +372,7 @@ echo "Tracking          : lin_w=${TRACK_LIN_WEIGHT} yaw_w=${TRACK_ANG_WEIGHT} li
 echo "AMP               : style=${STYLE_REWARD_SCALE} lerp=${TASK_STYLE_LERP} grad_penalty=${AMP_GRAD_PENALTY_SCALE} entropy=${ENTROPY_COEF:-cfg}"
 echo "Baseline KL       : enable=${BASELINE_KL_ENABLE} scale=${BASELINE_KL_SCALE} checkpoint=${BASELINE_KL_CHECKPOINT}"
 echo "Quiet Terminal    : ${QUIET_TERMINAL}"
+echo "Distributed       : ${DISTRIBUTED} nproc_per_node=${NPROC_PER_NODE}"
 if [[ "${QUIET_TERMINAL}" == "True" || "${QUIET_TERMINAL}" == "true" || "${QUIET_TERMINAL}" == "1" ]]; then
     echo "Train Log File    : ${TRAIN_LOG_FILE}"
 fi
@@ -374,10 +380,18 @@ echo "Extra Hydra Args  : ${EXTRA_HYDRA_ARGS}"
 echo "====================================="
 
 cd "${LEGGED_LAB_DIR}"
+launcher=("${ISAACLAB_PYTHON}")
+if [[ "${DISTRIBUTED}" == "True" || "${DISTRIBUTED}" == "true" || "${DISTRIBUTED}" == "1" ]]; then
+    [[ "${NPROC_PER_NODE}" =~ ^[1-9][0-9]*$ ]] || {
+        echo "Error: NPROC_PER_NODE must be a positive integer" >&2
+        exit 1
+    }
+    launcher+=( -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node="${NPROC_PER_NODE}" )
+fi
 if [[ "${QUIET_TERMINAL}" == "True" || "${QUIET_TERMINAL}" == "true" || "${QUIET_TERMINAL}" == "1" ]]; then
     mkdir -p "$(dirname "${TRAIN_LOG_FILE}")"
     echo "Training stdout/stderr redirected to: ${TRAIN_LOG_FILE}"
-    "${ISAACLAB_PYTHON}" "${args[@]}" ${EXTRA_HYDRA_ARGS} >"${TRAIN_LOG_FILE}" 2>&1
+    "${launcher[@]}" "${args[@]}" ${EXTRA_HYDRA_ARGS} >"${TRAIN_LOG_FILE}" 2>&1
 else
-    "${ISAACLAB_PYTHON}" "${args[@]}" ${EXTRA_HYDRA_ARGS}
+    "${launcher[@]}" "${args[@]}" ${EXTRA_HYDRA_ARGS}
 fi
