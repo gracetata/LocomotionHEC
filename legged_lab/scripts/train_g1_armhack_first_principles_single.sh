@@ -22,7 +22,10 @@ RUN_NAME=${RUN_NAME:-armhack_${MODEL}_first_principles_single_2000_20260823}
 TRAIN_LOG_FILE=${TRAIN_LOG_FILE:-${LEGGED_LAB_DIR}/logs/monitoring/${RUN_NAME}.log}
 
 die() { echo "Error: $*" >&2; exit 1; }
-[[ "$(hostname)" == "tata-futurelab" ]] || die "training is locked to the local Future 5090"
+case "$(hostname)" in
+    tata-futurelab|hecggdz-System-Product-Name) ;;
+    *) die "training host is not an approved Future/HEC 5090 worker" ;;
+esac
 [[ -x "${ISAACLAB_PYTHON}" ]] || die "IsaacLab Python missing: ${ISAACLAB_PYTHON}"
 nvidia-smi --query-gpu=name --format=csv,noheader | grep -q 'RTX 5090' || die "RTX 5090 not detected"
 [[ "${MODEL}" == "stand" || "${MODEL}" == "walk" ]] || die "MODEL must be stand or walk"
