@@ -32,6 +32,16 @@ G1_WALK_RESPONSE_MODE_CONFIG_PATH = os.path.join(
     "task_sampling_config.json",
 )
 
+G1_WALK_DEADZONE_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "armhack_walk_deadzone_50hz",
+    "task_sampling_config.json",
+)
+
 
 def _step_params(pelvis_cfg, ankle_cfg, contact_cfg) -> dict:
     return {
@@ -721,6 +731,78 @@ class G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg(
 class G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg_PLAY(
     G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg
 ):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1ArmHackWalkDeadzoneYawSingleEnvCfg(
+    G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg
+):
+    """Minimize slow-command dead zones and enforce upright pure yaw."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = G1_WALK_DEADZONE_MODE_CONFIG_PATH
+        self.commands.base_velocity.mode_probability = 0.98
+        self.commands.base_velocity.mode_command_clip_min = (-0.40, -0.30, -0.65)
+        self.commands.base_velocity.mode_command_clip_max = (0.65, 0.30, 0.65)
+
+        # Exact zero may step in place. Do not train a discontinuous static
+        # controller at zero while every neighboring command requires gait.
+        self.rewards.strict_zero_body_motion_l2.weight = 0.0
+        self.rewards.strict_zero_feet_motion_l2.weight = 0.0
+        self.rewards.strict_zero_joint_vel_l2.weight = 0.0
+        self.rewards.strict_zero_double_support.weight = 0.0
+        self.rewards.nonzero_single_stance.weight = 3.0
+        self.rewards.rapid_footstep_l1.weight = -0.5
+
+        self.rewards.command_response_shortfall_l1.weight = -5.0
+        self.rewards.command_response_shortfall_l1.params["min_speed_fraction"] = 0.80
+        self.rewards.useful_low_speed_tracking_l2.weight = -3.0
+        self.rewards.useful_low_speed_tracking_l2.params.update(
+            {"deadband": 0.01, "linear_error_scale": 0.08, "yaw_error_scale": 0.12}
+        )
+        self.rewards.relative_command_response_shortfall_l1 = RewTerm(
+            func=mdp.relative_command_response_shortfall_reward_l1,
+            weight=-3.0,
+            params={
+                "command_name": "base_velocity",
+                "epsilon": 0.01,
+                "min_speed_fraction": 0.80,
+                "min_lin_normalizer": 0.02,
+                "min_yaw_normalizer": 0.06,
+            },
+        )
+
+        self.rewards.pure_yaw_planar_drift_l2.weight = -8.0
+        self.rewards.pure_yaw_rate_error_l2.weight = -6.0
+        self.rewards.pure_yaw_torso_pitch_l2.weight = -5.0
+        self.rewards.pure_yaw_torso_roll_l2 = RewTerm(
+            func=mdp.pure_yaw_torso_roll_l2,
+            weight=-5.0,
+            params={
+                "command_name": "base_velocity",
+                "max_translation_command": 0.005,
+                "min_yaw_command": 0.05,
+                "std": 0.10,
+                "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+            },
+        )
+        self.rewards.flat_orientation_l2.weight = -1.5
+        self.rewards.torso_roll_pitch_l2.weight = -0.25
+        self.rewards.track_lin_vel_xy_exp.weight = 3.5
+        self.rewards.track_ang_vel_z_exp.weight = 4.0
+        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.8
+        self.rewards.track_torso_yaw_rate_exp.weight = 2.0
+        self.rewards.ankle_distance_30cm.weight = 12.0
+        self.rewards.ankle_distance_30cm.params["std"] = 0.04
+
+
+@configclass
+class G1ArmHackWalkDeadzoneYawSingleEnvCfg_PLAY(G1ArmHackWalkDeadzoneYawSingleEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 48
