@@ -15,6 +15,7 @@ NUM_ENVS=${NUM_ENVS:-6144}
 MAX_ITERATIONS=${MAX_ITERATIONS:-2000}
 SEED=${SEED:-20260823}
 DEVICE=${DEVICE:-cuda:0}
+ALLOW_CONCURRENT_GPU_RUNS=${ALLOW_CONCURRENT_GPU_RUNS:-False}
 ISAACLAB_PYTHON=${ISAACLAB_PYTHON:-/home/tata/anaconda3/envs/env_isaaclab/bin/python}
 HANDOFF_STATE_LIBRARY=${HANDOFF_STATE_LIBRARY:-}
 HANDOFF_RESET_PROBABILITY=${HANDOFF_RESET_PROBABILITY:-0.0}
@@ -33,7 +34,14 @@ nvidia-smi --query-gpu=name --format=csv,noheader | grep -q 'RTX 5090' || die "R
 if [[ "${SMOKE}" != "True" && "${MAX_ITERATIONS}" -lt 2000 ]]; then
     die "formal continuation runs must be at least 2000 iterations"
 fi
-if pgrep -af 'scripts/rsl_rl/train.py.*ArmHack.*FirstPrinciplesSingle' >/dev/null; then
+if [[ "${ALLOW_CONCURRENT_GPU_RUNS}" == "True" || "${ALLOW_CONCURRENT_GPU_RUNS}" == "true" || \
+      "${ALLOW_CONCURRENT_GPU_RUNS}" == "1" ]]; then
+    [[ "${DEVICE}" =~ ^cuda:[0-9]+$ ]] || \
+        die "concurrent worker runs require an explicit cuda:<index> device"
+    if pgrep -af "scripts/rsl_rl/train.py.*ArmHack.*FirstPrinciplesSingle.*--device ${DEVICE}([[:space:]]|$)" >/dev/null; then
+        die "another first-principles ArmHack training process is active on ${DEVICE}"
+    fi
+elif pgrep -af 'scripts/rsl_rl/train.py.*ArmHack.*FirstPrinciplesSingle' >/dev/null; then
     die "another first-principles ArmHack training process is active"
 fi
 
