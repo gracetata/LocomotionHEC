@@ -41,6 +41,46 @@ def relative_command_response_shortfall_l1(
     return lin_penalty + yaw_penalty
 
 
+def signed_command_response_ratio(
+    command: torch.Tensor,
+    actual_lin_vel_xy_b: torch.Tensor,
+    actual_yaw_rate_b: torch.Tensor,
+    *,
+    min_linear_command: float = 0.01,
+    min_yaw_command: float = 0.05,
+    minimum_ratio: float = -1.0,
+    maximum_ratio: float = 1.25,
+) -> torch.Tensor:
+    """Reward signed per-axis command response with a dense zero-centered signal.
+
+    Unlike an error kernel, a stationary policy receives exactly zero and any
+    small response in the commanded direction is immediately positive.  This
+    is useful when a stable gait has fallen into a stop-at-low-command local
+    optimum.  Each active command component is normalized independently and
+    the result is averaged so diagonal commands cannot dominate the return.
+    """
+    if min_linear_command <= 0.0 or min_yaw_command <= 0.0:
+        raise ValueError("Signed-response command thresholds must be positive.")
+    if minimum_ratio >= maximum_ratio:
+        raise ValueError("minimum_ratio must be smaller than maximum_ratio.")
+    if actual_lin_vel_xy_b.shape != command[:, :2].shape:
+        raise ValueError("Planar velocity response must have shape [num_envs, 2].")
+    if actual_yaw_rate_b.shape != command[:, 2].shape:
+        raise ValueError("Yaw-rate response must have shape [num_envs].")
+
+    actual = torch.cat([actual_lin_vel_xy_b, actual_yaw_rate_b.unsqueeze(1)], dim=1)
+    thresholds = torch.tensor(
+        [min_linear_command, min_linear_command, min_yaw_command],
+        device=command.device,
+        dtype=command.dtype,
+    )
+    active = torch.abs(command) >= thresholds
+    ratio = torch.sign(command) * actual / torch.maximum(torch.abs(command), thresholds)
+    ratio = torch.clamp(ratio, min=float(minimum_ratio), max=float(maximum_ratio))
+    active_count = torch.clamp(torch.sum(active.float(), dim=1), min=1.0)
+    return torch.sum(ratio * active.float(), dim=1) / active_count
+
+
 def allowed_footstep_cadence_hz(
     command: torch.Tensor,
     base_hz: float = 1.6,

@@ -759,7 +759,32 @@ class G1ArmHackWalkDeadzoneYawSingleEnvCfg(
         self.rewards.nonzero_single_stance.weight = 3.0
         self.rewards.rapid_footstep_l1.weight = -0.5
 
-        self.rewards.command_response_shortfall_l1.weight = -5.0
+        # Acquisition needs a dense positive gradient: the preceding run was
+        # stable but converged to zero response for backward/lateral/pure-yaw.
+        # This remains one actor; there is no teacher, expert, router or bridge.
+        self.rewards.signed_command_response = RewTerm(
+            func=mdp.signed_command_response_reward,
+            weight=15.0,
+            params={
+                "command_name": "base_velocity",
+                "min_linear_command": 0.01,
+                "min_yaw_command": 0.05,
+                "minimum_ratio": -1.0,
+                "maximum_ratio": 1.25,
+            },
+        )
+        self.rewards.two_goal_signed_root_response = RewTerm(
+            func=mdp.two_goal_signed_root_response,
+            weight=10.0,
+            params={
+                "command_name": "base_velocity",
+                "min_lateral_command": 0.05,
+                "min_yaw_command": 0.05,
+                "minimum_ratio": -1.0,
+                "maximum_ratio": 1.25,
+            },
+        )
+        self.rewards.command_response_shortfall_l1.weight = -4.0
         self.rewards.command_response_shortfall_l1.params["min_speed_fraction"] = 0.80
         self.rewards.useful_low_speed_tracking_l2.weight = -3.0
         self.rewards.useful_low_speed_tracking_l2.params.update(
@@ -777,12 +802,15 @@ class G1ArmHackWalkDeadzoneYawSingleEnvCfg(
             },
         )
 
-        self.rewards.pure_yaw_planar_drift_l2.weight = -8.0
-        self.rewards.pure_yaw_rate_error_l2.weight = -6.0
-        self.rewards.pure_yaw_torso_pitch_l2.weight = -5.0
+        # First acquire turning, then tighten drift/upright constraints in the
+        # next full 2000-iteration refinement.  Strong guards at acquisition
+        # made moving worse than remaining stationary.
+        self.rewards.pure_yaw_planar_drift_l2.weight = -2.0
+        self.rewards.pure_yaw_rate_error_l2.weight = -4.0
+        self.rewards.pure_yaw_torso_pitch_l2.weight = -1.5
         self.rewards.pure_yaw_torso_roll_l2 = RewTerm(
             func=mdp.pure_yaw_torso_roll_l2,
-            weight=-5.0,
+            weight=-1.5,
             params={
                 "command_name": "base_velocity",
                 "max_translation_command": 0.005,
@@ -797,7 +825,7 @@ class G1ArmHackWalkDeadzoneYawSingleEnvCfg(
         self.rewards.track_ang_vel_z_exp.weight = 4.0
         self.rewards.track_torso_lin_vel_xy_exp.weight = 1.8
         self.rewards.track_torso_yaw_rate_exp.weight = 2.0
-        self.rewards.ankle_distance_30cm.weight = 12.0
+        self.rewards.ankle_distance_30cm.weight = 8.0
         self.rewards.ankle_distance_30cm.params["std"] = 0.04
 
 

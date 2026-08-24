@@ -35,6 +35,7 @@ from .reward_math import (
     convex_footprint_signed_clearance_xy,
     nonzero_single_stance_command_scale,
     relative_command_response_shortfall_l1,
+    signed_command_response_ratio,
     swept_convex_footprint_signed_clearance_xy,
     touchdown_pose_progress,
     two_goal_command_masks,
@@ -2611,6 +2612,29 @@ def relative_command_response_shortfall_reward_l1(
         min_speed_fraction=min_speed_fraction,
         min_lin_normalizer=min_lin_normalizer,
         min_yaw_normalizer=min_yaw_normalizer,
+    )
+
+
+def signed_command_response_reward(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_linear_command: float = 0.01,
+    min_yaw_command: float = 0.05,
+    minimum_ratio: float = -1.0,
+    maximum_ratio: float = 1.25,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward dense signed response for every active velocity command axis."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    return signed_command_response_ratio(
+        command=command,
+        actual_lin_vel_xy_b=asset.data.root_lin_vel_b[:, :2],
+        actual_yaw_rate_b=asset.data.root_ang_vel_b[:, 2],
+        min_linear_command=min_linear_command,
+        min_yaw_command=min_yaw_command,
+        minimum_ratio=minimum_ratio,
+        maximum_ratio=maximum_ratio,
     )
 
 
