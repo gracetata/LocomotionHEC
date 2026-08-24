@@ -1124,6 +1124,11 @@ def _sequential_foot_step_state(
             "right_complete_event": torch.zeros(env.num_envs, dtype=torch.bool, device=env.device),
             "left_lift_event": torch.zeros(env.num_envs, dtype=torch.bool, device=env.device),
             "right_lift_event": torch.zeros(env.num_envs, dtype=torch.bool, device=env.device),
+            "extra_lift_event": torch.zeros(env.num_envs, 2, dtype=torch.bool, device=env.device),
+            "lift_count": torch.zeros(env.num_envs, 2, dtype=torch.long, device=env.device),
+            "touchdown_count": torch.zeros(env.num_envs, 2, dtype=torch.long, device=env.device),
+            "path_length_xy": torch.zeros(env.num_envs, 2, device=env.device),
+            "previous_foot_xy": foot_pos[:, :, :2].detach().clone(),
             "phase_one_training_reset": torch.zeros(env.num_envs, dtype=torch.bool, device=env.device),
             "previous_contact": contact.detach().clone(),
             "last_episode_step": torch.full(
@@ -1185,6 +1190,14 @@ def _sequential_foot_step_state(
         state["right_complete_event"][reset_mask] = False
         state["left_lift_event"][reset_mask] = False
         state["right_lift_event"][reset_mask] = False
+        state["extra_lift_event"][reset_mask] = False
+        reset_counts = torch.stack(
+            ((requested_phase >= 1).long(), (requested_phase >= 2).long()), dim=1
+        )
+        state["lift_count"][reset_mask] = reset_counts[reset_mask]
+        state["touchdown_count"][reset_mask] = reset_counts[reset_mask]
+        state["path_length_xy"][reset_mask] = 0.0
+        state["previous_foot_xy"][reset_mask] = reset_foot_pos[reset_mask, :, :2].detach()
         state["previous_contact"][reset_mask] = contact[reset_mask].detach()
         state["initialized"][reset_mask] = True
         left_error = torch.linalg.norm(
@@ -1207,7 +1220,17 @@ def _sequential_foot_step_state(
         state["right_complete_event"].zero_()
         state["left_lift_event"].zero_()
         state["right_lift_event"].zero_()
+        state["extra_lift_event"].zero_()
         landing_event = contact & (~state["previous_contact"])
+        foot_delta_xy = torch.linalg.norm(
+            foot_pos[:, :, :2] - state["previous_foot_xy"], dim=2
+        )
+        state["path_length_xy"][:, 0] += torch.where(
+            update_mask & (phase_before == 0), foot_delta_xy[:, 0], 0.0
+        )
+        state["path_length_xy"][:, 1] += torch.where(
+            update_mask & (phase_before == 1), foot_delta_xy[:, 1], 0.0
+        )
         phase_elapsed_s = (
             episode_step - state["phase_start_step"]
         ).to(dtype=foot_pos.dtype) * float(env.step_dt)
@@ -1225,8 +1248,17 @@ def _sequential_foot_step_state(
         )
         state["left_lift_event"][left_new_lift] = True
         state["right_lift_event"][right_new_lift] = True
+        state["extra_lift_event"][:, 0] = left_new_lift & (state["lift_count"][:, 0] >= 1)
+        state["extra_lift_event"][:, 1] = right_new_lift & (state["lift_count"][:, 1] >= 1)
+        state["lift_count"][left_new_lift, 0] += 1
+        state["lift_count"][right_new_lift, 1] += 1
         state["left_lifted"] |= left_new_lift
         state["right_lifted"] |= right_new_lift
+
+        left_touchdown = update_mask & (phase_before == 0) & state["left_lifted"] & landing_event[:, 0]
+        right_touchdown = update_mask & (phase_before == 1) & state["right_lifted"] & landing_event[:, 1]
+        state["touchdown_count"][left_touchdown, 0] += 1
+        state["touchdown_count"][right_touchdown, 1] += 1
 
         left_complete = (
             update_mask
@@ -1281,6 +1313,7 @@ def _sequential_foot_step_state(
         state["previous_active_error"][left_complete] = foot_error[left_complete, 1].detach()
         state["last_episode_step"][update_mask] = episode_step[update_mask]
         state["previous_contact"][update_mask] = contact[update_mask].detach()
+        state["previous_foot_xy"][update_mask] = foot_pos[update_mask, :, :2].detach()
 
     state["foot_pos"] = foot_pos
     state["foot_error"] = torch.linalg.norm(foot_pos[:, :, :2] - state["targets_xy"], dim=2)
@@ -1700,6 +1733,162 @@ def sequential_support_foot_drift_l2(
         torch.sum(torch.square(phase_one_support_error), dim=1),
     )
     return support_error_l2 * (state["phase"] < 2).float()
+
+
+def sequential_repeated_lift_event(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """One-shot signal when either foot starts a second lift attempt."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torch.sum(state["extra_lift_event"].float(), dim=1)
+
+
+def sequential_step_count_excess(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Penalize lift or touchdown counts beyond exactly one per foot."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    lift_excess = torch.clamp(state["lift_count"] - 1, min=0)
+    touchdown_excess = torch.clamp(state["touchdown_count"] - 1, min=0)
+    return torch.sum((lift_excess + touchdown_excess).float(), dim=1)
+
+
+def sequential_exact_step_budget_success(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Reward phase-two states reached with one lift and touchdown per foot."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    exact = torch.all(state["lift_count"] == 1, dim=1) & torch.all(
+        state["touchdown_count"] == 1, dim=1
+    )
+    return exact.float() * (state["phase"] >= 2).float()
+
+
+def sequential_active_contact_slide_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+    velocity_scale_mps: float = 0.05,
+) -> torch.Tensor:
+    """Penalize moving the active foot laterally while it remains in contact."""
+    if velocity_scale_mps <= 0.0:
+        raise ValueError("contact-slide velocity scale must be positive.")
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    asset: Articulation = env.scene[foot_cfg.name]
+    active_index = torch.where(state["phase"] == 0, 0, 1)
+    velocity_xy = asset.data.body_lin_vel_w[:, foot_cfg.body_ids, :2]
+    active_velocity = velocity_xy.gather(
+        1, active_index.view(-1, 1, 1).expand(-1, 1, 2)
+    ).squeeze(1)
+    active_contact = state["contact"].gather(1, active_index.unsqueeze(1)).squeeze(1)
+    return (
+        torch.sum(torch.square(active_velocity / float(velocity_scale_mps)), dim=1)
+        * active_contact.float()
+        * (state["phase"] < 2).float()
+    )
+
+
+def sequential_active_path_excess_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+    path_ratio: float = 1.25,
+    margin_m: float = 0.02,
+) -> torch.Tensor:
+    """Penalize a swing path longer than one direct, smooth step."""
+    if path_ratio < 1.0 or margin_m <= 0.0:
+        raise ValueError("path ratio must be >=1 and margin must be positive.")
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    direct = torch.linalg.norm(state["targets_xy"] - state["initial_foot_xy"], dim=2)
+    allowed = float(path_ratio) * direct + float(margin_m)
+    excess = torch.clamp(state["path_length_xy"] - allowed, min=0.0) / float(margin_m)
+    active_index = torch.where(state["phase"] == 0, 0, 1)
+    active_excess = excess.gather(1, active_index.unsqueeze(1)).squeeze(1)
+    return torch.square(active_excess) * (state["phase"] < 2).float()
+
+
+def sequential_post_completion_torso_xy_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Strong reset-relative torso XY constraint after both steps."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torso_xy_position_l2(env, asset_cfg=torso_cfg) * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_torso_yaw_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Strong reset-relative torso yaw constraint after both steps."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torso_yaw_l2(env, target_yaw=0.0, asset_cfg=torso_cfg) * (state["phase"] >= 2).float()
 
 
 def sequential_post_completion_airborne(

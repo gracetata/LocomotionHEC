@@ -13,6 +13,7 @@ def test_exactly_two_single_actor_tasks_are_registered_by_design():
     assert "G1ArmHackStandFirstPrinciplesSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesSingleEnvCfg" in text
     assert "G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg" in text
+    assert "G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg" in text
@@ -41,6 +42,9 @@ def test_objectives_and_bidirectional_producer_reset_are_explicit():
         "post_completion_ankle_torque_l2",
         "sequential_active_foot_air_time_excess_l2",
         "sequential_active_foot_descent_exp",
+        "sequential_repeated_lift_event",
+        "sequential_active_contact_slide_l2",
+        "post_completion_torso_xy_l2",
         "ankle_distance_30cm",
         "useful_low_speed_tracking_l2",
         "pure_yaw_planar_drift_l2",

@@ -337,6 +337,118 @@ class G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg_PLAY(
 
 
 @configclass
+class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
+    G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg
+):
+    """Enforce exactly one left step, one right step, then reset-relative hold."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        pelvis_cfg = SceneEntityCfg("robot", body_names="pelvis")
+        torso_cfg = SceneEntityCfg("robot", body_names="torso_link")
+        ankle_cfg = SceneEntityCfg(
+            "robot",
+            body_names=["left_ankle_roll_link", "right_ankle_roll_link"],
+            preserve_order=True,
+        )
+        contact_cfg = SceneEntityCfg(
+            "contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+        )
+        step = _step_params(pelvis_cfg, ankle_cfg, contact_cfg)
+        step["landing_tolerance_m"] = 0.025
+        step["min_step_duration_s"] = 0.45
+        self.events.reset_robot_joints.params.update(
+            {
+                "phase_one_probability": 0.25,
+                "phase_two_probability": 0.25,
+                "asymmetric_support_probability": 0.50,
+            }
+        )
+        sequential_terms = (
+            "sequential_foot_step_progress",
+            "sequential_foot_step_target_exp",
+            "sequential_foot_step_clearance_exp",
+            "sequential_active_foot_contact",
+            "sequential_active_foot_clearance_l2",
+            "sequential_active_foot_upward_velocity",
+            "sequential_active_foot_velocity_l2",
+            "sequential_active_foot_single_support",
+            "sequential_foot_step_landing_exp",
+            "sequential_foot_step_completion",
+            "sequential_foot_step_lift",
+            "sequential_foot_step_order_violation",
+            "sequential_foot_final_target_l2",
+            "sequential_final_ankle_distance_exp",
+            "sequential_support_foot_drift_l2",
+            "sequential_active_foot_air_time_excess_l2",
+            "sequential_active_foot_descent_exp",
+            "post_completion_airborne",
+            "post_completion_foot_motion_l2",
+            "post_completion_joint_vel_l2",
+            "post_completion_action_rate_l2",
+            "post_completion_contact_imbalance_l2",
+            "post_completion_ankle_torque_l2",
+        )
+        for term_name in sequential_terms:
+            term = getattr(self.rewards, term_name)
+            if "landing_tolerance_m" in term.params:
+                term.params["landing_tolerance_m"] = 0.025
+            if "min_step_duration_s" in term.params:
+                term.params["min_step_duration_s"] = 0.45
+
+        self.rewards.sequential_active_foot_contact.weight = -30.0
+        self.rewards.sequential_foot_step_landing_exp.weight = 200.0
+        self.rewards.sequential_foot_step_completion.weight = 300.0
+        self.rewards.sequential_foot_final_target_l2.weight = -200.0
+        self.rewards.sequential_support_foot_drift_l2.weight = -250.0
+        self.rewards.sequential_repeated_lift_event = RewTerm(
+            func=mdp.sequential_repeated_lift_event, weight=-300.0, params=step
+        )
+        self.rewards.sequential_step_count_excess = RewTerm(
+            func=mdp.sequential_step_count_excess, weight=-30.0, params=step
+        )
+        self.rewards.sequential_exact_step_budget_success = RewTerm(
+            func=mdp.sequential_exact_step_budget_success, weight=10.0, params=step
+        )
+        self.rewards.sequential_active_contact_slide_l2 = RewTerm(
+            func=mdp.sequential_active_contact_slide_l2,
+            weight=-5.0,
+            params={**step, "velocity_scale_mps": 0.05},
+        )
+        self.rewards.sequential_active_path_excess_l2 = RewTerm(
+            func=mdp.sequential_active_path_excess_l2,
+            weight=-2.0,
+            params={**step, "path_ratio": 1.20, "margin_m": 0.02},
+        )
+        self.rewards.post_completion_torso_xy_l2 = RewTerm(
+            func=mdp.sequential_post_completion_torso_xy_l2,
+            weight=-120.0,
+            params={**step, "torso_cfg": torso_cfg},
+        )
+        self.rewards.post_completion_torso_yaw_l2 = RewTerm(
+            func=mdp.sequential_post_completion_torso_yaw_l2,
+            weight=-60.0,
+            params={**step, "torso_cfg": torso_cfg},
+        )
+        self.rewards.post_completion_airborne.weight = -100.0
+        self.rewards.post_completion_foot_motion_l2.weight = -5.0
+        self.rewards.post_completion_joint_vel_l2.weight = -0.05
+        self.rewards.post_completion_action_rate_l2.weight = -0.20
+        self.rewards.post_completion_contact_imbalance_l2.weight = -5.0
+        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.30
+
+
+@configclass
+class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg_PLAY(
+    G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
 class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
     """Acquisition stage: retain the gait while arms begin to move."""
 

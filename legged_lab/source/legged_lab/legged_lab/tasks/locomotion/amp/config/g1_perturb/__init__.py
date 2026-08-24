@@ -68,6 +68,38 @@ gym.register(
 )
 
 gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesOneStepSingle-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_armhack_first_principles_single_env_cfg:"
+            "G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1ArmHackStandFirstPrinciplesSingleRunnerCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesOneStepSingle-Play-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_armhack_first_principles_single_env_cfg:"
+            "G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg_PLAY"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1ArmHackStandFirstPrinciplesSingleRunnerCfg"
+        ),
+    },
+)
+
+gym.register(
     id="LeggedLab-Isaac-AMP-G1-ArmHackWalkFirstPrinciplesSingle-v0",
     entry_point="legged_lab.envs:G1PerturbAmpEnv",
     disable_env_checker=True,

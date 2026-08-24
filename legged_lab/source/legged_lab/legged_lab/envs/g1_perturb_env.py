@@ -321,6 +321,18 @@ class G1PerturbAmpEnv(ManagerBasedAmpEnv):
             log_extras["ArmHack/stand_double_contact_fraction"] = torch.mean(
                 torch.all(sequential_state["contact"], dim=1).float()
             )
+            log_extras["ArmHack/stand_lift_count_mean"] = torch.mean(
+                sequential_state["lift_count"].float()
+            )
+            log_extras["ArmHack/stand_touchdown_count_mean"] = torch.mean(
+                sequential_state["touchdown_count"].float()
+            )
+            log_extras["ArmHack/stand_extra_lift_event_rate"] = torch.mean(
+                sequential_state["extra_lift_event"].float()
+            )
+            log_extras["ArmHack/stand_step_path_length_mean_m"] = torch.mean(
+                sequential_state["path_length_xy"]
+            )
         if self._ankle_roll_pitch_joint_ids is not None:
             ankle_torque = self.scene["robot"].data.applied_torque[
                 :, self._ankle_roll_pitch_joint_ids
