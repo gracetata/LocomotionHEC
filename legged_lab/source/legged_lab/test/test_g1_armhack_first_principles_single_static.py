@@ -71,7 +71,7 @@ def test_mujoco_switch_uses_two_plain_actors_and_explicit_keys():
     runner_text = MUJOCO_RUNNER.read_text()
     script_text = SWITCH_SCRIPT.read_text()
     for token in (
-        'policy_switch_state = {"mode": "paused"',
+        'policy_switch_state = {"mode": switch_start_mode',
         '"[POLICY SWITCH] ENTER: PAUSED -> STAND"',
         '"[POLICY SWITCH] ENTER: STAND -> WALK; command ramps from zero."',
         '"[POLICY SWITCH] ENTER: WALK -> STAND; zero command and new torso SE(2) reference."',
@@ -81,7 +81,9 @@ def test_mujoco_switch_uses_two_plain_actors_and_explicit_keys():
         assert token in runner_text
     for token in (
         "G1_AMP_POLICY_SWITCH_ENABLE=True",
-        "ENTER   : after startup, toggle STAND <-> WALK",
+        "G1_AMP_POLICY_SWITCH_START_MODE=stand",
+        "Startup : STAND inference is active immediately",
+        "ENTER   : first press STAND -> WALK",
         "SPACE/P : cycle shared arm poses",
         "92c51b2a2a4556ea993a7f9675cbe2ff06675c7681ca254df83c2ee27acc569e",
     ):

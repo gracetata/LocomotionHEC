@@ -49,6 +49,7 @@ check_sha "${WALK_POLICY}" "${WALK_POLICY_SHA256}" "Walk ONNX"
 mkdir -p "${OUTPUT_DIR}"
 
 export G1_AMP_POLICY_SWITCH_ENABLE=True
+export G1_AMP_POLICY_SWITCH_START_MODE=stand
 export G1_AMP_POLICY_SWITCH_WALK_POLICY_PATH="${WALK_POLICY}"
 export G1_AMP_POLICY_SWITCH_WALK_POLICY_SHA256="${WALK_POLICY_SHA256}"
 export G1_AMP_POLICY_SWITCH_AUTO_TOGGLE_INTERVAL_S=${POLICY_SWITCH_AUTO_TOGGLE_INTERVAL_S:--1.0}
@@ -76,8 +77,8 @@ export G1_AMP_ARMHACK_STAND_INITIAL_STANCE_M="${INITIAL_STANCE_M}"
 echo "============================================================"
 echo " ArmHack Stand <-> original Walk interactive MuJoCo"
 echo "============================================================"
-echo "Startup : paused; press ENTER once to enable Stand inference"
-echo "ENTER   : after startup, toggle STAND <-> WALK"
+echo "Startup : STAND inference is active immediately; no initial key is required"
+echo "ENTER   : first press STAND -> WALK; subsequent presses toggle WALK <-> STAND"
 echo "SPACE/P : cycle shared arm poses with minimum-jerk motion"
 echo "W/S     : Walk vx +/- ${KEYBOARD_LINEAR_STEP:-0.01} m/s"
 echo "A/D     : Walk vy +/- ${KEYBOARD_LINEAR_STEP:-0.01} m/s"

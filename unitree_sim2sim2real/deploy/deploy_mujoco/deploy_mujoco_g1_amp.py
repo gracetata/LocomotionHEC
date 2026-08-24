@@ -392,6 +392,10 @@ def load_config(config_path: str) -> dict:
         "G1_AMP_POLICY_SWITCH_AUTO_TOGGLE_MAX",
         int(config.get("policy_switch_auto_toggle_max", 0)),
     )
+    config["policy_switch_start_mode"] = os.environ.get(
+        "G1_AMP_POLICY_SWITCH_START_MODE",
+        config.get("policy_switch_start_mode", "paused"),
+    ).strip().lower()
     config["armhack_walk_pose_path"] = _resolve_path(
         os.environ.get("G1_AMP_ARMHACK_WALK_POSE_PATH", config.get("armhack_walk_pose_path", ""))
     )
@@ -2554,6 +2558,8 @@ def run_mujoco(config: dict) -> None:
             )
         if not bool(config.get("command_ramp", False)):
             raise ValueError("Policy switch mode requires command_ramp=True.")
+        if str(config.get("policy_switch_start_mode", "paused")) not in {"paused", "stand"}:
+            raise ValueError("Policy switch start mode must be paused or stand.")
     if armhack_stand is not None and not policy_switch_enabled:
         if bool(config.get("random_commands", False)) or str(config.get("command_mode", "independent")).lower() != "independent":
             raise ValueError("ArmHack Stand MuJoCo replay requires fixed independent zero commands.")
@@ -2787,7 +2793,16 @@ def run_mujoco(config: dict) -> None:
             flush=True,
         )
 
-    policy_switch_state = {"mode": "paused", "pending_toggle": False}
+    switch_start_mode = (
+        str(config.get("policy_switch_start_mode", "paused"))
+        if policy_switch_enabled
+        else "paused"
+    )
+    policy_switch_state = {"mode": switch_start_mode, "pending_toggle": False}
+    if policy_switch_enabled and switch_start_mode == "stand":
+        assert armhack_stand is not None
+        armhack_stand.pending_enter = True
+        print("[POLICY SWITCH] startup: STAND inference is active by default.", flush=True)
 
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
         if counter % int(config["control_decimation"]) != 0:
