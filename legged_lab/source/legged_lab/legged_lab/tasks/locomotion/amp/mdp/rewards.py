@@ -2627,7 +2627,7 @@ def signed_command_response_reward(
     """Reward dense signed response for every active velocity command axis."""
     asset: RigidObject = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
-    return signed_command_response_ratio(
+    response = signed_command_response_ratio(
         command=command,
         actual_lin_vel_xy_b=asset.data.root_lin_vel_b[:, :2],
         actual_yaw_rate_b=asset.data.root_ang_vel_b[:, 2],
@@ -2636,6 +2636,10 @@ def signed_command_response_reward(
         minimum_ratio=minimum_ratio,
         maximum_ratio=maximum_ratio,
     )
+    # Never make a tilted/falling shortcut more profitable than an upright
+    # response.  This gate is essential when acquiring response from a policy
+    # whose safe command distribution is narrower than the new curriculum.
+    return response * _upright_scale(env)
 
 
 def pure_yaw_torso_roll_l2(
