@@ -2384,6 +2384,48 @@ def ankle_distance_target_kernel(
     return torch.exp(-0.5 * torch.square(normalized_error))
 
 
+def command_conditioned_ankle_distance_target_kernel(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    target_distance: float = 0.30,
+    std: float = 0.06,
+    linear_tracking_std: float = 0.15,
+    yaw_tracking_std: float = 0.20,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward ankle spacing only while the actor remains upright and responsive.
+
+    An unconditional high-weight spacing kernel can be exploited by abandoning
+    the commanded gait or falling into a wide pose.  Multiplying it by smooth
+    command-tracking and upright gates makes 30 cm a constrained locomotion
+    objective: widening the stance is profitable only if velocity behavior is
+    preserved.
+    """
+    if linear_tracking_std <= 0.0 or yaw_tracking_std <= 0.0:
+        raise ValueError("Tracking kernel standard deviations must be positive.")
+    robot: Articulation = env.scene[robot_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    linear_error = torch.linalg.vector_norm(
+        robot.data.root_lin_vel_b[:, :2] - command[:, :2], dim=1
+    )
+    yaw_error = torch.abs(robot.data.root_ang_vel_b[:, 2] - command[:, 2])
+    tracking_gate = torch.exp(
+        -0.5 * torch.square(linear_error / float(linear_tracking_std))
+        -0.5 * torch.square(yaw_error / float(yaw_tracking_std))
+    )
+    return (
+        ankle_distance_target_kernel(
+            env,
+            target_distance=target_distance,
+            std=std,
+            asset_cfg=asset_cfg,
+        )
+        * tracking_gate
+        * _upright_scale(env)
+    )
+
+
 def feet_stumble(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     # extract the used quantities (to enable type-hinting)
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]

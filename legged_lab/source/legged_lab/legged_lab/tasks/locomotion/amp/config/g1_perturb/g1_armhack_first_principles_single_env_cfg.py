@@ -827,6 +827,17 @@ class G1ArmHackWalkDeadzoneYawSingleEnvCfg(
         self.rewards.track_torso_yaw_rate_exp.weight = 2.0
         self.rewards.ankle_distance_30cm.weight = 16.0
         self.rewards.ankle_distance_30cm.params["std"] = 0.055
+        self.rewards.ankle_distance_30cm.func = (
+            mdp.command_conditioned_ankle_distance_target_kernel
+        )
+        self.rewards.ankle_distance_30cm.params.update(
+            {
+                "command_name": "base_velocity",
+                "linear_tracking_std": 0.15,
+                "yaw_tracking_std": 0.20,
+                "robot_cfg": SceneEntityCfg("robot"),
+            }
+        )
         self.rewards.termination_penalty.weight = -3000.0
         self.rewards.survival = RewTerm(func=mdp.is_alive, weight=5.0)
 
