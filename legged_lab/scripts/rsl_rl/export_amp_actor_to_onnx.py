@@ -256,6 +256,7 @@ class AmpActorExporter(torch.nn.Module):
         model_state: Dict[str, torch.Tensor],
         activation_name: str,
         zero_translation_forward_command_bias: float = 0.0,
+        nonnegative_command_hip_roll_action_bias: float = 0.0,
     ) -> None:
         super().__init__()
         self.obs_dim, self.action_dim = actor_dimensions(model_state)
@@ -287,6 +288,10 @@ class AmpActorExporter(torch.nn.Module):
         self.register_buffer(
             "zero_translation_forward_command_bias",
             torch.tensor(float(zero_translation_forward_command_bias)),
+        )
+        self.register_buffer(
+            "nonnegative_command_hip_roll_action_bias",
+            torch.tensor(float(nonnegative_command_hip_roll_action_bias)),
         )
         self.has_command_residual = (
             "lateral_command_residual.0.weight" in model_state
@@ -572,6 +577,18 @@ class AmpActorExporter(torch.nn.Module):
             actions = actions + pure_yaw.unsqueeze(-1).to(actions.dtype) * self.pure_yaw_command_residual(
                 normalized_obs
             )
+        # A single deterministic action calibration, not an expert or router:
+        # widen stance for zero/forward/lateral/yaw commands while preserving
+        # the source actor's proven narrow-stance backward recovery behavior.
+        nonnegative_command = command[..., 0] >= -0.01
+        hip_roll_bias = (
+            nonnegative_command.unsqueeze(-1).to(actions.dtype)
+            * self.nonnegative_command_hip_roll_action_bias.to(actions.dtype)
+        )
+        action_offset = torch.zeros_like(actions)
+        action_offset[..., 3:4] = hip_roll_bias
+        action_offset[..., 4:5] = -hip_roll_bias
+        actions = actions + action_offset
         return actions
 
 
@@ -724,6 +741,7 @@ def write_metadata(
     robot: str,
     default_command: list[float] | None = None,
     zero_translation_forward_command_bias: float = 0.0,
+    nonnegative_command_hip_roll_action_bias: float = 0.0,
 ) -> None:
     profile = robot_profile(robot)
     command = profile["default_command"]
@@ -754,6 +772,9 @@ def write_metadata(
         "zero_translation_forward_command_bias": float(
             zero_translation_forward_command_bias
         ),
+        "nonnegative_command_hip_roll_action_bias": float(
+            nonnegative_command_hip_roll_action_bias
+        ),
         "notes": profile["notes"],
     }
     if "hec_mujoco_default_root_height" in profile:
@@ -778,6 +799,15 @@ def parse_args() -> argparse.Namespace:
         metavar=("VX", "VY", "YAW_RATE"),
         default=None,
         help="Override deployment metadata velocity command; ArmHack Stand must use: 0 0 0.",
+    )
+    parser.add_argument(
+        "--nonnegative-command-hip-roll-action-bias",
+        type=float,
+        default=0.0,
+        help=(
+            "Apply symmetric (+left,-right) hip-roll action bias when raw vx "
+            "is >=-0.01 m/s; negative-vx recovery retains the source action."
+        ),
     )
     parser.add_argument(
         "--zero-translation-forward-command-bias",
@@ -811,6 +841,9 @@ def main() -> None:
         model_state,
         activation_name=args.activation,
         zero_translation_forward_command_bias=args.zero_translation_forward_command_bias,
+        nonnegative_command_hip_roll_action_bias=(
+            args.nonnegative_command_hip_roll_action_bias
+        ),
     ).eval().cpu()
     dummy_obs = torch.zeros(1, obs_dim, dtype=torch.float32)
 
@@ -849,6 +882,7 @@ def main() -> None:
         args.robot,
         args.default_command,
         args.zero_translation_forward_command_bias,
+        args.nonnegative_command_hip_roll_action_bias,
     )
 
     with torch.no_grad():
