@@ -242,10 +242,13 @@ class OnPolicyRunner:
                 f"Global rank '{self.gpu_global_rank}' is greater than or equal to world size '{self.gpu_world_size}'."
             )
 
+        # Bind this process to its local CUDA device before NCCL creates the
+        # process group.  Initializing NCCL first can bind every local rank to
+        # cuda:0 and make the first collective fail on multi-GPU Blackwell
+        # hosts with ``ncclUnhandledCudaError: invalid argument``.
+        torch.cuda.set_device(self.gpu_local_rank)
         # Initialize torch distributed
         torch.distributed.init_process_group(backend="nccl", rank=self.gpu_global_rank, world_size=self.gpu_world_size)
-        # Set device to the local rank
-        torch.cuda.set_device(self.gpu_local_rank)
 
     def _construct_algorithm(self, obs: TensorDict) -> PPO:
         """Construct the actor-critic algorithm."""
