@@ -213,6 +213,11 @@ class G1ArmHackWalkFirstPrinciplesSingleRunnerCfg(
     reset_iteration_on_policy_only_load = True
     restore_configured_learning_rate_on_load = True
     save_interval = 100
+    # Conservative spacing refinement changes only the actor output layer.
+    # Keeping all three hidden layers fixed prevents a narrow foot-placement
+    # objective from erasing the source policy's signed command features.
+    freeze_actor_hidden_layers = 3
+    actor_warmup_iterations = 0
 
     def __post_init__(self):
         super().__post_init__()
