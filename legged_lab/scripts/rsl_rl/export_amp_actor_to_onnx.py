@@ -257,6 +257,7 @@ class AmpActorExporter(torch.nn.Module):
         activation_name: str,
         zero_translation_forward_command_bias: float = 0.0,
         nonnegative_command_hip_roll_action_bias: float = 0.0,
+        global_forward_command_bias: float = 0.0,
     ) -> None:
         super().__init__()
         self.obs_dim, self.action_dim = actor_dimensions(model_state)
@@ -288,6 +289,10 @@ class AmpActorExporter(torch.nn.Module):
         self.register_buffer(
             "zero_translation_forward_command_bias",
             torch.tensor(float(zero_translation_forward_command_bias)),
+        )
+        self.register_buffer(
+            "global_forward_command_bias",
+            torch.tensor(float(global_forward_command_bias)),
         )
         self.register_buffer(
             "nonnegative_command_hip_roll_action_bias",
@@ -412,6 +417,9 @@ class AmpActorExporter(torch.nn.Module):
             torch.sum(torch.square(command[..., :2]), dim=-1)
         ) <= 0.02
         actor_obs = obs.clone()
+        actor_obs[..., 6] = (
+            actor_obs[..., 6] + self.global_forward_command_bias.to(actor_obs.dtype)
+        )
         actor_obs[..., 6] = torch.where(
             zero_translation,
             actor_obs[..., 6]
@@ -742,6 +750,7 @@ def write_metadata(
     default_command: list[float] | None = None,
     zero_translation_forward_command_bias: float = 0.0,
     nonnegative_command_hip_roll_action_bias: float = 0.0,
+    global_forward_command_bias: float = 0.0,
 ) -> None:
     profile = robot_profile(robot)
     command = profile["default_command"]
@@ -775,6 +784,7 @@ def write_metadata(
         "nonnegative_command_hip_roll_action_bias": float(
             nonnegative_command_hip_roll_action_bias
         ),
+        "global_forward_command_bias": float(global_forward_command_bias),
         "notes": profile["notes"],
     }
     if "hec_mujoco_default_root_height" in profile:
@@ -799,6 +809,12 @@ def parse_args() -> argparse.Namespace:
         metavar=("VX", "VY", "YAW_RATE"),
         default=None,
         help="Override deployment metadata velocity command; ArmHack Stand must use: 0 0 0.",
+    )
+    parser.add_argument(
+        "--global-forward-command-bias",
+        type=float,
+        default=0.0,
+        help="Add this fixed vx value to every raw command inside the exported actor.",
     )
     parser.add_argument(
         "--nonnegative-command-hip-roll-action-bias",
@@ -844,6 +860,7 @@ def main() -> None:
         nonnegative_command_hip_roll_action_bias=(
             args.nonnegative_command_hip_roll_action_bias
         ),
+        global_forward_command_bias=args.global_forward_command_bias,
     ).eval().cpu()
     dummy_obs = torch.zeros(1, obs_dim, dtype=torch.float32)
 
@@ -883,6 +900,7 @@ def main() -> None:
         args.default_command,
         args.zero_translation_forward_command_bias,
         args.nonnegative_command_hip_roll_action_bias,
+        args.global_forward_command_bias,
     )
 
     with torch.no_grad():
