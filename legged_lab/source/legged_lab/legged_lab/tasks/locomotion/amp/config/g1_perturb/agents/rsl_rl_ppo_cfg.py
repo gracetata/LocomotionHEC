@@ -218,6 +218,10 @@ class G1ArmHackWalkFirstPrinciplesSingleRunnerCfg(
     # objective from erasing the source policy's signed command features.
     freeze_actor_hidden_layers = 3
     actor_warmup_iterations = 0
+    # The source checkpoint stores per-joint exploration std values up to 1.82
+    # rad even though its deterministic mean policy passes MuJoCo.  Reusing
+    # that noise makes most randomized rollouts fall and corrupts PPO credit.
+    policy_only_noise_std_override = 0.05
 
     def __post_init__(self):
         super().__post_init__()
