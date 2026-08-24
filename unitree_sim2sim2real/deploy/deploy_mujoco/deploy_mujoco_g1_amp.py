@@ -2801,6 +2801,7 @@ def run_mujoco(config: dict) -> None:
     policy_switch_state = {"mode": switch_start_mode, "pending_toggle": False}
     if policy_switch_enabled and switch_start_mode == "stand":
         assert armhack_stand is not None
+        armhack_stand.reset_switch_reference(data, 0.0)
         armhack_stand.pending_enter = True
         print("[POLICY SWITCH] startup: STAND inference is active by default.", flush=True)
 

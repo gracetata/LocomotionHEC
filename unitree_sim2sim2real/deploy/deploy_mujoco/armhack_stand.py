@@ -279,8 +279,8 @@ class ArmHackStandReplay:
         self._phase_action_index = 27
         self._lifted_action_index = 28
         self._step_min_clearance_m = 0.035
-        self._step_landing_tolerance_m = 0.04
-        self._step_initial_target_tolerance_m = 0.04
+        self._step_landing_tolerance_m = 0.02
+        self._step_initial_target_tolerance_m = 0.015
         self._step_min_duration_s = 0.40
         self._step_contract_ready = False
         self.step_action_alpha = float(config.get("armhack_stand_step_action_alpha", 1.0))
@@ -690,7 +690,9 @@ class ArmHackStandReplay:
         self._foot_body_sets = (descendants(foot_ids[0]), descendants(foot_ids[1]))
         self._initialize_ordered_step_state(data, 0.0)
 
-    def _initialize_ordered_step_state(self, data, time_s: float) -> None:
+    def _initialize_ordered_step_state(
+        self, data, time_s: float, *, force_phase_zero: bool = False
+    ) -> None:
         if self._pelvis_body_id is None or self._foot_body_ids is None:
             raise RuntimeError("ordered-step bodies are not initialized")
         pelvis_pos = np.asarray(data.xpos[self._pelvis_body_id], dtype=np.float64)
@@ -707,7 +709,10 @@ class ArmHackStandReplay:
         self._step_initial_foot_z = foot_pos[:, 2].copy()
         contact = self._foot_contact(data)
         error = np.linalg.norm(foot_pos[:, :2] - self._step_targets_xy, axis=1)
-        if bool(np.all(contact)) and bool(np.all(error <= self._step_initial_target_tolerance_m)):
+        if force_phase_zero:
+            self._step_phase = 0
+            self._step_lifted[:] = False
+        elif bool(np.all(contact)) and bool(np.all(error <= self._step_initial_target_tolerance_m)):
             self._step_phase = 2
             self._step_lifted[:] = True
         elif bool(contact[0]) and error[0] <= self._step_landing_tolerance_m:
@@ -729,7 +734,7 @@ class ArmHackStandReplay:
 
     def reset_switch_reference(self, data, time_s: float) -> None:
         """Capture the current torso SE(2) and rebuild the ordered 30 cm targets."""
-        self._initialize_ordered_step_state(data, float(time_s))
+        self._initialize_ordered_step_state(data, float(time_s), force_phase_zero=True)
 
     def should_hold_default(self, time_s: float) -> bool:
         """The same Stand actor supplies phase-two balance during settling."""
@@ -758,9 +763,7 @@ class ArmHackStandReplay:
             augmented[self._phase_action_index] = -1.0
             augmented[self._lifted_action_index] = 1.0
             return augmented
-        if (not self._step_contract_ready) or (
-            self._step_phase_start_time_s == 0.0 and float(time_s) >= self.policy_settle_s
-        ):
+        if not self._step_contract_ready:
             self._initialize_ordered_step_state(data, float(time_s))
         if self._foot_body_ids is None or self._step_targets_xy is None or self._step_initial_foot_z is None:
             return augmented

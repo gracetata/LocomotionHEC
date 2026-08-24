@@ -365,12 +365,15 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
             "contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
         )
         step = _step_params(pelvis_cfg, ankle_cfg, contact_cfg)
-        step["landing_tolerance_m"] = 0.035
+        step["landing_tolerance_m"] = 0.020
         step["min_step_duration_s"] = 0.35
         self.events.reset_robot_joints.params.update(
             {
-                "phase_one_probability": 0.30,
-                "phase_two_probability": 0.20,
+                # Acceptance requires the actor to perform both physical
+                # steps.  Pre-filling phase/count state made aggregate lift
+                # metrics look successful without learning the full sequence.
+                "phase_one_probability": 0.0,
+                "phase_two_probability": 0.0,
                 "asymmetric_support_probability": 0.50,
             }
         )
@@ -402,7 +405,7 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
         for term_name in sequential_terms:
             term = getattr(self.rewards, term_name)
             if "landing_tolerance_m" in term.params:
-                term.params["landing_tolerance_m"] = 0.035
+                term.params["landing_tolerance_m"] = 0.020
             if "min_step_duration_s" in term.params:
                 term.params["min_step_duration_s"] = 0.35
 
@@ -415,9 +418,10 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
         self.rewards.sequential_active_foot_clearance_l2.weight = -600.0
         self.rewards.sequential_foot_step_lift.weight = 80.0
         self.rewards.sequential_foot_step_landing_exp.weight = 250.0
-        self.rewards.sequential_foot_step_completion.weight = 600.0
-        self.rewards.sequential_foot_final_target_l2.weight = -250.0
-        self.rewards.sequential_final_ankle_distance_exp.weight = 100.0
+        self.rewards.sequential_foot_step_completion.weight = 700.0
+        self.rewards.sequential_foot_final_target_l2.weight = -500.0
+        self.rewards.sequential_final_ankle_distance_exp.weight = 200.0
+        self.rewards.sequential_final_ankle_distance_exp.params["std"] = 0.010
         self.rewards.sequential_support_foot_drift_l2.weight = -180.0
         self.rewards.sequential_repeated_lift_event = RewTerm(
             func=mdp.sequential_repeated_lift_event, weight=-120.0, params=step
@@ -426,7 +430,7 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
             func=mdp.sequential_step_count_excess, weight=-1.0, params=step
         )
         self.rewards.sequential_exact_step_budget_success = RewTerm(
-            func=mdp.sequential_exact_step_budget_success, weight=60.0, params=step
+            func=mdp.sequential_exact_step_budget_success, weight=80.0, params=step
         )
         self.rewards.sequential_incomplete_step_penalty = RewTerm(
             func=mdp.sequential_incomplete_step_penalty, weight=-25.0, params=step
@@ -456,11 +460,35 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
             weight=-60.0,
             params={**step, "torso_cfg": torso_cfg},
         )
-        self.rewards.post_completion_airborne.weight = -100.0
-        self.rewards.post_completion_foot_motion_l2.weight = -5.0
-        self.rewards.post_completion_joint_vel_l2.weight = -0.05
-        self.rewards.post_completion_action_rate_l2.weight = -0.20
-        self.rewards.post_completion_contact_imbalance_l2.weight = -5.0
+        self.rewards.post_completion_torso_roll_pitch_l2 = RewTerm(
+            func=mdp.sequential_post_completion_torso_roll_pitch_l2,
+            weight=-20.0,
+            params={**step, "torso_cfg": torso_cfg},
+        )
+        self.rewards.post_completion_torso_ang_vel_xy_l2 = RewTerm(
+            func=mdp.sequential_post_completion_torso_ang_vel_xy_l2,
+            weight=-1.0,
+            params={**step, "torso_cfg": torso_cfg},
+        )
+        self.rewards.post_completion_liftoff_event = RewTerm(
+            func=mdp.sequential_post_completion_liftoff_event,
+            weight=-500.0,
+            params=step,
+        )
+        self.rewards.post_completion_both_contact = RewTerm(
+            func=mdp.sequential_post_completion_both_contact,
+            weight=20.0,
+            params=step,
+        )
+        self.rewards.post_completion_airborne.weight = -300.0
+        self.rewards.post_completion_foot_motion_l2.weight = -10.0
+        self.rewards.post_completion_joint_vel_l2.weight = -0.10
+        self.rewards.post_completion_action_rate_l2.weight = -0.40
+        self.rewards.post_completion_contact_imbalance_l2.weight = -8.0
+        self.events.random_end_effector_wrench.params["force_range"] = (-8.0, 8.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-1.2, 1.2)
+        self.events.random_torso_external_wrench.params["force_range"] = (-8.0, 8.0)
+        self.events.random_torso_external_wrench.params["torque_range"] = (-1.2, 1.2)
         self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.30
 
 

@@ -41,6 +41,10 @@ def test_objectives_and_bidirectional_producer_reset_are_explicit():
     events_text = EVENTS.read_text()
     for token in (
         "post_completion_airborne",
+        "post_completion_liftoff_event",
+        "post_completion_both_contact",
+        "post_completion_torso_roll_pitch_l2",
+        "post_completion_torso_ang_vel_xy_l2",
         "post_completion_contact_imbalance_l2",
         "post_completion_ankle_torque_l2",
         "sequential_active_foot_air_time_excess_l2",
@@ -63,6 +67,11 @@ def test_objectives_and_bidirectional_producer_reset_are_explicit():
         assert token in cfg_text
     for field in ("root_state", "joint_pos", "joint_vel", "action"):
         assert field in events_text
+    rewards_text = (ROOT / "source/legged_lab/legged_lab/tasks/locomotion/amp/mdp/rewards.py").read_text()
+    assert 'requested_phase[handoff_reset_mask] = 0' in rewards_text
+    assert 'state["post_completion_liftoff_event"]' in rewards_text
+    assert '"phase_one_probability": 0.0' in cfg_text
+    assert '"phase_two_probability": 0.0' in cfg_text
     runner_text = RUNNER.read_text()
     assert runner_text.count("baseline_kl_cfg.hard_limit = 0.0") >= 2
 

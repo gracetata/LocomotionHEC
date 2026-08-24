@@ -1126,6 +1126,9 @@ def _sequential_foot_step_state(
             "left_lift_event": torch.zeros(env.num_envs, dtype=torch.bool, device=env.device),
             "right_lift_event": torch.zeros(env.num_envs, dtype=torch.bool, device=env.device),
             "extra_lift_event": torch.zeros(env.num_envs, 2, dtype=torch.bool, device=env.device),
+            "post_completion_liftoff_event": torch.zeros(
+                env.num_envs, 2, dtype=torch.bool, device=env.device
+            ),
             "lift_count": torch.zeros(env.num_envs, 2, dtype=torch.long, device=env.device),
             "touchdown_count": torch.zeros(env.num_envs, 2, dtype=torch.long, device=env.device),
             "path_length_xy": torch.zeros(env.num_envs, 2, device=env.device),
@@ -1157,6 +1160,16 @@ def _sequential_foot_step_state(
                 requested_phase_one = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
             requested_phase = requested_phase_one.long()
         requested_phase_one = requested_phase == 1
+        handoff_mask = getattr(env, "_armhack_handoff_reset_mask", None)
+        if handoff_mask is None or handoff_mask.shape != (env.num_envs,):
+            handoff_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        handoff_reset_mask = reset_mask & handoff_mask
+        # A producer-policy state always starts a fresh Walk->Stand task.  Do
+        # not retain a random phase label sampled by the earlier default-pose
+        # reset event.
+        requested_phase = requested_phase.clone()
+        requested_phase[handoff_reset_mask] = 0
+        requested_phase_one = requested_phase == 1
         reset_pelvis_pos = getattr(env, "_armhack_initial_pelvis_pos_w", None)
         reset_pelvis_yaw = getattr(env, "_armhack_initial_pelvis_yaw_w", None)
         reset_foot_pos = getattr(env, "_armhack_initial_foot_pos_w", None)
@@ -1166,6 +1179,13 @@ def _sequential_foot_step_state(
             reset_pelvis_yaw = pelvis_yaw
         if reset_foot_pos is None or reset_foot_pos.shape != foot_pos.shape:
             reset_foot_pos = foot_pos
+        else:
+            reset_foot_pos = reset_foot_pos.clone()
+            reset_foot_pos[handoff_reset_mask] = foot_pos[handoff_reset_mask]
+        reset_pelvis_pos = reset_pelvis_pos.clone()
+        reset_pelvis_yaw = reset_pelvis_yaw.clone()
+        reset_pelvis_pos[handoff_reset_mask] = pelvis_pos[handoff_reset_mask]
+        reset_pelvis_yaw[handoff_reset_mask] = pelvis_yaw[handoff_reset_mask]
         lateral_axis = torch.stack(
             (-torch.sin(reset_pelvis_yaw), torch.cos(reset_pelvis_yaw)), dim=1
         )
@@ -1192,6 +1212,7 @@ def _sequential_foot_step_state(
         state["left_lift_event"][reset_mask] = False
         state["right_lift_event"][reset_mask] = False
         state["extra_lift_event"][reset_mask] = False
+        state["post_completion_liftoff_event"][reset_mask] = False
         reset_counts = torch.stack(
             ((requested_phase >= 1).long(), (requested_phase >= 2).long()), dim=1
         )
@@ -1211,6 +1232,7 @@ def _sequential_foot_step_state(
             requested_phase[reset_mask] >= 1, right_error, left_error
         ).detach()
         state["last_episode_step"][reset_mask] = -1
+        handoff_mask[handoff_reset_mask] = False
 
     update_mask = state["last_episode_step"] != episode_step
     if torch.any(update_mask):
@@ -1222,6 +1244,13 @@ def _sequential_foot_step_state(
         state["left_lift_event"].zero_()
         state["right_lift_event"].zero_()
         state["extra_lift_event"].zero_()
+        state["post_completion_liftoff_event"].zero_()
+        state["post_completion_liftoff_event"] = (
+            update_mask.unsqueeze(1)
+            & (phase_before >= 2).unsqueeze(1)
+            & state["previous_contact"]
+            & (~contact)
+        )
         landing_event = contact & (~state["previous_contact"])
         foot_delta_xy = torch.linalg.norm(
             foot_pos[:, :, :2] - state["previous_foot_xy"], dim=2
@@ -1955,6 +1984,80 @@ def sequential_post_completion_airborne(
         landing_tolerance_m, min_step_duration_s
     )
     return torch.sum((~state["contact"]).float(), dim=1) * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_liftoff_event(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """One-shot penalty signal for every new foot liftoff after phase two."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torch.sum(state["post_completion_liftoff_event"].float(), dim=1)
+
+
+def sequential_post_completion_both_contact(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Reward uninterrupted double support after both commanded steps."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torch.all(state["contact"], dim=1).float() * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_torso_roll_pitch_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Suppress the observed forward lean after the ordered task completes."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torso_roll_pitch_l2(env, asset_cfg=torso_cfg) * (state["phase"] >= 2).float()
+
+
+def sequential_post_completion_torso_ang_vel_xy_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Suppress phase-two torso rocking that drives contact chatter."""
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torso_ang_vel_xy_l2(env, asset_cfg=torso_cfg) * (state["phase"] >= 2).float()
 
 
 def sequential_post_completion_foot_motion_l2(
