@@ -1794,6 +1794,53 @@ def sequential_exact_step_budget_success(
     return exact.float() * (state["phase"] >= 2).float()
 
 
+def sequential_incomplete_step_penalty(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+) -> torch.Tensor:
+    """Continuously penalize each ordered step that is still missing.
+
+    A sparse completion bonus alone lets the policy avoid both the task and
+    the repeated-step penalty by never lifting.  This term makes phase zero
+    strictly worse than phase one and phase one strictly worse than the
+    completed hold phase, including for phase-sampled resets.
+    """
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    return torch.clamp(2 - state["phase"], min=0).to(dtype=state["foot_pos"].dtype) / 2.0
+
+
+def sequential_phase_time_excess_l2(
+    env: ManagerBasedRLEnv,
+    pelvis_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    lateral_target_offset_m: float = 0.15,
+    min_clearance_m: float = 0.035,
+    landing_tolerance_m: float = 0.035,
+    min_step_duration_s: float = 0.0,
+    grace_s: float = 1.5,
+    scale_s: float = 2.0,
+) -> torch.Tensor:
+    """Penalize camping in an unfinished phase after a generous grace time."""
+    if grace_s < 0.0 or scale_s <= 0.0:
+        raise ValueError("phase time grace must be non-negative and scale must be positive.")
+    state = _sequential_foot_step_state(
+        env, pelvis_cfg, foot_cfg, sensor_cfg, lateral_target_offset_m, min_clearance_m,
+        landing_tolerance_m, min_step_duration_s
+    )
+    excess = torch.clamp(state["phase_elapsed_s"] - float(grace_s), min=0.0) / float(scale_s)
+    return torch.square(excess) * (state["phase"] < 2).float()
+
+
 def sequential_active_contact_slide_l2(
     env: ManagerBasedRLEnv,
     pelvis_cfg: SceneEntityCfg,

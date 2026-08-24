@@ -355,12 +355,12 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
             "contact_forces", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
         )
         step = _step_params(pelvis_cfg, ankle_cfg, contact_cfg)
-        step["landing_tolerance_m"] = 0.025
-        step["min_step_duration_s"] = 0.45
+        step["landing_tolerance_m"] = 0.035
+        step["min_step_duration_s"] = 0.35
         self.events.reset_robot_joints.params.update(
             {
-                "phase_one_probability": 0.25,
-                "phase_two_probability": 0.25,
+                "phase_one_probability": 0.30,
+                "phase_two_probability": 0.20,
                 "asymmetric_support_probability": 0.50,
             }
         )
@@ -392,32 +392,48 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg(
         for term_name in sequential_terms:
             term = getattr(self.rewards, term_name)
             if "landing_tolerance_m" in term.params:
-                term.params["landing_tolerance_m"] = 0.025
+                term.params["landing_tolerance_m"] = 0.035
             if "min_step_duration_s" in term.params:
-                term.params["min_step_duration_s"] = 0.45
+                term.params["min_step_duration_s"] = 0.35
 
-        self.rewards.sequential_active_foot_contact.weight = -30.0
-        self.rewards.sequential_foot_step_landing_exp.weight = 200.0
-        self.rewards.sequential_foot_step_completion.weight = 300.0
-        self.rewards.sequential_foot_final_target_l2.weight = -200.0
-        self.rewards.sequential_support_foot_drift_l2.weight = -250.0
+        # Completion is the primary objective.  Dense unfinished-phase costs
+        # prevent the no-step local optimum, while one-shot repeat penalties
+        # still make exactly one successful attempt per foot preferable.
+        self.rewards.sequential_foot_step_progress.weight = 30.0
+        self.rewards.sequential_foot_step_target_exp.weight = 3.0
+        self.rewards.sequential_active_foot_contact.weight = -20.0
+        self.rewards.sequential_active_foot_clearance_l2.weight = -600.0
+        self.rewards.sequential_foot_step_lift.weight = 80.0
+        self.rewards.sequential_foot_step_landing_exp.weight = 250.0
+        self.rewards.sequential_foot_step_completion.weight = 600.0
+        self.rewards.sequential_foot_final_target_l2.weight = -250.0
+        self.rewards.sequential_final_ankle_distance_exp.weight = 100.0
+        self.rewards.sequential_support_foot_drift_l2.weight = -180.0
         self.rewards.sequential_repeated_lift_event = RewTerm(
-            func=mdp.sequential_repeated_lift_event, weight=-300.0, params=step
+            func=mdp.sequential_repeated_lift_event, weight=-120.0, params=step
         )
         self.rewards.sequential_step_count_excess = RewTerm(
-            func=mdp.sequential_step_count_excess, weight=-30.0, params=step
+            func=mdp.sequential_step_count_excess, weight=-1.0, params=step
         )
         self.rewards.sequential_exact_step_budget_success = RewTerm(
-            func=mdp.sequential_exact_step_budget_success, weight=10.0, params=step
+            func=mdp.sequential_exact_step_budget_success, weight=60.0, params=step
+        )
+        self.rewards.sequential_incomplete_step_penalty = RewTerm(
+            func=mdp.sequential_incomplete_step_penalty, weight=-25.0, params=step
+        )
+        self.rewards.sequential_phase_time_excess_l2 = RewTerm(
+            func=mdp.sequential_phase_time_excess_l2,
+            weight=-2.0,
+            params={**step, "grace_s": 1.5, "scale_s": 2.0},
         )
         self.rewards.sequential_active_contact_slide_l2 = RewTerm(
             func=mdp.sequential_active_contact_slide_l2,
-            weight=-5.0,
+            weight=-3.0,
             params={**step, "velocity_scale_mps": 0.05},
         )
         self.rewards.sequential_active_path_excess_l2 = RewTerm(
             func=mdp.sequential_active_path_excess_l2,
-            weight=-2.0,
+            weight=-1.0,
             params={**step, "path_ratio": 1.20, "margin_m": 0.02},
         )
         self.rewards.post_completion_torso_xy_l2 = RewTerm(
