@@ -163,6 +163,12 @@ class ArmHackStandReplay:
             config.get("armhack_stand_ankle_diagnostics_enable", True)
         )
         self.ankle_print_hz = float(config.get("armhack_stand_ankle_print_hz", 1.0))
+        self.policy_settle_s = float(config.get("armhack_stand_policy_settle_s", 0.75))
+        self.initial_stance_m = float(config.get("armhack_stand_initial_stance_m", -1.0))
+        if self.initial_stance_m > 0.0 and not 0.05 <= self.initial_stance_m <= 0.60:
+            raise ValueError("ArmHack Stand initial stance override must be within [0.05, 0.60] m.")
+        if self.policy_settle_s < 0.0:
+            raise ValueError("ArmHack Stand policy settle duration must be non-negative.")
         if self.ankle_print_hz < 0.0:
             raise ValueError("ArmHack Stand ankle print frequency must be >= 0 Hz.")
         self.next_ankle_print_time_s = 0.0
@@ -253,6 +259,29 @@ class ArmHackStandReplay:
         self.ankle_target_angle_samples: list[np.ndarray] = []
         self.ankle_policy_active_samples: list[bool] = []
         self.payload_report: dict[str, dict[str, float]] = {}
+        self._mujoco = None
+        self._model = None
+        self._pelvis_body_id: int | None = None
+        self._torso_body_id: int | None = None
+        self._foot_body_ids: tuple[int, int] | None = None
+        self._foot_body_sets: tuple[set[int], set[int]] | None = None
+        self._step_targets_xy: np.ndarray | None = None
+        self._step_initial_foot_z: np.ndarray | None = None
+        self._step_phase = 0
+        self._step_lifted = np.zeros(2, dtype=bool)
+        self._step_phase_start_time_s = 0.0
+        self._reset_root_xy: np.ndarray | None = None
+        self._reset_root_yaw = 0.0
+        self._phase_action_index = 27
+        self._lifted_action_index = 28
+        self._step_min_clearance_m = 0.035
+        self._step_landing_tolerance_m = 0.04
+        self._step_initial_target_tolerance_m = 0.04
+        self._step_min_duration_s = 0.40
+        self._step_contract_ready = False
+        self.step_action_alpha = float(config.get("armhack_stand_step_action_alpha", 1.0))
+        if not 0.0 < self.step_action_alpha <= 1.0:
+            raise ValueError("ArmHack Stand step action alpha must be in (0, 1].")
 
     def _load_interactive_contract(self) -> None:
         if self.test_id != "interactive":
@@ -563,6 +592,16 @@ class ArmHackStandReplay:
     ) -> None:
         for name, target in zip(ARM_JOINT_NAMES, self.csv_targets[0], strict=True):
             data.qpos[qpos_addresses[name]] = float(target)
+        if self.initial_stance_m > 0.0:
+            roll = (self.initial_stance_m - 0.237) / 1.22
+            stance_targets = {
+                "left_hip_roll_joint": roll,
+                "right_hip_roll_joint": -roll,
+                "left_ankle_roll_joint": -roll,
+                "right_ankle_roll_joint": roll,
+            }
+            for joint_name, target in stance_targets.items():
+                data.qpos[qpos_addresses[joint_name]] = float(target)
 
         for body_name in PAYLOAD_BODY_NAMES:
             body_id = mujoco_module.mj_name2id(model, mujoco_module.mjtObj.mjOBJ_BODY, body_name)
@@ -584,6 +623,169 @@ class ArmHackStandReplay:
 
         mujoco_module.mj_forward(model, data)
         self.torso_reference = self._torso_pose(data, torso_body_id)
+        self._mujoco = mujoco_module
+        self._model = model
+        self._torso_body_id = torso_body_id
+        pelvis_id = mujoco_module.mj_name2id(model, mujoco_module.mjtObj.mjOBJ_BODY, "pelvis")
+        self._pelvis_body_id = torso_body_id if pelvis_id < 0 else pelvis_id
+        foot_ids = []
+        for body_name in ("left_ankle_roll_link", "right_ankle_roll_link"):
+            body_id = mujoco_module.mj_name2id(model, mujoco_module.mjtObj.mjOBJ_BODY, body_name)
+            if body_id < 0:
+                raise ValueError(f"MuJoCo model has no ordered-step body: {body_name}")
+            foot_ids.append(body_id)
+        self._foot_body_ids = (foot_ids[0], foot_ids[1])
+        parent_ids = np.asarray(model.body_parentid, dtype=np.int64)
+
+        def descendants(root_id: int) -> set[int]:
+            result: set[int] = set()
+            for body_id in range(int(model.nbody)):
+                current = body_id
+                while current > 0:
+                    if current == root_id:
+                        result.add(body_id)
+                        break
+                    current = int(parent_ids[current])
+            return result
+
+        self._foot_body_sets = (descendants(foot_ids[0]), descendants(foot_ids[1]))
+        self._initialize_ordered_step_state(data, 0.0)
+
+    def _initialize_ordered_step_state(self, data, time_s: float) -> None:
+        if self._pelvis_body_id is None or self._foot_body_ids is None:
+            raise RuntimeError("ordered-step bodies are not initialized")
+        pelvis_pos = np.asarray(data.xpos[self._pelvis_body_id], dtype=np.float64)
+        pelvis_yaw = float(
+            _quat_wxyz_to_rpy(np.asarray(data.xquat[self._pelvis_body_id], dtype=np.float64))[2]
+        )
+        self._reset_root_xy = pelvis_pos[:2].copy()
+        self._reset_root_yaw = pelvis_yaw
+        lateral_axis = np.asarray([-math.sin(pelvis_yaw), math.cos(pelvis_yaw)], dtype=np.float64)
+        self._step_targets_xy = np.stack(
+            [pelvis_pos[:2] + 0.15 * lateral_axis, pelvis_pos[:2] - 0.15 * lateral_axis]
+        )
+        foot_pos = np.asarray(data.xpos[list(self._foot_body_ids)], dtype=np.float64)
+        self._step_initial_foot_z = foot_pos[:, 2].copy()
+        contact = self._foot_contact(data)
+        error = np.linalg.norm(foot_pos[:, :2] - self._step_targets_xy, axis=1)
+        if bool(np.all(contact)) and bool(np.all(error <= self._step_initial_target_tolerance_m)):
+            self._step_phase = 2
+            self._step_lifted[:] = True
+        elif bool(contact[0]) and error[0] <= self._step_landing_tolerance_m:
+            self._step_phase = 1
+            self._step_lifted[:] = (True, False)
+        else:
+            self._step_phase = 0
+            self._step_lifted[:] = False
+        self._step_phase_start_time_s = float(time_s)
+        self._step_contract_ready = True
+        if self._torso_body_id is not None:
+            self.torso_reference = self._torso_pose(data, self._torso_body_id)
+        print(
+            "[ArmHack Stand MuJoCo] ordered-step observation initialized: "
+            f"phase={self._step_phase} target_error_m={error.tolist()} contact={contact.tolist()}",
+            flush=True,
+        )
+
+    def should_hold_default(self, time_s: float) -> bool:
+        """The same Stand actor supplies phase-two balance during settling."""
+        del time_s
+        return False
+
+    def _foot_contact(self, data) -> np.ndarray:
+        if self._model is None or self._foot_body_sets is None:
+            return np.zeros(2, dtype=bool)
+        result = np.zeros(2, dtype=bool)
+        for contact_index in range(int(data.ncon)):
+            contact = data.contact[contact_index]
+            body1 = int(self._model.geom_bodyid[int(contact.geom1)])
+            body2 = int(self._model.geom_bodyid[int(contact.geom2)])
+            for foot_index, body_set in enumerate(self._foot_body_sets):
+                if body1 in body_set or body2 in body_set:
+                    result[foot_index] = True
+        return result
+
+    def augment_last_action(self, last_action: np.ndarray, data, time_s: float) -> np.ndarray:
+        """Mirror IsaacLab's phase-augmented last-action observation."""
+        augmented = np.asarray(last_action, dtype=np.float32).copy()
+        if float(time_s) < self.policy_settle_s:
+            # Phase two is the learned planted hold. Use the same actor (not a
+            # separate damping policy) until MuJoCo contacts become valid.
+            augmented[self._phase_action_index] = -1.0
+            augmented[self._lifted_action_index] = 1.0
+            return augmented
+        if (not self._step_contract_ready) or (
+            self._step_phase_start_time_s == 0.0 and float(time_s) >= self.policy_settle_s
+        ):
+            self._initialize_ordered_step_state(data, float(time_s))
+        if self._foot_body_ids is None or self._step_targets_xy is None or self._step_initial_foot_z is None:
+            return augmented
+        foot_pos = np.asarray(data.xpos[list(self._foot_body_ids)], dtype=np.float64)
+        contact = self._foot_contact(data)
+        error = np.linalg.norm(foot_pos[:, :2] - self._step_targets_xy, axis=1)
+        clearance = foot_pos[:, 2] - self._step_initial_foot_z
+        phase_before = self._step_phase
+        if phase_before < 2:
+            active = phase_before
+            if clearance[active] >= self._step_min_clearance_m:
+                self._step_lifted[active] = True
+            elapsed = float(time_s) - self._step_phase_start_time_s
+            if (
+                self._step_lifted[active]
+                and contact[active]
+                and error[active] <= self._step_landing_tolerance_m
+                and elapsed >= self._step_min_duration_s
+            ):
+                completed_foot = "left" if active == 0 else "right"
+                self._step_phase += 1
+                self._step_phase_start_time_s = float(time_s)
+                print(
+                    "[ArmHack Stand MuJoCo] ordered-step touchdown: "
+                    f"foot={completed_foot} phase={self._step_phase} t={float(time_s):.3f}s "
+                    f"target_error_m={float(error[active]):.4f}",
+                    flush=True,
+                )
+                if self._step_phase < 2:
+                    self._step_lifted[self._step_phase] = False
+            elif self._step_lifted[active] and contact[active] and elapsed >= self._step_min_duration_s:
+                # Wrong touchdown: require another real lift before completion.
+                self._step_lifted[active] = False
+        phase_signal = 0.0 if self._step_phase == 0 else (1.0 if self._step_phase == 1 else -1.0)
+        active = min(self._step_phase, 1)
+        lifted_signal = float(self._step_lifted[active]) if self._step_phase < 2 else 1.0
+        augmented[self._phase_action_index] = phase_signal
+        augmented[self._lifted_action_index] = lifted_signal
+        return augmented
+
+    def relative_pose_command(self, data) -> np.ndarray:
+        """Return the reset-relative SE(2) observation used during Stand training."""
+        if self._pelvis_body_id is None or self._reset_root_xy is None:
+            return np.zeros(3, dtype=np.float32)
+        position = np.asarray(data.xpos[self._pelvis_body_id], dtype=np.float64)
+        yaw = float(_quat_wxyz_to_rpy(np.asarray(data.xquat[self._pelvis_body_id], dtype=np.float64))[2])
+        delta_w = self._reset_root_xy - position[:2]
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+        delta_b = np.asarray(
+            [cos_yaw * delta_w[0] + sin_yaw * delta_w[1], -sin_yaw * delta_w[0] + cos_yaw * delta_w[1]],
+            dtype=np.float64,
+        )
+        yaw_error = float(_wrap_to_pi(np.asarray([self._reset_root_yaw - yaw]))[0])
+        return np.asarray(
+            [
+                np.clip(2.0 * delta_b[0], -0.50, 0.50),
+                np.clip(2.0 * delta_b[1], -0.50, 0.50),
+                np.clip(1.5 * yaw_error, -0.60, 0.60),
+            ],
+            dtype=np.float32,
+        )
+
+    def filter_policy_action(self, previous_action: np.ndarray, next_action: np.ndarray) -> np.ndarray:
+        """Jerk-limit the learned step while leaving the planted phase unfiltered."""
+        current = np.asarray(previous_action, dtype=np.float32)
+        proposed = np.asarray(next_action, dtype=np.float32)
+        if self._step_phase >= 2:
+            return proposed.copy()
+        return current + self.step_action_alpha * (proposed - current)
 
     @staticmethod
     def _torso_pose(data, torso_body_id: int) -> np.ndarray:

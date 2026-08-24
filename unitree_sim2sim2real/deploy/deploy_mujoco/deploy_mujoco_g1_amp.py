@@ -146,6 +146,32 @@ def load_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
 
+    deploy_metadata_value = os.environ.get(
+        "G1_AMP_DEPLOY_METADATA_PATH", os.environ.get("DEPLOY_METADATA_PATH", "")
+    ).strip()
+    if deploy_metadata_value:
+        deploy_metadata_path = Path(_resolve_path(deploy_metadata_value))
+        if not deploy_metadata_path.is_file():
+            raise FileNotFoundError(f"Deployment metadata not found: {deploy_metadata_path}")
+        deploy_metadata = json.loads(deploy_metadata_path.read_text(encoding="utf-8"))
+        policy_joint_names = list(config["policy_joint_names"])
+        metadata_joint_names = list(deploy_metadata.get("action_joint_names") or [])
+        if metadata_joint_names != policy_joint_names:
+            raise ValueError("Deployment metadata action joint order differs from MuJoCo policy order.")
+        default_joint_pos = deploy_metadata.get("default_joint_pos") or {}
+        pd_gains = deploy_metadata.get("pd_gains") or {}
+        missing_defaults = [name for name in policy_joint_names if name not in default_joint_pos]
+        missing_gains = [name for name in policy_joint_names if name not in pd_gains]
+        if missing_defaults or missing_gains:
+            raise ValueError(
+                f"Deployment metadata is incomplete: default={missing_defaults}, gains={missing_gains}"
+            )
+        config["action_scale"] = float(deploy_metadata["action_scale"])
+        config["default_angles"] = [float(default_joint_pos[name]) for name in policy_joint_names]
+        config["kps"] = [float(pd_gains[name]["kp"]) for name in policy_joint_names]
+        config["kds"] = [float(pd_gains[name]["kd"]) for name in policy_joint_names]
+        config["deploy_metadata_path"] = str(deploy_metadata_path)
+
     config["policy_path"] = _resolve_path(os.environ.get("G1_AMP_POLICY_PATH", config["policy_path"]))
     config["robot_asset"], config["xml_path"] = _resolve_robot_xml(config)
     config["simulation_duration"] = float(os.environ.get("G1_AMP_SIMULATION_DURATION", config["simulation_duration"]))
@@ -324,6 +350,18 @@ def load_config(config_path: str) -> dict:
     config["armhack_stand_ankle_print_hz"] = _env_float(
         "G1_AMP_ARMHACK_STAND_ANKLE_PRINT_HZ",
         float(config.get("armhack_stand_ankle_print_hz", 1.0)),
+    )
+    config["armhack_stand_policy_settle_s"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_POLICY_SETTLE_S",
+        float(config.get("armhack_stand_policy_settle_s", 0.75)),
+    )
+    config["armhack_stand_initial_stance_m"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_INITIAL_STANCE_M",
+        float(config.get("armhack_stand_initial_stance_m", -1.0)),
+    )
+    config["armhack_stand_step_action_alpha"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_STEP_ACTION_ALPHA",
+        float(config.get("armhack_stand_step_action_alpha", 1.0)),
     )
     config["armhack_walk_enable"] = _env_bool(
         "G1_AMP_ARMHACK_WALK_ENABLE", bool(config.get("armhack_walk_enable", False))
@@ -2652,21 +2690,34 @@ def run_mujoco(config: dict) -> None:
     def step_policy_if_needed(counter: int, sim_time: float) -> np.ndarray:
         if counter % int(config["control_decimation"]) != 0:
             return action
+        if armhack_stand is not None and armhack_stand.should_hold_default(sim_time):
+            return armhack_stand.compose_action(np.zeros_like(action), 0.0)
         if armhack_stand is not None and not armhack_stand.policy_inference_enabled:
             # Damping/standby simulation: no actor inference before ENTER.
             return armhack_stand.compose_action(np.zeros_like(action), sim_time)
+        observation_action = (
+            armhack_stand.augment_last_action(action, data, sim_time)
+            if armhack_stand is not None
+            else action
+        )
+        observation_command = (
+            armhack_stand.relative_pose_command(data)
+            if armhack_stand is not None
+            else command
+        )
         obs = build_observation(
             data,
             policy_joint_names,
             qpos_addresses,
             qvel_addresses,
             default_angles,
-            action,
-            command,
+            observation_action,
+            observation_command,
             config,
         )
         next_action = infer_policy(obs)
         if armhack_stand is not None:
+            next_action = armhack_stand.filter_policy_action(action, next_action)
             next_action = armhack_stand.compose_action(next_action, sim_time)
         elif armhack_walk is not None:
             next_action = armhack_walk.compose_action(next_action, sim_time)

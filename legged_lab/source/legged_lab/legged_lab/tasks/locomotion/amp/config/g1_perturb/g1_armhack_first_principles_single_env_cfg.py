@@ -538,3 +538,45 @@ class G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg_PLAY(
         super().__post_init__()
         self.scene.num_envs = 48
         self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg(
+    G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg
+):
+    """Recover signed backward/lateral/yaw response without adding experts."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.commands.base_velocity.mode_probability = 0.97
+        self.rewards.command_response_shortfall_l1.weight = -4.0
+        self.rewards.nonzero_single_stance.weight = 2.0
+        self.rewards.useful_low_speed_tracking_l2.weight = -2.0
+        self.rewards.pure_yaw_planar_drift_l2.weight = -6.0
+        self.rewards.pure_yaw_rate_error_l2.weight = -5.0
+        self.rewards.pure_yaw_torso_pitch_l2.weight = -2.0
+        self.rewards.track_lin_vel_xy_exp.weight = 3.0
+        self.rewards.track_ang_vel_z_exp.weight = 3.5
+        self.rewards.track_torso_lin_vel_xy_exp.weight = 1.5
+        self.rewards.track_torso_yaw_rate_exp.weight = 1.5
+        self.rewards.relative_command_response_shortfall_l1 = RewTerm(
+            func=mdp.relative_command_response_shortfall_reward_l1,
+            weight=-2.0,
+            params={
+                "command_name": "base_velocity",
+                "epsilon": 0.03,
+                "min_speed_fraction": 0.70,
+                "min_lin_normalizer": 0.03,
+                "min_yaw_normalizer": 0.08,
+            },
+        )
+
+
+@configclass
+class G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg_PLAY(
+    G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
