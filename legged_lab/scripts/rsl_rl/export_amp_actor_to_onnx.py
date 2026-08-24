@@ -251,7 +251,12 @@ class ZeroCommandResidual(torch.nn.Module):
 class AmpActorExporter(torch.nn.Module):
     """Feed-forward AMP actor wrapper with optional actor-observation normalization."""
 
-    def __init__(self, model_state: Dict[str, torch.Tensor], activation_name: str) -> None:
+    def __init__(
+        self,
+        model_state: Dict[str, torch.Tensor],
+        activation_name: str,
+        zero_translation_forward_command_bias: float = 0.0,
+    ) -> None:
         super().__init__()
         self.obs_dim, self.action_dim = actor_dimensions(model_state)
         self.actor = build_actor(model_state, activation_name)
@@ -279,6 +284,10 @@ class AmpActorExporter(torch.nn.Module):
             self.pure_yaw_expert_actor = build_actor(model_state, activation_name)
         normalizer = build_actor_normalizer(model_state)
         self.normalizer = normalizer if normalizer is not None else torch.nn.Identity()
+        self.register_buffer(
+            "zero_translation_forward_command_bias",
+            torch.tensor(float(zero_translation_forward_command_bias)),
+        )
         self.has_command_residual = (
             "lateral_command_residual.0.weight" in model_state
             and "pure_yaw_command_residual.0.weight" in model_state
@@ -393,9 +402,19 @@ class AmpActorExporter(torch.nn.Module):
             self.pure_yaw_command_residual = ZeroCommandResidual(self.action_dim)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        normalized_obs = self.normalizer(obs)
-        actions = self.actor(normalized_obs)
         command = obs[..., 6:9]
+        zero_translation = torch.sqrt(
+            torch.sum(torch.square(command[..., :2]), dim=-1)
+        ) <= 0.02
+        actor_obs = obs.clone()
+        actor_obs[..., 6] = torch.where(
+            zero_translation,
+            actor_obs[..., 6]
+            + self.zero_translation_forward_command_bias.to(actor_obs.dtype),
+            actor_obs[..., 6],
+        )
+        normalized_obs = self.normalizer(actor_obs)
+        actions = self.actor(normalized_obs)
         lateral = (
             (torch.abs(command[..., 1]) >= 0.10)
             & (torch.abs(command[..., 0]) <= 0.02)
@@ -704,6 +723,7 @@ def write_metadata(
     action_dim: int,
     robot: str,
     default_command: list[float] | None = None,
+    zero_translation_forward_command_bias: float = 0.0,
 ) -> None:
     profile = robot_profile(robot)
     command = profile["default_command"]
@@ -731,6 +751,9 @@ def write_metadata(
         "default_joint_pos": profile["default_joint_pos"],
         "pd_gains": profile["pd_gains"],
         "default_command": command,
+        "zero_translation_forward_command_bias": float(
+            zero_translation_forward_command_bias
+        ),
         "notes": profile["notes"],
     }
     if "hec_mujoco_default_root_height" in profile:
@@ -756,6 +779,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override deployment metadata velocity command; ArmHack Stand must use: 0 0 0.",
     )
+    parser.add_argument(
+        "--zero-translation-forward-command-bias",
+        type=float,
+        default=0.0,
+        help=(
+            "Add this fixed vx value inside the exported single actor whenever "
+            "the raw translation command norm is <=0.02 m/s."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -775,7 +807,11 @@ def main() -> None:
     model_state = checkpoint["model_state_dict"]
     obs_dim, action_dim = actor_dimensions(model_state)
 
-    actor = AmpActorExporter(model_state, activation_name=args.activation).eval().cpu()
+    actor = AmpActorExporter(
+        model_state,
+        activation_name=args.activation,
+        zero_translation_forward_command_bias=args.zero_translation_forward_command_bias,
+    ).eval().cpu()
     dummy_obs = torch.zeros(1, obs_dim, dtype=torch.float32)
 
     if jit_path is not None:
@@ -812,6 +848,7 @@ def main() -> None:
         action_dim,
         args.robot,
         args.default_command,
+        args.zero_translation_forward_command_bias,
     )
 
     with torch.no_grad():
