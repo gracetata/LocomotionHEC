@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
+
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
 import legged_lab.tasks.locomotion.amp.mdp as mdp
+from legged_lab import LEGGED_LAB_ROOT_DIR
 from legged_lab.envs.g1_perturb_env import G1_LOWER_BODY_JOINT_NAMES
 from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import (
     G1_FOOT_BODY_NAMES,
@@ -17,6 +20,17 @@ from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import (
 from .g1_stand_foot_recovery_env_cfg import G1StandFootRecoveryEnvCfg
 from .g1_walk_behavior_env_cfg import G1WalkBehaviorFinetuneEnvCfg
 from .reference_data import STAND_RANDOM_POSE_BANK_RELATIVE_PATH
+
+
+G1_WALK_RESPONSE_MODE_CONFIG_PATH = os.path.join(
+    LEGGED_LAB_ROOT_DIR,
+    "data",
+    "MotionData",
+    "g1_29dof",
+    "amp",
+    "armhack_walk_response_50hz",
+    "task_sampling_config.json",
+)
 
 
 def _step_params(pelvis_cfg, ankle_cfg, contact_cfg) -> dict:
@@ -548,7 +562,10 @@ class G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg(
 
     def __post_init__(self):
         super().__post_init__()
+        self.commands.base_velocity.mode_sampling_config_path = G1_WALK_RESPONSE_MODE_CONFIG_PATH
         self.commands.base_velocity.mode_probability = 0.97
+        self.commands.base_velocity.mode_command_clip_min = (-0.45, -0.50, -0.90)
+        self.commands.base_velocity.mode_command_clip_max = (0.80, 0.50, 0.90)
         self.rewards.command_response_shortfall_l1.weight = -4.0
         self.rewards.nonzero_single_stance.weight = 2.0
         self.rewards.useful_low_speed_tracking_l2.weight = -2.0
