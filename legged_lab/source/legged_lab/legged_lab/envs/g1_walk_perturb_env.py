@@ -32,12 +32,21 @@ class G1WalkPerturbAmpEnv(G1PerturbAmpEnv):
 
         perturbation_cfg = self._walk_perturbation_cfg()
         if perturbation_cfg is None:
-            raise ValueError("G1WalkPerturbAmpEnv requires an enabled pose-set perturbation config.")
-        self._validate_walk_pose_cfg(perturbation_cfg)
+            raise ValueError("G1WalkPerturbAmpEnv requires an enabled upper-body perturbation config.")
+        if perturbation_cfg.source == "pose_set":
+            self._validate_walk_pose_cfg(perturbation_cfg)
+        elif perturbation_cfg.source not in {"random_pose_trajectory", "pose_transition", "csv"}:
+            raise ValueError(
+                "Walk upper-body generalization supports pose_set, random_pose_trajectory, "
+                f"pose_transition or csv, got {perturbation_cfg.source!r}."
+            )
 
         self._walk_pose_reset_ready = True
         all_env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
-        if perturbation_cfg.initialize_joint_state_on_reset:
+        if (
+            perturbation_cfg.source == "pose_set"
+            and perturbation_cfg.initialize_joint_state_on_reset
+        ):
             self._initialize_walk_arm_state(all_env_ids)
 
     def step(self, action: torch.Tensor):
@@ -56,7 +65,7 @@ class G1WalkPerturbAmpEnv(G1PerturbAmpEnv):
 
     def _walk_perturbation_cfg(self) -> WalkUpperBodyPerturbationCfg | None:
         cfg = getattr(self, "_perturbation_cfg", None)
-        if cfg is None or not cfg.enabled or cfg.source != "pose_set":
+        if cfg is None or not cfg.enabled:
             return None
         if not isinstance(cfg, WalkUpperBodyPerturbationCfg):
             raise TypeError(
