@@ -216,7 +216,9 @@ class G1ArmHackWalkFirstPrinciplesSingleRunnerCfg(
     # Conservative spacing refinement changes only the actor output layer.
     # Keeping all three hidden layers fixed prevents a narrow foot-placement
     # objective from erasing the source policy's signed command features.
-    freeze_actor_hidden_layers = 3
+    # Low-yaw onset requires one command-sensitive hidden layer; keeping the
+    # first two layers fixed still protects the source gait representation.
+    freeze_actor_hidden_layers = 2
     actor_warmup_iterations = 0
     # The source checkpoint stores per-joint exploration std values up to 1.82
     # rad even though its deterministic mean policy passes MuJoCo.  Reusing
