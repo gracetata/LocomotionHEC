@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Interactive MuJoCo handoff test for one Stand actor and one original Walk actor.
+# Interactive MuJoCo handoff test for the original usable Stand and current Walk actor.
 # No real-robot transport or DDS process is started by this script.
 
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-STAND_DIR=${STAND_DIR:-${ROOT_DIR}/checkpoint/stand/armhack_balanced_v2_gpu0_20260824}
+STAND_DIR=${STAND_DIR:-${ROOT_DIR}/checkpoint/stand/armhack_step_stabilize_20260815}
 STAND_CHECKPOINT=${STAND_CHECKPOINT:-${STAND_DIR}/model_1999.pt}
 STAND_POLICY=${STAND_POLICY:-${STAND_DIR}/policy.onnx}
 STAND_METADATA=${STAND_METADATA:-${STAND_DIR}/policy.deploy.json}
-STAND_CHECKPOINT_SHA256=${STAND_CHECKPOINT_SHA256:-17874aba5d235073b4f43ad4906086c0181f7185d14e0e77d04deef7354bf262}
-STAND_POLICY_SHA256=${STAND_POLICY_SHA256:-e85bbde712a0b00ae45ba7144573cfd9083bcd37fab358b241ab65bf3424542f}
+STAND_CHECKPOINT_SHA256=${STAND_CHECKPOINT_SHA256:-dc87b7f4e1fb451556cfc81ac2af926896bebdd41c1199e7b5236687b5952c0e}
+STAND_POLICY_SHA256=${STAND_POLICY_SHA256:-c9a028ced244f7b62c87c9dba8e5497d852afd67c113bccdba67f9a11a85349c}
 
-# This is the explicitly requested original usable ArmHack ankle-30 Walk.
-WALK_POLICY=${WALK_POLICY:-${ROOT_DIR}/checkpoint/walk/armhack_ankle30_20260814/policy_armhack_walk_ankle30.onnx}
-WALK_POLICY_SHA256=${WALK_POLICY_SHA256:-92c51b2a2a4556ea993a7f9675cbe2ff06675c7681ca254df83c2ee27acc569e}
+# Current best single-actor Walk after micro-backward training and deployment calibration.
+WALK_POLICY=${WALK_POLICY:-${ROOT_DIR}/legged_lab/evaluations/first_principles_single/final_models/walk_v17_calibrated/policy.onnx}
+WALK_POLICY_SHA256=${WALK_POLICY_SHA256:-bc02dc4055ed418753cdb0cc7cbd8ae332739d5d4cbbd20295c7a2f7025b3ebd}
 
 TEST_DATA_DIR="${ROOT_DIR}/legged_lab/Reference Data/ArmHack/StandPerturb/TestData/ArmOnly"
 STAND_CSV=${STAND_CSV:-${TEST_DATA_DIR}/special/arms_down_flat_forward_return_flat_25p5s_50hz.csv}
@@ -75,7 +75,7 @@ export G1_AMP_ARMHACK_STAND_INTERACTIVE_AUTO_SPACE_MAX_SWITCHES=0
 export G1_AMP_ARMHACK_STAND_INITIAL_STANCE_M="${INITIAL_STANCE_M}"
 
 echo "============================================================"
-echo " ArmHack Stand <-> original Walk interactive MuJoCo"
+echo " ArmHack original Stand <-> current Walk interactive MuJoCo"
 echo "============================================================"
 echo "Startup : STAND inference is active immediately; no initial key is required"
 echo "ENTER   : first press STAND -> WALK; subsequent presses toggle WALK <-> STAND"
