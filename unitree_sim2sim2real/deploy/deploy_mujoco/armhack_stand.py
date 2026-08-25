@@ -392,6 +392,8 @@ class ArmHackStandReplay:
             # skipping the legacy 25.5 s scripted arm startup.
             self.policy_activation_time_s = float(sim_time) - self.csv_duration_s - 1.0e-6
             transition_end = float(sim_time) + self.interactive_sequencer.transition_s
+            if self.auto_space_interval_s > 0.0:
+                self.next_auto_space_time_s = transition_end + self.auto_space_interval_s
             self.timeline.extend(
                 [
                     {
