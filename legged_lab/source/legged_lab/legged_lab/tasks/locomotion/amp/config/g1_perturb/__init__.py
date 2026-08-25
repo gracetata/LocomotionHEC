@@ -323,6 +323,38 @@ gym.register(
     },
 )
 
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkArmMotionSingle-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_armhack_first_principles_single_env_cfg:"
+            "G1ArmHackWalkArmMotionSingleEnvCfg"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1ArmHackWalkFirstPrinciplesSingleRunnerCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="LeggedLab-Isaac-AMP-G1-ArmHackWalkArmMotionSingle-Play-v0",
+    entry_point="legged_lab.envs:G1PerturbAmpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.g1_armhack_first_principles_single_env_cfg:"
+            "G1ArmHackWalkArmMotionSingleEnvCfg_PLAY"
+        ),
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_ppo_cfg:"
+            "G1ArmHackWalkFirstPrinciplesSingleRunnerCfg"
+        ),
+    },
+)
+
 
 gym.register(
     id="LeggedLab-Isaac-AMP-G1-StandPerturb-v0",

@@ -19,6 +19,10 @@ from legged_lab.tasks.locomotion.amp.config.g1.g1_amp_env_cfg import (
 
 from .g1_stand_foot_recovery_env_cfg import G1StandFootRecoveryEnvCfg
 from .g1_walk_behavior_env_cfg import G1WalkBehaviorFinetuneEnvCfg
+from .g1_walk_perturb_env_cfg import (
+    G1_WALK_PERTURB_POSE_NAMES,
+    G1_WALK_PERTURB_POSE_SET,
+)
 from .reference_data import STAND_RANDOM_POSE_BANK_RELATIVE_PATH
 
 
@@ -1026,6 +1030,32 @@ class G1ArmHackWalkDeadzoneYawSingleEnvCfg(
 
 @configclass
 class G1ArmHackWalkDeadzoneYawSingleEnvCfg_PLAY(G1ArmHackWalkDeadzoneYawSingleEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1ArmHackWalkArmMotionSingleEnvCfg(G1ArmHackWalkDeadzoneYawSingleEnvCfg):
+    """Continuous minimum-jerk motion among the three validated arm poses."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        perturbation = self.upper_body_perturbation
+        perturbation.source = "random_pose_trajectory"
+        perturbation.random_extra_pose_names = list(G1_WALK_PERTURB_POSE_NAMES)
+        perturbation.random_extra_pose_set = [list(values) for values in G1_WALK_PERTURB_POSE_SET]
+        perturbation.random_extra_pose_weights = [1.0] * len(G1_WALK_PERTURB_POSE_SET)
+        perturbation.random_extra_pose_probability = 1.0
+        perturbation.random_initialize_joint_state_on_reset = True
+        perturbation.random_curriculum_enabled = False
+        perturbation.random_curriculum_motion_scale = 0.25
+        perturbation.random_transition_duration_range_s = (4.0, 8.0)
+
+
+@configclass
+class G1ArmHackWalkArmMotionSingleEnvCfg_PLAY(G1ArmHackWalkArmMotionSingleEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 48
