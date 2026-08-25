@@ -279,7 +279,11 @@ class ArmHackStandReplay:
         self._phase_action_index = 27
         self._lifted_action_index = 28
         self._step_min_clearance_m = 0.035
-        self._step_landing_tolerance_m = 0.02
+        self._step_landing_tolerance_m = float(
+            config.get("armhack_stand_step_landing_tolerance_m", 0.04)
+        )
+        if not 0.005 <= self._step_landing_tolerance_m <= 0.10:
+            raise ValueError("ArmHack Stand landing tolerance must be within [0.005, 0.10] m.")
         self._step_initial_target_tolerance_m = 0.015
         self._step_min_duration_s = 0.40
         self._step_contract_ready = False

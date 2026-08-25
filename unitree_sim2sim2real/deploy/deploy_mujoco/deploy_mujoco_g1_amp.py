@@ -368,6 +368,10 @@ def load_config(config_path: str) -> dict:
         "G1_AMP_ARMHACK_STAND_STEP_ACTION_ALPHA",
         float(config.get("armhack_stand_step_action_alpha", 1.0)),
     )
+    config["armhack_stand_step_landing_tolerance_m"] = _env_float(
+        "G1_AMP_ARMHACK_STAND_STEP_LANDING_TOLERANCE_M",
+        float(config.get("armhack_stand_step_landing_tolerance_m", 0.04)),
+    )
     config["armhack_walk_enable"] = _env_bool(
         "G1_AMP_ARMHACK_WALK_ENABLE", bool(config.get("armhack_walk_enable", False))
     )
