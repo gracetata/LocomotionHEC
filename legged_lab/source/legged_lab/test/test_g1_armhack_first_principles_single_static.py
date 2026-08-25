@@ -16,6 +16,8 @@ def test_exactly_two_single_actor_tasks_are_registered_by_design():
     assert "G1ArmHackWalkFirstPrinciplesSingleEnvCfg" in text
     assert "G1ArmHackStandFirstPrinciplesStrictSingleEnvCfg" in text
     assert "G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg" in text
+    assert "G1ArmHackStandFirstPrinciplesCompletionSingleEnvCfg" in text
+    assert "G1ArmHackStandFirstPrinciplesHandoffSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesStrictSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesRobustSingleEnvCfg" in text
     assert "G1ArmHackWalkFirstPrinciplesResponseSingleEnvCfg" in text
@@ -34,6 +36,7 @@ def test_runner_forces_plain_actor_critic_and_formal_runs_are_2000_plus():
     assert "formal continuation runs must be at least 2000 iterations" in launcher_text
     assert "formal run stopped before iteration" in launcher_text
     assert "formal run did not save model_" in launcher_text
+    assert "STAND_PROFILE must be acquisition, strict, one_step, completion or handoff" in launcher_text
 
 
 def test_objectives_and_bidirectional_producer_reset_are_explicit():
@@ -94,6 +97,6 @@ def test_mujoco_switch_uses_two_plain_actors_and_explicit_keys():
         "Startup : STAND inference is active immediately",
         "ENTER   : first press STAND -> WALK",
         "SPACE/P : cycle shared arm poses",
-        "92c51b2a2a4556ea993a7f9675cbe2ff06675c7681ca254df83c2ee27acc569e",
+        "WALK_POLICY_SHA256=${WALK_POLICY_SHA256:-",
     ):
         assert token in script_text

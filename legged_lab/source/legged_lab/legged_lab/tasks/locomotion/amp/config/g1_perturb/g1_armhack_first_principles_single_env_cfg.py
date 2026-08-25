@@ -502,6 +502,160 @@ class G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg_PLAY(
         self.scene.env_spacing = 2.5
 
 
+_ONE_STEP_REWARD_NAMES = (
+    "sequential_foot_step_progress",
+    "sequential_foot_step_target_exp",
+    "sequential_foot_step_clearance_exp",
+    "sequential_active_foot_contact",
+    "sequential_active_foot_clearance_l2",
+    "sequential_active_foot_upward_velocity",
+    "sequential_active_foot_velocity_l2",
+    "sequential_active_foot_single_support",
+    "sequential_foot_step_landing_exp",
+    "sequential_foot_step_completion",
+    "sequential_foot_step_lift",
+    "sequential_foot_step_order_violation",
+    "sequential_foot_final_target_l2",
+    "sequential_final_ankle_distance_exp",
+    "sequential_support_foot_drift_l2",
+    "sequential_active_foot_air_time_excess_l2",
+    "sequential_active_foot_descent_exp",
+    "sequential_repeated_lift_event",
+    "sequential_step_count_excess",
+    "sequential_exact_step_budget_success",
+    "sequential_incomplete_step_penalty",
+    "sequential_phase_time_excess_l2",
+    "sequential_active_contact_slide_l2",
+    "sequential_active_path_excess_l2",
+    "post_completion_airborne",
+    "post_completion_foot_motion_l2",
+    "post_completion_joint_vel_l2",
+    "post_completion_action_rate_l2",
+    "post_completion_contact_imbalance_l2",
+    "post_completion_ankle_torque_l2",
+    "post_completion_torso_xy_l2",
+    "post_completion_torso_yaw_l2",
+    "post_completion_torso_roll_pitch_l2",
+    "post_completion_torso_ang_vel_xy_l2",
+    "post_completion_liftoff_event",
+    "post_completion_both_contact",
+)
+
+
+def _set_one_step_precision(cfg, landing_tolerance_m: float, min_step_duration_s: float) -> None:
+    for term_name in _ONE_STEP_REWARD_NAMES:
+        term = getattr(cfg.rewards, term_name)
+        if "landing_tolerance_m" in term.params:
+            term.params["landing_tolerance_m"] = float(landing_tolerance_m)
+        if "min_step_duration_s" in term.params:
+            term.params["min_step_duration_s"] = float(min_step_duration_s)
+
+
+@configclass
+class G1ArmHackStandFirstPrinciplesCompletionSingleEnvCfg(
+    G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg
+):
+    """Completion-first curriculum: learn both real steps before tightening hold."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _set_one_step_precision(self, landing_tolerance_m=0.050, min_step_duration_s=0.25)
+        self.events.reset_robot_joints.params.update(
+            {
+                "phase_one_probability": 0.0,
+                "phase_two_probability": 0.0,
+                "close_stance_probability": 0.55,
+                "nominal_stance_probability": 0.10,
+                "velocity_range": (-0.10, 0.10),
+            }
+        )
+        self.rewards.sequential_foot_step_progress.weight = 40.0
+        self.rewards.sequential_foot_step_lift.weight = 120.0
+        self.rewards.sequential_foot_step_landing_exp.weight = 350.0
+        self.rewards.sequential_foot_step_completion.weight = 1000.0
+        self.rewards.sequential_repeated_lift_event.weight = -40.0
+        self.rewards.sequential_step_count_excess.weight = -0.05
+        self.rewards.sequential_exact_step_budget_success.weight = 100.0
+        self.rewards.sequential_incomplete_step_penalty.weight = -40.0
+        self.rewards.sequential_phase_time_excess_l2.weight = -1.0
+        self.rewards.sequential_foot_final_target_l2.weight = -200.0
+        self.rewards.sequential_final_ankle_distance_exp.weight = 100.0
+        self.rewards.sequential_final_ankle_distance_exp.params["std"] = 0.025
+        self.rewards.sequential_support_foot_drift_l2.weight = -100.0
+        self.rewards.post_completion_airborne.weight = -100.0
+        self.rewards.post_completion_liftoff_event.weight = -100.0
+        self.rewards.post_completion_both_contact.weight = 10.0
+        self.rewards.post_completion_foot_motion_l2.weight = -3.0
+        self.rewards.post_completion_joint_vel_l2.weight = -0.04
+        self.rewards.post_completion_action_rate_l2.weight = -0.15
+        self.rewards.post_completion_torso_roll_pitch_l2.weight = -8.0
+        self.rewards.post_completion_torso_ang_vel_xy_l2.weight = -0.4
+        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.80
+        self.events.random_end_effector_wrench.params["force_range"] = (-4.0, 4.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-0.6, 0.6)
+        self.events.random_torso_external_wrench.params["force_range"] = (-4.0, 4.0)
+        self.events.random_torso_external_wrench.params["torque_range"] = (-0.6, 0.6)
+
+
+@configclass
+class G1ArmHackStandFirstPrinciplesCompletionSingleEnvCfg_PLAY(
+    G1ArmHackStandFirstPrinciplesCompletionSingleEnvCfg
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
+@configclass
+class G1ArmHackStandFirstPrinciplesHandoffSingleEnvCfg(
+    G1ArmHackStandFirstPrinciplesOneStepSingleEnvCfg
+):
+    """Switch-focused curriculum with stronger arms, forces and phase-two hold."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _set_one_step_precision(self, landing_tolerance_m=0.035, min_step_duration_s=0.30)
+        self.events.reset_robot_joints.params.update(
+            {
+                "phase_one_probability": 0.0,
+                "phase_two_probability": 0.0,
+                "velocity_range": (-0.20, 0.20),
+            }
+        )
+        self.rewards.sequential_foot_step_completion.weight = 850.0
+        self.rewards.sequential_repeated_lift_event.weight = -100.0
+        self.rewards.sequential_step_count_excess.weight = -0.30
+        self.rewards.sequential_exact_step_budget_success.weight = 100.0
+        self.rewards.sequential_incomplete_step_penalty.weight = -35.0
+        self.rewards.sequential_foot_final_target_l2.weight = -350.0
+        self.rewards.sequential_final_ankle_distance_exp.weight = 150.0
+        self.rewards.sequential_final_ankle_distance_exp.params["std"] = 0.015
+        self.rewards.post_completion_airborne.weight = -250.0
+        self.rewards.post_completion_liftoff_event.weight = -350.0
+        self.rewards.post_completion_both_contact.weight = 20.0
+        self.rewards.post_completion_foot_motion_l2.weight = -8.0
+        self.rewards.post_completion_joint_vel_l2.weight = -0.08
+        self.rewards.post_completion_action_rate_l2.weight = -0.30
+        self.rewards.post_completion_torso_roll_pitch_l2.weight = -16.0
+        self.rewards.post_completion_torso_ang_vel_xy_l2.weight = -0.8
+        self.terminations.sequential_pelvis_xy_out_of_bounds.params["max_displacement_m"] = 0.60
+        self.events.random_end_effector_wrench.params["force_range"] = (-10.0, 10.0)
+        self.events.random_end_effector_wrench.params["torque_range"] = (-1.5, 1.5)
+        self.events.random_torso_external_wrench.params["force_range"] = (-10.0, 10.0)
+        self.events.random_torso_external_wrench.params["torque_range"] = (-1.5, 1.5)
+
+
+@configclass
+class G1ArmHackStandFirstPrinciplesHandoffSingleEnvCfg_PLAY(
+    G1ArmHackStandFirstPrinciplesHandoffSingleEnvCfg
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 48
+        self.scene.env_spacing = 2.5
+
+
 @configclass
 class G1ArmHackWalkFirstPrinciplesSingleEnvCfg(G1WalkBehaviorFinetuneEnvCfg):
     """Acquisition stage: retain the gait while arms begin to move."""

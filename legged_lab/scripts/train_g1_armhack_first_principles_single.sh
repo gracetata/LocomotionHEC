@@ -50,7 +50,9 @@ if [[ "${MODEL}" == "stand" ]]; then
         acquisition) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesSingle-v0 ;;
         strict) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesStrictSingle-v0 ;;
         one_step) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesOneStepSingle-v0 ;;
-        *) die "STAND_PROFILE must be acquisition, strict or one_step" ;;
+        completion) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesCompletionSingle-v0 ;;
+        handoff) TASK=LeggedLab-Isaac-AMP-G1-ArmHackStandFirstPrinciplesHandoffSingle-v0 ;;
+        *) die "STAND_PROFILE must be acquisition, strict, one_step, completion or handoff" ;;
     esac
     EXPERIMENT=g1_armhack_stand_first_principles_single
     SOURCE_CHECKPOINT=${SOURCE_CHECKPOINT:-${SOURCE_REPO}/legged_lab/logs/rsl_rl/g1_stand_perturb/2026-08-14_18-32-52_armhack_stand_low_torque_robust_explicit_3pose_2000_from_stage2_20260814/model_1999.pt}
